@@ -1,0 +1,9 @@
+{
+  "id": "smart-model-router",
+  "name": "Smart Model Router",
+  "description": "Automatically switches to whichever installed model best fits what you're typing (coding, writing, math/science, or agentic) instead of sticking with one model all the time. Turn this on once you've downloaded a few models and want OpenPal to pick the right one for each task on its own.",
+  "version": "0.1.0",
+  "author": "OpenPal",
+  "capabilities": ["smart-model-router"],
+  "experimental": true
+}

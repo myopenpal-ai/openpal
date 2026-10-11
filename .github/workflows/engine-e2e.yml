@@ -1,0 +1,81 @@
+# Real llama-server engine tests (crates/core/tests/{engine,writing_tools,
+# prompt_enhancer}_e2e.rs, --ignored by default): download a real ~140MB
+# GGUF and a real llama.cpp binary, then drive a full start -> chat_stream ->
+# stop cycle (plus, for the writing-tools/prompt-enhancer tests, the
+# translate/correct/improve request shapes built on top of it). Heavier and
+# less hermetic than the unit suite (network-dependent, ~5-10 min including
+# engine fetch), so it's path-filtered to the files it actually exercises
+# rather than gating every PR.
+name: engine-e2e
+
+on:
+  pull_request:
+    paths:
+      - "crates/core/src/engine/**"
+      - "crates/core/src/download.rs"
+      - "crates/core/src/sse.rs"
+      - "crates/core/src/writing_tools.rs"
+      - "crates/core/src/prompt_enhancer.rs"
+      - "crates/core/tests/**"
+      - ".github/workflows/engine-e2e.yml"
+  push:
+    branches: [main]
+    paths:
+      - "crates/core/src/engine/**"
+      - "crates/core/src/download.rs"
+      - "crates/core/src/sse.rs"
+      - "crates/core/src/writing_tools.rs"
+      - "crates/core/src/prompt_enhancer.rs"
+      - "crates/core/tests/**"
+
+concurrency:
+  group: engine-e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  engine-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: engine-e2e
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libjavascriptcoregtk-4.1-dev \
+            libgtk-3-dev \
+            librsvg2-dev \
+            libayatana-appindicator3-dev \
+            libasound2-dev \
+            libssl-dev \
+            build-essential unzip
+
+      # Cache the ~140MB test model by its known sha256 so re-runs (and other
+      # PRs hitting this same path filter) don't re-download it from HF.
+      - name: Cache the test model
+        uses: actions/cache@v4
+        with:
+          path: /tmp/openpal-test-models
+          key: engine-e2e-model-40f7094960b6ede8
+
+      - name: Stage the llama.cpp engine (CPU/Vulkan-fallback build)
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: cargo run -p openpal-bundler -- fetch-engine --target ubuntu-vulkan-x64
+
+      - name: Run the real engine e2e test
+        run: cargo test -p openpal-core --test engine_e2e -- --ignored --nocapture
+
+      - name: Run the Writing Tools e2e test
+        run: cargo test -p openpal-core --test writing_tools_e2e -- --ignored --nocapture
+
+      - name: Run the Message improver e2e test
+        run: cargo test -p openpal-core --test prompt_enhancer_e2e -- --ignored --nocapture

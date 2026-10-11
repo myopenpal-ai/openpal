@@ -1,0 +1,217 @@
+/* Translate/Correct screens — two distinct plugin-gated pages sharing one
+   implementation (WritingToolsScreen.tsx) and this stylesheet. Page-shell
+   shape mirrors skills.css (.skills-view/-scroll/-col) exactly; the rest is
+   a two-pane layout for the source/result textareas. Reuses this app's real
+   design tokens and .btn/.btn-ghost/.btn-quiet button classes throughout --
+   no new color values, no button styling here. */
+
+.writing-tools-view {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.writing-tools-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding-top: var(--titlebar-h);
+  min-height: 0;
+}
+
+.writing-tools-col {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 12px 36px 48px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.writing-tools-head h1 {
+  font-family: var(--font-display);
+  font-size: 30px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.writing-tools-head p {
+  color: var(--ink-soft);
+  max-width: 560px;
+  margin-top: 6px;
+}
+
+/* ---------------------------- Language picker ---------------------------- */
+
+.writing-tools-lang-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.writing-tools-lang-row select {
+  flex: 1;
+  min-width: 0;
+}
+
+.writing-tools-lang-arrow {
+  color: var(--ink-soft);
+  flex-shrink: 0;
+}
+
+/* -------------------------------- Panes ---------------------------------- */
+
+.writing-tools-panes {
+  display: flex;
+  gap: 18px;
+  flex: 1;
+  min-height: 260px;
+}
+
+@media (max-width: 720px) {
+  .writing-tools-panes {
+    flex-direction: column;
+  }
+}
+
+.writing-tools-pane {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.writing-tools-pane label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-soft);
+}
+
+.writing-tools-pane textarea {
+  flex: 1;
+  min-height: 220px;
+  resize: vertical;
+  font-family: inherit;
+  line-height: 1.5;
+  width: 100%;
+}
+
+.writing-tools-source-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.writing-tools-uploaded-file {
+  font-size: 12px;
+  color: var(--ink-soft);
+  margin: -2px 0 0;
+}
+
+.writing-tools-result-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.writing-tools-result-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+/* ------------------------- Correct-mode diff view ------------------------- */
+
+.writing-tools-diff {
+  flex: 1;
+  min-height: 220px;
+  overflow-y: auto;
+  color: var(--ink);
+  background: var(--paper-raised);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-m);
+  padding: 10px 14px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+.writing-tools-diff-change {
+  display: inline;
+}
+
+.writing-tools-diff-removed-active {
+  color: var(--danger);
+  text-decoration: line-through;
+}
+
+.writing-tools-diff-removed {
+  color: var(--ink-faint);
+  text-decoration: line-through;
+}
+
+.writing-tools-diff-added-active {
+  color: var(--ok);
+  text-decoration: underline;
+  text-decoration-style: solid;
+}
+
+.writing-tools-diff-added {
+  color: var(--ink-faint);
+  text-decoration: underline;
+  text-decoration-style: dotted;
+}
+
+.writing-tools-diff-toggle {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  margin: 0 2px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--paper-sunken);
+  color: var(--ink-soft);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  vertical-align: middle;
+}
+
+.writing-tools-diff-toggle:hover {
+  background: var(--ink-hover);
+  color: var(--ink);
+}
+
+/* --------------------------- Notices / actions ---------------------------- */
+
+.writing-tools-notice {
+  font-size: 12.5px;
+  color: var(--ink-soft);
+  background: var(--paper-sunken);
+  border-radius: var(--radius-s);
+  padding: 10px 12px;
+}
+
+.writing-tools-error {
+  font-size: 12.5px;
+  color: var(--danger);
+  background: var(--danger-soft);
+  border-radius: var(--radius-s);
+  padding: 10px 12px;
+}
+
+.writing-tools-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.writing-tools-local-note {
+  font-size: 12.5px;
+  color: var(--ink-soft);
+  text-align: center;
+}

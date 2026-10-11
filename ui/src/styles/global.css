@@ -1,0 +1,982 @@
+/* ---------------------------------------------------------------------------
+   OpenPal — "Hearth" design system.
+   Warm paper & ink base, with a security-toned accent pair (blue for
+   privacy, green for trust) instead of one flat color. Glass surfaces and
+   an ambient glow give it depth without losing the domestic warmth.
+--------------------------------------------------------------------------- */
+
+:root {
+  --paper: #faf6ef;
+  --paper-raised: #ffffff;
+  --paper-sunken: #f1ebdf;
+  --ink: #241d15;
+  --ink-rgb: 36, 29, 21;
+  --ink-soft: #6d6356;
+  /* Icon/decorative use only — clears 3:1 (non-text) but not 4.5:1, so real
+     body text must use --ink-soft instead. See docs/design/ACCESSIBILITY_AUDIT.md
+     pattern 1. */
+  --ink-faint: #91836f;
+  --line: rgba(var(--ink-rgb), 0.12);
+  --line-soft: rgba(var(--ink-rgb), 0.07);
+  --ink-hover: rgba(var(--ink-rgb), 0.05);
+  --glass-bg: rgba(255, 255, 255, 0.66);
+  --glass-border: rgba(var(--ink-rgb), 0.08);
+
+  --accent: #0d5fc9;
+  --accent-hover: #0a4a9e;
+  --accent-ink: #f7faff;
+  --accent-rgb: 13, 95, 201;
+  --accent-soft: rgba(var(--accent-rgb), 0.08);
+  --accent-line: rgba(var(--accent-rgb), 0.32);
+  /* Opaque focus-ring color — --accent-soft's 8-15% alpha fails WCAG 1.4.11
+     Non-text Contrast; --accent at full opacity clears 4:1+ against every
+     paper surface in both themes. */
+  --focus-ring: var(--accent);
+
+  /* Two decorative-only hues, used only in --glow-gradient below and
+     .composer-tool's active fill — never carry text on their own, so they
+     don't need the AA scrutiny --accent gets. Blue reads privacy/security,
+     green reads trust/safety: together they replace the old single
+     terracotta accent's warm glow with a security-toned one. */
+  --accent-2: #0ea5e9;
+  --accent-3: #059669;
+  --glow-gradient:
+    radial-gradient(46% 40% at 50% 28%, color-mix(in srgb, var(--accent) 55%, transparent) 0%, transparent 70%),
+    radial-gradient(30% 26% at 66% 20%, color-mix(in srgb, var(--accent-2) 45%, transparent) 0%, transparent 72%),
+    radial-gradient(26% 24% at 34% 38%, color-mix(in srgb, var(--accent-3) 34%, transparent) 0%, transparent 75%);
+
+  --ok: #51794b;
+  --ok-rgb: 81, 121, 75;
+  --ok-soft: rgba(var(--ok-rgb), 0.13);
+  --warn: #99701f;
+  --warn-rgb: 153, 112, 31;
+  --warn-soft: rgba(var(--warn-rgb), 0.13);
+  --danger: #ad3a2c;
+  --danger-rgb: 173, 58, 44;
+  --danger-soft: rgba(var(--danger-rgb), 0.1);
+  /* Badge-scoped text colors: darker than --ok/--warn so badge text clears
+     4.5:1 on its soft/sunken backgrounds, without changing --ok/--warn
+     everywhere else (buttons, banners) they're used. */
+  --badge-ok-ink: #4c7247;
+  --badge-warn-ink: #87631b;
+
+  --radius-s: 9px;
+  --radius-m: 14px;
+  --radius-l: 22px;
+  --shadow-rgb: 39, 33, 24;
+  --shadow-card: 0 1px 2px rgba(var(--shadow-rgb), 0.06), 0 14px 36px rgba(var(--shadow-rgb), 0.1);
+  --shadow-pop: 0 2px 6px rgba(var(--shadow-rgb), 0.12), 0 28px 70px rgba(var(--shadow-rgb), 0.2);
+  --shadow-glow: 0 16px 40px -14px rgba(var(--accent-rgb), 0.35);
+
+  /* Theme-invariant dark overlays (modal backdrop, image lightbox) — pinned,
+     never overridden below, so they stay dark chrome regardless of theme. */
+  --scrim-rgb: 20, 15, 10;
+  --scrim: rgba(var(--scrim-rgb), 0.35);
+  --scrim-strong: rgba(var(--scrim-rgb), 0.82);
+  --scrim-ink-rgb: 255, 255, 255;
+  --scrim-ink: rgb(var(--scrim-ink-rgb));
+  --scrim-ink-soft: rgba(var(--scrim-ink-rgb), 0.85);
+  --scrim-control: rgba(var(--scrim-ink-rgb), 0.12);
+  --scrim-control-hover: rgba(var(--scrim-ink-rgb), 0.24);
+
+  /* Hover scrim over an image thumbnail. Deliberately NOT derived from
+     --ink-rgb: it must stay dark regardless of theme (it darkens a photo so
+     the zoom icon reads), unlike --ink-rgb which flips per theme. */
+  --ink-scrim: rgba(39, 33, 24, 0.45);
+
+  --font-display: "Bricolage Grotesque Variable", "Avenir Next", -apple-system, sans-serif;
+  --font-body: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
+
+  --titlebar-h: 44px;
+  /* Every "clear the fixed titlebar" offset in the app (padding-top on each
+     main-pane view) should use THIS, not --titlebar-h directly, so a
+     notch/status bar (env(safe-area-inset-top), 0px on desktop and on this
+     session's AVD, which has neither) grows the clearance instead of
+     letting content sit underneath it. */
+  --titlebar-safe-h: calc(var(--titlebar-h) + env(safe-area-inset-top, 0px));
+}
+
+/* Mobile breakpoint convention: `@media (max-width: 600px)`, repeated as a
+   literal in every file that needs it (no PostCSS/Sass in this build, so a
+   custom property can't be the media condition itself) — grep
+   `max-width: 600px` to find every instance. 600px sits comfortably above
+   the openpal_test AVD's ~412px viewport while a realistically resized
+   desktop window won't reach it — see docs/design/MOBILE.md's responsive-layout
+   pass for the full reasoning. */
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #100e0c;
+    --paper-raised: #1f1b16;
+    --paper-sunken: #1a1610;
+    --ink: #ede4d8;
+    --ink-rgb: 236, 228, 216;
+    --ink-soft: #a99d8d;
+    --ink-faint: #786d5e;
+    --line: rgba(var(--ink-rgb), 0.13);
+    --line-soft: rgba(var(--ink-rgb), 0.07);
+    --ink-hover: rgba(var(--ink-rgb), 0.06);
+    --glass-bg: rgba(31, 27, 22, 0.62);
+    --glass-border: rgba(var(--ink-rgb), 0.09);
+
+    --accent: #2e86fa;
+    --accent-hover: #569dfb;
+    --accent-ink: #071233;
+    --accent-rgb: 46, 134, 250;
+    --accent-soft: rgba(var(--accent-rgb), 0.15);
+    --accent-line: rgba(var(--accent-rgb), 0.4);
+    --accent-2: #38bdf8;
+    --accent-3: #34d399;
+
+    --ok: #84ab7d;
+    --ok-rgb: 132, 171, 125;
+    --ok-soft: rgba(var(--ok-rgb), 0.14);
+    --warn: #c79a45;
+    --warn-rgb: 199, 154, 69;
+    --warn-soft: rgba(var(--warn-rgb), 0.14);
+    --danger: #d4604f;
+    --danger-rgb: 212, 96, 79;
+    --danger-soft: rgba(var(--danger-rgb), 0.14);
+    /* --ok/--warn already clear 4.5:1 on their badge backgrounds in dark
+       mode — no separate badge-scoped darkening needed here. */
+    --badge-ok-ink: var(--ok);
+    --badge-warn-ink: var(--warn);
+
+    --shadow-rgb: 0, 0, 0;
+    --shadow-card: 0 1px 2px rgba(var(--shadow-rgb), 0.35), 0 14px 36px rgba(var(--shadow-rgb), 0.4);
+    --shadow-pop: 0 2px 6px rgba(var(--shadow-rgb), 0.45), 0 28px 70px rgba(var(--shadow-rgb), 0.55);
+    --shadow-glow: 0 20px 50px -14px rgba(var(--accent-rgb), 0.45);
+  }
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+}
+
+/* Screen-reader-only content: present in the accessibility tree, removed
+ * from visual layout without `display: none` (which would hide it from AT
+ * too). Standard clip-based pattern. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  font-family: var(--font-body);
+  font-size: 15px;
+  line-height: 1.55;
+  color: var(--ink);
+  background: var(--paper);
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+  user-select: none;
+  cursor: default;
+}
+
+/* Paper grain — the whole app sits on warm, textured stock. */
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  pointer-events: none;
+  opacity: 0.045;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+::selection {
+  background: var(--accent-soft);
+}
+
+/* Visually hidden but still exposed to assistive tech — for live-region
+   announcers and sender labels that shouldn't duplicate visible copy. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+p,
+h1,
+h2,
+h3,
+li,
+td,
+input,
+textarea {
+  user-select: text;
+  cursor: auto;
+}
+
+/* Skip-navigation link — the very first focusable element in the app shell.
+   Off-screen until it receives keyboard focus, then jumps on top of
+   everything (including the titlebar) so a Tab-only user can bypass the
+   titlebar and the conversation list and land straight on the active view. */
+.skip-link {
+  position: fixed;
+  top: 0;
+  left: 0;
+  transform: translateY(-150%);
+  z-index: 10000;
+  padding: 10px 18px;
+  margin: 8px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  border-radius: var(--radius-s);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.skip-link:focus {
+  transform: translateY(0);
+}
+
+/* Overlay title bar: an otherwise-invisible drag strip across the top of the
+   window, hosting the conversation-toolbar trigger at its right edge. Tauri's
+   drag-region check inspects the exact pointer target, not ancestors, so a
+   plain button nested in here stays clickable without opting out of the
+   drag region itself. */
+.titlebar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: var(--titlebar-safe-h);
+  padding-top: env(safe-area-inset-top, 0px);
+  z-index: 500;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding-right: 16px;
+}
+
+/* Hidden by default (desktop: the sidebar is a permanent grid column, so
+   there's nothing to toggle) — see chat.css's matching `max-width: 600px`
+   query, which both reveals this and turns the sidebar into a drawer.
+   margin-right: auto packs it against .titlebar's left edge despite that
+   container's justify-content: flex-end. */
+.mobile-sidebar-toggle {
+  display: none;
+  margin-right: auto;
+}
+
+@media (max-width: 600px) {
+  .titlebar {
+    padding-left: 16px;
+  }
+  .mobile-sidebar-toggle {
+    display: inline-flex;
+  }
+}
+
+/* The desktop "OpenPal" brand + its show/hide-sidebar button (see the
+   App.tsx comment above this element for why both live here instead of in
+   Sidebar.tsx's own .sidebar-top). margin-left clears the macOS traffic
+   lights, the same 84px .sidebar-top normally uses for its own (mobile-only)
+   copy of the brand; margin-right: auto packs it against .titlebar's left
+   edge despite that container's justify-content: flex-end, same trick
+   .mobile-sidebar-toggle uses above. Desktop only, like that toggle — below
+   the mobile breakpoint the sidebar is a drawer, not something to collapse
+   in place, and Sidebar.tsx's own brand takes over there. */
+.titlebar-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: 84px;
+  margin-right: auto;
+}
+
+@media (max-width: 600px) {
+  .titlebar-brand {
+    display: none;
+  }
+}
+
+/* ------------------------------ Buttons -------------------------------- */
+
+button {
+  font: inherit;
+  color: inherit;
+  border: none;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-weight: 600;
+  font-size: 15px;
+  padding: 12px 24px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  box-shadow: 0 1px 2px rgba(var(--shadow-rgb), 0.2);
+  transition: background 0.15s ease, transform 0.1s ease;
+}
+
+.btn:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.btn:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+.btn-big {
+  font-size: 17px;
+  padding: 15px 34px;
+}
+
+.btn-ghost {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-weight: 600;
+  font-size: 14px;
+  padding: 10px 18px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  color: var(--ink);
+  background: transparent;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.btn-ghost:hover:not(:disabled) {
+  background: var(--paper-sunken);
+  border-color: var(--ink-faint);
+}
+
+.btn-quiet {
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--ink-soft);
+  padding: 6px 10px;
+  border-radius: var(--radius-s);
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.btn-quiet:hover:not(:disabled) {
+  background: var(--paper-sunken);
+  color: var(--ink);
+}
+
+.btn-danger-quiet {
+  color: var(--danger);
+}
+
+.btn-danger-quiet:hover:not(:disabled) {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.btn-warn-quiet {
+  color: var(--warn);
+}
+
+.btn-warn-quiet:hover:not(:disabled) {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+/* Icon-only star toggle (components/FavoriteButton.tsx) — the Library page's
+ * model card/table row and the composer's model quick-switcher all share
+ * this one look. */
+.favorite-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  border-radius: 999px;
+  color: var(--ink-faint);
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.favorite-btn svg {
+  width: 16px;
+  height: 16px;
+}
+
+.favorite-btn:hover:not(:disabled) {
+  background: var(--paper-sunken);
+  color: var(--ink-soft);
+}
+
+.favorite-btn.is-favorite {
+  color: var(--accent);
+}
+
+.favorite-btn.is-favorite:hover:not(:disabled) {
+  color: var(--accent-hover);
+}
+
+/* ------------------------------ Inputs --------------------------------- */
+
+textarea,
+input[type="text"],
+input[type="time"],
+input[type="number"],
+input[type="password"] {
+  font: inherit;
+  color: var(--ink);
+  background: var(--paper-raised);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-m);
+  padding: 10px 14px;
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+textarea:focus,
+input[type="text"]:focus,
+input[type="time"]:focus,
+input[type="number"]:focus,
+input[type="password"]:focus {
+  border-color: var(--accent-line);
+  box-shadow: 0 0 0 3px var(--focus-ring);
+}
+
+input[type="range"] {
+  accent-color: var(--accent);
+}
+
+/* ------------------------------ Badges --------------------------------- */
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  padding: 3px 10px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.badge svg {
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
+}
+
+.badge-perfect { background: var(--ok-soft); color: var(--badge-ok-ink); }
+.badge-good { background: var(--ok-soft); color: var(--badge-ok-ink); }
+.badge-tight { background: var(--warn-soft); color: var(--badge-warn-ink); }
+.badge-diskslow { background: var(--paper-sunken); color: var(--badge-warn-ink); }
+.badge-toobig { background: var(--paper-sunken); color: var(--ink-soft); }
+.badge-neutral { background: var(--paper-sunken); color: var(--ink-soft); }
+.badge-accent { background: var(--accent-soft); color: var(--accent); }
+.badge-danger { background: var(--danger-soft); color: var(--danger); }
+
+/* ----------------------------- Scrollbars ------------------------------ */
+
+::-webkit-scrollbar {
+  width: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--line);
+  border-radius: 999px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--ink-faint);
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+
+/* ------------------------------- Modal ---------------------------------- */
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 600;
+  background: var(--scrim);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px)
+    env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);
+  animation: fade-in 0.18s ease both;
+}
+
+.modal {
+  width: min(560px, calc(100vw - 80px));
+  max-height: calc(100vh - 120px);
+  overflow-y: auto;
+  background: var(--paper-raised);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-l);
+  box-shadow: var(--shadow-pop);
+  padding: 28px;
+  animation: pop-up 0.22s cubic-bezier(0.2, 0.9, 0.3, 1.2) both;
+}
+
+/* Breakpoint convention: 600px — keep in sync with every other
+   `max-width: 600px` query in the app (see :root). None of
+   SettingsSheet/UpdateDialog/SignInDialog has a visible close/X button —
+   they rely on a tappable scrim margin (or, for SettingsSheet, scrolling to
+   a "Done" button at the very end) — so this narrows the margin rather than
+   going edge-to-edge, which would delete that dismiss affordance entirely. */
+@media (max-width: 600px) {
+  .modal {
+    width: calc(100vw - 32px);
+    max-height: calc(100vh - 32px);
+    padding: 20px 18px;
+  }
+}
+
+.modal h2 {
+  font-family: var(--font-display);
+  font-size: 22px;
+  margin-bottom: 4px;
+}
+
+/* ----------------------------- More dialog ------------------------------ */
+
+/* views/MoreDialog.tsx — Models, Browse, Plugins, Skills and Settings as
+   pages of one large dialog, so the main pane stays reserved for talking to
+   the model. Its horizontal spend is deliberately 272px — 2x32px of margin,
+   2x1px of border and a 206px nav — the width of the sidebar column those
+   pages used to sit beside, which keeps the Models page's width budget
+   (the top of library.css's "All models" section) exactly as it was. */
+.more-dialog {
+  width: min(1400px, calc(100% - 64px));
+  height: calc(100% - 64px);
+  display: flex;
+  background: var(--paper);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-l);
+  box-shadow: var(--shadow-pop);
+  overflow: hidden;
+  animation: pop-up 0.22s cubic-bezier(0.2, 0.9, 0.3, 1.2) both;
+}
+
+.more-dialog-nav {
+  flex: 0 0 206px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px 10px;
+  background: var(--paper-sunken);
+  border-right: 1px solid var(--line-soft);
+  overflow-y: auto;
+}
+
+/* The close button, then the search field right above the pages. */
+.more-dialog-nav-top {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.more-dialog-nav-pages {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.more-dialog-close {
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  color: var(--ink-faint);
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.more-dialog-close:hover {
+  background: var(--ink-hover);
+  color: var(--ink);
+}
+
+.more-dialog-close svg {
+  width: 17px;
+  height: 17px;
+}
+
+.more-dialog-nav-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.more-dialog-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--ink-soft);
+  padding: 8px 10px;
+  border-radius: var(--radius-s);
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.more-dialog-nav-item:hover {
+  background: var(--ink-hover);
+  color: var(--ink);
+}
+
+.more-dialog-nav-item svg {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  color: var(--ink-faint);
+}
+
+.more-dialog-nav-item-active,
+.more-dialog-nav-item-active:hover {
+  background: var(--paper-raised);
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.more-dialog-nav-item-active svg {
+  color: var(--accent);
+}
+
+/* Settings' categories: a text-only heading, then one entry per category,
+   each with its own icon like the entries above. */
+.more-dialog-nav-section {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.more-dialog-nav-heading {
+  padding: 6px 10px 4px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+/* Same pill as the Models page's search (`.model-search` in library.css),
+   raised off the nav's sunken paper. The input's own focus ring is reset
+   with the rest of the global input rules, so the pill carries it. */
+.more-dialog-search {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  border-radius: var(--radius-s);
+  background: var(--paper);
+  border: 1px solid var(--line-soft);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.more-dialog-search:focus-within {
+  border-color: var(--accent-line);
+  box-shadow: 0 0 0 3px var(--focus-ring);
+}
+
+.more-dialog-search svg {
+  width: 15px;
+  height: 15px;
+  color: var(--ink-faint);
+  flex-shrink: 0;
+}
+
+.more-dialog-search-input {
+  flex: 1;
+  min-width: 0;
+  font-size: 13.5px;
+  padding: 7px 0 !important;
+  background: transparent !important;
+  border: none !important;
+}
+
+.more-dialog-search-input:focus {
+  box-shadow: none !important;
+}
+
+/* A setting found by the search names its category under it. */
+.more-dialog-search-result {
+  align-items: flex-start;
+}
+
+.more-dialog-search-result svg {
+  margin-top: 3px;
+}
+
+.more-dialog-search-result-text {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.more-dialog-search-result-where {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ink-faint);
+}
+
+.more-dialog-search-empty {
+  padding: 4px 10px;
+  font-size: 13px;
+  color: var(--ink-faint);
+  overflow-wrap: anywhere;
+}
+
+/* Hosts one page (Library, Discover, Plugins, SkillsView, SettingsSheet),
+   each of which brings its own scroll container. */
+.more-dialog-page {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Breakpoint convention: 600px — keep in sync with every other
+   `max-width: 600px` query in the app (see :root). The nav moves to the
+   top: close and search on one row, then the pages in a row of their own —
+   scrolling sideways within itself if it must, never the page — and the
+   dialog keeps a thin tappable scrim margin. */
+@media (max-width: 600px) {
+  .more-dialog {
+    width: calc(100% - 16px);
+    height: calc(100% - 16px);
+    flex-direction: column;
+  }
+
+  .more-dialog-nav {
+    flex: none;
+    gap: 8px;
+    padding: 8px;
+    border-right: none;
+    border-bottom: 1px solid var(--line-soft);
+    overflow: visible;
+  }
+
+  .more-dialog-nav-top {
+    flex-direction: row;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .more-dialog-nav-pages {
+    flex-direction: row;
+    align-items: center;
+    gap: 6px;
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+
+  .more-dialog-nav-pages .more-dialog-nav-list {
+    width: auto;
+    flex-direction: row;
+  }
+
+  .more-dialog-nav-pages .more-dialog-nav-item {
+    white-space: nowrap;
+    padding: 7px 10px;
+  }
+
+  /* Results stay a column, capped so the page below stays in view. */
+  .more-dialog-search-results {
+    max-height: 40vh;
+    overflow-y: auto;
+  }
+
+  .more-dialog-nav-section {
+    width: auto;
+    flex-direction: row;
+    align-items: center;
+    gap: 6px;
+    padding-left: 8px;
+    border-left: 1px solid var(--line-soft);
+  }
+
+  .more-dialog-nav-heading {
+    padding: 0 2px;
+    white-space: nowrap;
+  }
+
+  .more-dialog-page :is(.library-col, .discover-col, .plugins-col, .skills-col, .settings-page-col) {
+    padding-left: 18px;
+    padding-right: 18px;
+  }
+}
+
+/* ------------------------------ PIN pad ---------------------------------- */
+
+/* Full-screen numeric PIN entry (see `components/PinPad.tsx`) — sits above
+   the modal layer so it can gate access to a settings panel that's itself
+   inside one. */
+.pin-pad-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 700;
+  background: var(--paper);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: calc(40px + env(safe-area-inset-top, 0px)) 40px calc(40px + env(safe-area-inset-bottom, 0px));
+  animation: fade-in 0.15s ease both;
+}
+
+.pin-pad {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20px;
+  max-width: 360px;
+  text-align: center;
+  animation: rise-in 0.2s ease both;
+}
+
+.pin-pad-title {
+  font-family: var(--font-display);
+  font-size: 22px;
+}
+
+.pin-pad-subtitle {
+  color: var(--ink-soft);
+  font-size: 14px;
+}
+
+.pin-pad-boxes {
+  display: flex;
+  gap: 12px;
+}
+
+.pin-pad-box {
+  width: 52px;
+  height: 62px;
+  text-align: center;
+  font-size: 28px;
+  font-family: var(--font-mono);
+  border-radius: var(--radius-m);
+  border: 1px solid var(--line);
+  background: var(--paper-raised);
+  color: var(--ink);
+}
+
+.pin-pad-box:focus {
+  outline: none;
+  border-color: var(--accent-line);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.pin-pad-box:disabled {
+  opacity: 0.5;
+}
+
+.pin-pad-message {
+  font-size: 14px;
+  color: var(--ink-soft);
+}
+
+.pin-pad-error {
+  color: var(--danger);
+}
+
+.pin-pad-cancel {
+  margin-top: 4px;
+}
+
+/* ----------------------------- Keyframes -------------------------------- */
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes pop-up {
+  from { opacity: 0; transform: translateY(14px) scale(0.98); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes rise-in {
+  from { opacity: 0; transform: translateY(18px); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+@keyframes breathe {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.05); }
+}
+
+/* Shared by every --glow-gradient usage (chat empty-state, onboarding). */
+@keyframes glow-breathe {
+  0%, 100% { transform: scale(1); opacity: 0.8; }
+  50% { transform: scale(1.06); opacity: 1; }
+}
+
+/* Respect the OS-level reduce-motion preference project-wide, rather than
+ * hand-listing every animated/transitioning selector (chat's caret,
+ * thinking-dot, searching-spinner, recording pulse, engine-warming pulse;
+ * onboarding's breathe; the plugin setup sweep; progress-bar and card
+ * transitions, etc.) — a universal rule can't miss one the way a manual
+ * list can. Finite entrance animations (fade-in/pop-up/rise-in) just snap
+ * to their end state instead of easing in; infinite ones stop after one
+ * nearly-instant iteration instead of looping forever. See
+ * docs/design/ACCESSIBILITY_AUDIT.md pattern 4. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

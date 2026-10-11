@@ -1,0 +1,46 @@
+(version 1)
+(deny default)
+
+(allow process-fork)
+(allow signal (target self))
+(allow sysctl-read)
+(allow file-read-metadata)
+
+; See shell.sb for why read is broad here rather than a fixed subpath
+; allowlist (dyld boot requirement, verified via crash-report inspection) and
+; why that's still a meaningful confinement: write stays a positive
+; allowlist scoped to WORKSPACE/SCRATCH only, and the user's home directory
+; (every user's) plus mounted volumes are explicitly denied — overridden
+; back to allowed only for the configured WORKSPACE/SCRATCH themselves via
+; Seatbelt's most-specific-rule-wins resolution, even when they sit inside a
+; denied home directory.
+(allow file-read*)
+(deny file-read*
+    (subpath "/Users")
+    (subpath "/Volumes")
+    (subpath "/private/var/root"))
+
+; run_code is NOT a smaller-blast-radius sandbox than run_shell — shell.sb's
+; own exec allowlist already covers python3/node/bash, so anything run_code
+; can do, an approved run_shell call could already do via
+; `bash -c "python3 -c '...'"`, under the identical fs+network fencing. The
+; two tools share the same effective capability ceiling; run_code's value is
+; UX (structured code, no shell-quoting hazards), not isolation.
+(allow process-exec (literal (param "INTERPRETER")))
+
+(allow file-read* file-write*
+    (subpath (param "WORKSPACE"))
+    (subpath (param "SCRATCH")))
+
+; See shell.sb for why this is needed: code run here can shell out (e.g.
+; Python's subprocess) to a script the agent wrote into its own workspace,
+; and without an exec allowance scoped to WORKSPACE/SCRATCH, that fails with
+; "Operation not permitted" even though the interpreter itself is allowed.
+(allow process-exec
+    (subpath (param "WORKSPACE"))
+    (subpath (param "SCRATCH")))
+
+(deny network*)
+(deny mach-lookup)
+(deny appleevent-send)
+(deny iokit-open)

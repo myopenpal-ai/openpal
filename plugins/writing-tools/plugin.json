@@ -1,0 +1,9 @@
+{
+  "id": "writing-tools",
+  "name": "Writing Tools",
+  "description": "Turns the model you already have loaded into a paste-in translation, grammar/style, and message-clarity tool (Translate, Correct, and Improve a message) with no chat and no second model to download. Turn this on if you want quick translations, writing fixes, or a clearer draft without starting a conversation.",
+  "version": "0.1.0",
+  "author": "OpenPal",
+  "capabilities": ["writing-tools"],
+  "experimental": true
+}

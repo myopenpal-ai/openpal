@@ -1,0 +1,136 @@
+name: Feature / user story
+description: A new user-visible capability, described as a user story.
+title: "feat(area): "
+labels: ["type/feature", "status/triage"]
+type: Feature
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe what you want and why. You do not need to know how it should be
+        built — leave `Where this lives` and `Constraints and gotchas` on their
+        default line and a maintainer will fill them in.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: One short paragraph in your own words. What do you want and what is the situation today?
+      placeholder: Downloading a big model and losing the connection means starting over from zero.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: The one part of OpenPal this is about. Label the behaviour, not the layer — a Models feature that also touches React and Rust is still area/models.
+      options:
+        - area/ui
+        - area/chat
+        - area/engine
+        - area/models
+        - area/agent
+        - area/web-search
+        - area/sync
+        - area/remote-access
+        - area/security
+        - area/plugins
+        - area/app
+        - area/build
+        - area/docs
+        - area/i18n-a11y
+        - Unknown / to be decided
+    validations:
+      required: true
+
+  - type: textarea
+    id: user-story
+    attributes:
+      label: User story
+      description: One sentence — as WHO, I want WHAT, so that WHY. The "so that" is the only justification this ticket needs.
+      placeholder: As someone on a flaky connection, I want an interrupted model download to resume where it stopped, so that I do not re-download several gigabytes.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: placement
+    attributes:
+      label: Where it appears
+      description: OpenPal is beginner-first by default. Anything on the default path has to make sense to a total beginner; advanced capability belongs behind Settings or a plugin.
+      options:
+        - Default path — every user sees it
+        - Settings — visible but off the default path
+        - Settings → Advanced — power users only
+        - Plugin or add-on
+        - No new UI surface
+        - Unknown / to be decided
+    validations:
+      required: true
+
+  - type: textarea
+    id: done-when
+    attributes:
+      label: Done when
+      description: The acceptance criteria, as a checklist. Each line must be independently decidable — either an observable user-visible state or a command with its expected result. Describe what must be TRUE, never how to build it.
+      placeholder: |
+        - [ ] Restarting an interrupted download continues from the bytes already on disk instead of restarting at 0%.
+        - [ ] The Models page shows how much of the file is already downloaded before the user presses resume.
+        - [ ] `cargo test -p openpal-core` passes with a new test covering a partial-file restart.
+    validations:
+      required: true
+
+  - type: textarea
+    id: out-of-scope
+    attributes:
+      label: Not in scope
+      description: The fence. Name the adjacent things this ticket must NOT touch, and why they stay put. The standing line applies to every ticket — keep it.
+      value: |
+        - A blanket `cargo update`. The `time` crate is pinned at 0.3.47 in `Cargo.lock`; bump only what this ticket names.
+    validations:
+      required: true
+
+  - type: textarea
+    id: user-facing-copy
+    attributes:
+      label: User-facing copy
+      description: Required if this adds or changes any visible string. Give the i18n key and BOTH languages — `ui/src/i18n/keys.test.ts` fails the PR if the en and fr key sets differ. Leave blank only when no visible text changes.
+      placeholder: |
+        | Key | en | fr |
+        |---|---|---|
+        | `models.download.resume` | Resume download | Reprendre le téléchargement |
+        | `models.download.partial` | {{percent}}% already downloaded | {{percent}} % déjà téléchargé |
+
+  - type: textarea
+    id: where
+    attributes:
+      label: Where this lives
+      description: Pointers an implementer opens first — files, symbols, prior art — each with one line on what it does TODAY. Facts about the current code only, never instructions. A maintainer fills this in; you can leave the default line.
+      value: |
+        _To be filled at triage._
+    validations:
+      required: true
+
+  - type: textarea
+    id: constraints
+    attributes:
+      label: Constraints and gotchas
+      description: The few repo rules that actually bite this ticket. A maintainer fills this in; you can leave the default line.
+      value: |
+        _To be filled at triage._
+    validations:
+      required: true
+
+  - type: textarea
+    id: open-questions
+    attributes:
+      label: Open questions
+      description: Anything undecided, plus any implementation idea you want on record — it will be marked as a suggestion, not a decision. Every question here should carry a proposed default, and none of them should block a "Done when" line; if one does, the ticket is status/blocked instead of ready.
+
+  - type: input
+    id: template-version
+    attributes:
+      label: Template version
+      value: v1
+    validations:
+      required: true

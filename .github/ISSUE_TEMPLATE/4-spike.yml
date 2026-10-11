@@ -1,0 +1,133 @@
+name: Spike / research
+description: A timeboxed investigation that produces a written finding, not shipped code.
+title: "spike(area): "
+labels: ["type/spike", "status/triage"]
+type: Task
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A spike answers a question. It ends with a written finding posted on the
+        issue and, usually, a follow-up ticket — not with a merged feature. If you
+        already know what to build, file a Feature instead.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: One short paragraph in your own words. What do we not know?
+      placeholder: We do not know whether Vulkan GPU offload would make disk-streamed MoE models fast enough to be worth shipping, or whether they stay unusably slow whatever we do.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: The one part of OpenPal this is about. Label the behaviour, not the layer.
+      options:
+        - area/ui
+        - area/chat
+        - area/engine
+        - area/models
+        - area/agent
+        - area/web-search
+        - area/sync
+        - area/remote-access
+        - area/security
+        - area/plugins
+        - area/app
+        - area/build
+        - area/docs
+        - area/i18n-a11y
+        - Unknown / to be decided
+    validations:
+      required: true
+
+  - type: textarea
+    id: decision
+    attributes:
+      label: Decision this unblocks
+      description: The question to answer, and what gets decided because of it — including what the follow-up ticket looks like under each outcome. A spike with no named decision is reading for pleasure.
+      placeholder: |
+        Question: can a disk-streamed MoE model reach a usable tokens-per-second with Vulkan offload on a mid-range GPU?
+        If yes: file a feature to expose disk offload in Settings → Advanced for MoE models.
+        If no: close the disk-offload plan and record why in docs/design/DISK_OFFLOAD.md.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: timebox
+    attributes:
+      label: Timebox
+      description: A depth budget, not a schedule. It tells the researcher when to stop and write up whatever they have.
+      options:
+        - Up to 2 hours
+        - Up to half a day
+        - Up to 2 days
+        - Unknown / to be decided
+    validations:
+      required: true
+
+  - type: textarea
+    id: done-when
+    attributes:
+      label: Done when
+      description: What has to exist for this spike to be over. A spike's criteria are about the written finding, not about working code.
+      placeholder: |
+        - [ ] A comment on this issue states measured tokens-per-second for at least two GPUs and one baseline with offload off.
+        - [ ] The comment answers the question with yes or no and says which follow-up ticket applies.
+        - [ ] Any throwaway benchmark code is left on a branch and is NOT merged.
+    validations:
+      required: true
+
+  - type: textarea
+    id: out-of-scope
+    attributes:
+      label: Not in scope
+      description: The fence. For a spike the most important line is usually "do not ship the thing you are investigating". The standing line applies to every ticket; keep it.
+      value: |
+        - Shipping a production implementation. This ticket ends with a written finding; the build is a separate ticket.
+        - A blanket `cargo update`. The `time` crate is pinned at 0.3.47 in `Cargo.lock`; bump only what this ticket names.
+    validations:
+      required: true
+
+  - type: textarea
+    id: user-facing-copy
+    attributes:
+      label: User-facing copy
+      description: Normally blank for a spike. Fill it only if the investigation itself changes a visible string, in which case give the i18n key and BOTH languages.
+
+  - type: textarea
+    id: where
+    attributes:
+      label: Where this lives
+      description: Pointers the researcher opens first — files, symbols, prior art, relevant docs and upstream issues — each with one line on what it does TODAY. A maintainer fills this in; you can leave the default line.
+      value: |
+        _To be filled at triage._
+    validations:
+      required: true
+
+  - type: textarea
+    id: constraints
+    attributes:
+      label: Constraints and gotchas
+      description: The few repo rules that actually bite this investigation. A maintainer fills this in; you can leave the default line.
+      value: |
+        _To be filled at triage._
+    validations:
+      required: true
+
+  - type: textarea
+    id: open-questions
+    attributes:
+      label: Open questions
+      description: Sub-questions worth answering if the timebox allows, and anything you already suspect — recorded as a suggestion, not a decision.
+
+  - type: input
+    id: template-version
+    attributes:
+      label: Template version
+      value: v1
+    validations:
+      required: true

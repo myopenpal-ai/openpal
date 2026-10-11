@@ -1,0 +1,35 @@
+# systemd unit for the bare-metal self-hosting path — see
+# docs/RELAY_SELF_HOSTING.md for the full install procedure (creating the
+# system user, /var/lib/openpal-relay, and /etc/openpal-relay/relay.env
+# this unit expects).
+#
+# Deliberately does not add syscall filtering, capability bounding, or
+# namespace restrictions beyond what's below — this is a service that binds
+# one TCP port and reads/writes one SQLite file; a dozen more hardening
+# directives would be defense-in-depth for its own sake, against this
+# crate's established minimal style (see crates/relay/src/main.rs's module
+# doc).
+
+[Unit]
+Description=OpenPal sync relay (self-hosted mailbox server)
+Documentation=https://github.com/myopenpal-ai/openpal/blob/main/docs/RELAY_SELF_HOSTING.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=openpal-relay
+Group=openpal-relay
+EnvironmentFile=/etc/openpal-relay/relay.env
+ExecStart=/usr/local/bin/openpal-relay
+Restart=on-failure
+RestartSec=5
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/openpal-relay
+PrivateTmp=yes
+ProtectHome=yes
+
+[Install]
+WantedBy=multi-user.target

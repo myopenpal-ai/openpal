@@ -1,0 +1,127 @@
+name: Chore / tech debt
+description: Refactor, dependency bump, CI, build or cleanup work with no new user-visible capability.
+title: "chore(area): "
+labels: ["type/chore", "status/triage"]
+type: Task
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For work that makes the codebase better without giving the user anything
+        new. If users are supposed to notice a difference, file a Feature instead.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: One short paragraph in your own words. What needs cleaning up?
+      placeholder: The Models page and Discover both compute a model's size estimate with their own copy of the same formula, and the two have already drifted once.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: The one part of OpenPal this is about. Label the behaviour, not the layer.
+      options:
+        - area/ui
+        - area/chat
+        - area/engine
+        - area/models
+        - area/agent
+        - area/web-search
+        - area/sync
+        - area/remote-access
+        - area/security
+        - area/plugins
+        - area/app
+        - area/build
+        - area/docs
+        - area/i18n-a11y
+        - Unknown / to be decided
+    validations:
+      required: true
+
+  - type: textarea
+    id: cost
+    attributes:
+      label: What this costs us today
+      description: The concrete present-tense friction, with evidence. A flaky test, a stale doc, a duplicated formula, a slow CI step. This is the only justification a chore needs — "it would be cleaner" is not one.
+      placeholder: The two copies drifted in PR #61 and the Discover estimate was wrong for a week before anyone noticed. Any change to the formula now has to be made twice with nothing checking that it was.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: behaviour-change
+    attributes:
+      label: Behaviour change
+      description: Is the user allowed to notice? "No visible change" means any difference a user can see is a bug in this chore, and the reviewer can diff behaviour with confidence.
+      options:
+        - No visible change — users must not notice anything
+        - Visible and intended — users will notice and that is the point
+        - Unknown / to be decided
+    validations:
+      required: true
+
+  - type: textarea
+    id: done-when
+    attributes:
+      label: Done when
+      description: The acceptance criteria, as a checklist. Each line must be independently decidable, and must say what has to be TRUE, never how to do it.
+      placeholder: |
+        - [ ] Exactly one implementation of the size estimate remains in the tree.
+        - [ ] Both the Models page and Discover show the same number for the same model.
+        - [ ] `cargo fmt --check`, `cargo clippy --workspace -- -D warnings` and `npm test` all pass.
+    validations:
+      required: true
+
+  - type: textarea
+    id: out-of-scope
+    attributes:
+      label: Not in scope
+      description: The fence. With a refactor this is the most important section in the ticket — name the neighbours that must stay untouched. The standing line applies to every ticket; keep it.
+      value: |
+        - A blanket `cargo update`. The `time` crate is pinned at 0.3.47 in `Cargo.lock`; bump only what this ticket names.
+    validations:
+      required: true
+
+  - type: textarea
+    id: user-facing-copy
+    attributes:
+      label: User-facing copy
+      description: Required if any visible string moves or changes. Give the i18n key and BOTH languages — `ui/src/i18n/keys.test.ts` fails the PR if the en and fr key sets differ. Usually blank for a chore.
+
+  - type: textarea
+    id: where
+    attributes:
+      label: Where this lives
+      description: Pointers an implementer opens first — files, symbols, prior art — each with one line on what it does TODAY. Facts about the current code only, never instructions. A maintainer fills this in; you can leave the default line.
+      value: |
+        _To be filled at triage._
+    validations:
+      required: true
+
+  - type: textarea
+    id: constraints
+    attributes:
+      label: Constraints and gotchas
+      description: The few repo rules that actually bite this ticket. A maintainer fills this in; you can leave the default line.
+      value: |
+        _To be filled at triage._
+    validations:
+      required: true
+
+  - type: textarea
+    id: open-questions
+    attributes:
+      label: Open questions
+      description: Anything undecided, plus any approach you want on record — it will be marked as a suggestion, not a decision. Every question here should carry a proposed default, and none of them should block a "Done when" line.
+
+  - type: input
+    id: template-version
+    attributes:
+      label: Template version
+      value: v1
+    validations:
+      required: true

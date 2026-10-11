@@ -1,0 +1,3238 @@
+/* App shell: sidebar + main pane. */
+
+.shell {
+  display: grid;
+  /* --sidebar-width is set inline on this element (App.tsx) from the
+     resizable sidebarWidth store value — the 272px fallback only matters
+     before that first render. */
+  grid-template-columns: var(--sidebar-width, 272px) 1fr;
+  height: 100vh;
+}
+
+/* Sidebar collapsed via .sidebar-collapse-toggle (App.tsx) — Sidebar itself
+   is unmounted, so the grid just drops its column rather than shrinking it
+   to 0. */
+.shell-sidebar-collapsed {
+  grid-template-columns: 1fr;
+}
+
+/* ------------------------------- Sidebar -------------------------------- */
+
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  background: var(--glass-bg);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-right: 1px solid var(--glass-border);
+  min-height: 0;
+  /* Anchors .sidebar-resize-handle, which needs to sit relative to this
+     column rather than the next positioned ancestor up. */
+  position: relative;
+}
+
+.sidebar-top {
+  /* --titlebar-safe-h (not the bare --titlebar-h) since below the mobile
+     breakpoint .sidebar is `position: fixed` — same reasoning as .titlebar
+     in global.css. A no-op on desktop, where the sidebar is a normal
+     grid-column child and env(safe-area-inset-top) is 0px anyway. */
+  height: var(--titlebar-safe-h);
+  display: flex;
+  align-items: center;
+  /* Clear the macOS traffic lights. */
+  padding-left: 84px;
+  flex-shrink: 0;
+}
+
+/* This copy of the brand (inside the sidebar itself) only shows below the
+   mobile breakpoint, where it's the drawer's own header — above it,
+   App.tsx's .titlebar-brand renders "OpenPal" instead, persistently, even
+   while the sidebar is collapsed (see that element's comment in App.tsx). */
+.sidebar-top .sidebar-brand {
+  display: none;
+}
+
+@media (max-width: 600px) {
+  .sidebar-top .sidebar-brand {
+    display: inline;
+  }
+}
+
+.sidebar-brand {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 14px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+/* Drag handle on the sidebar's trailing edge — grab to resize (see
+   setSidebarWidth in state/store.ts). A few px wider than the visible
+   border it sits on top of, for an easier grab target; desktop only, like
+   the resizable column itself (below the mobile breakpoint the sidebar is a
+   fixed-width drawer). */
+.sidebar-resize-handle {
+  position: absolute;
+  top: 0;
+  right: -3px;
+  width: 6px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 5;
+  background: transparent;
+  transition: background 0.1s ease;
+}
+
+.sidebar-resize-handle:hover,
+.sidebar-resize-handle.sidebar-resize-handle-active {
+  background: var(--accent-line);
+}
+
+@media (max-width: 600px) {
+  .sidebar-resize-handle {
+    display: none;
+  }
+}
+
+.new-chat {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  margin: 10px 12px 6px;
+  /* Outlined pill: the old solid --accent fill is now the 1.5px border, and
+     the padding gives that 1.5px back so the button keeps its old height. */
+  padding: 8.5px 12.5px;
+  border-radius: 999px;
+  font-weight: 600;
+  font-size: 14px;
+  letter-spacing: 0.01em;
+  color: var(--accent);
+  background: transparent;
+  border: 1.5px solid var(--accent);
+  transition: background 0.18s ease, border-color 0.18s ease, color 0.18s ease,
+    box-shadow 0.18s ease, transform 0.1s ease;
+}
+
+.new-chat:hover:not(:disabled) {
+  color: var(--accent-hover);
+  border-color: var(--accent-hover);
+  background: var(--accent-soft);
+  box-shadow: 0 6px 16px -8px rgba(var(--accent-rgb), 0.55);
+}
+
+.new-chat:active:not(:disabled) {
+  transform: scale(0.98);
+  box-shadow: none;
+}
+
+.new-chat-icon {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  transition: transform 0.18s ease;
+}
+
+.new-chat:hover:not(:disabled) .new-chat-icon {
+  transform: scale(1.1) rotate(-6deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .new-chat,
+  .new-chat-icon {
+    transition: none;
+  }
+
+  .new-chat:hover:not(:disabled) .new-chat-icon {
+    transform: none;
+  }
+}
+
+/* Translate/Correct — a compact two-up row right below "+ New chat", same
+   spot the mobile drawer close-affordance expects a top-of-sidebar action to
+   live. Sized as equal-width chips rather than full-width rows since there
+   are only ever two of them. */
+.sidebar-quick-actions {
+  display: flex;
+  gap: 6px;
+  margin: 0 12px 8px;
+}
+
+.sidebar-quick-action {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  flex: 1;
+  padding: 7px 8px;
+  border-radius: var(--radius-m);
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink-soft);
+  background: var(--paper-raised);
+  border: 1px solid var(--line-soft);
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.sidebar-quick-action:hover:not(:disabled) {
+  background: var(--paper-sunken);
+  color: var(--ink);
+  border-color: var(--accent-line);
+}
+
+.sidebar-quick-action-active {
+  background: var(--paper-sunken);
+  color: var(--ink);
+  border-color: var(--accent-line);
+}
+
+.sidebar-quick-action svg {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  margin: 0;
+}
+
+/* Settings (multi-select) + search icons, below the Projects list — the
+   search box that used to live inline in the sidebar's fixed header now
+   opens ConversationSearch as its own bigger main-panel view instead (see
+   Sidebar.tsx). A direct child of `.conv-list`, so no horizontal margin of
+   its own: that container's own padding already provides it. */
+.sidebar-list-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  margin: 2px 0 8px;
+  min-height: 28px;
+}
+
+.sidebar-toolbar-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: 7px;
+}
+
+.sidebar-toolbar-icon {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+}
+
+/* Selection-mode variant: the same row swaps to a live count plus
+   delete/cancel actions instead of the select/search icons. */
+.sidebar-list-toolbar-count {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-soft);
+  padding-left: 4px;
+}
+
+/* The "select all" checkbox at the start of the selection-mode toolbar —
+   same 15x15/accent-color shape as each row's own `.conv-row-checkbox`,
+   just without that one's row-gap margin. Wrapped in a <label> with the
+   count text (see Sidebar.tsx) so the click/touch target isn't just the
+   15x15 box itself — same reasoning as each row's own checkbox, whose
+   effective hit area is enlarged by the row's own open button. */
+.sidebar-select-all-label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
+
+.sidebar-select-all-checkbox {
+  flex-shrink: 0;
+  width: 15px;
+  height: 15px;
+  margin-left: 4px;
+  accent-color: var(--accent);
+}
+
+.sidebar-list-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.conv-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 6px 12px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 0;
+}
+
+.conv-empty {
+  font-size: 13px;
+  color: var(--ink-soft);
+  padding: 10px 6px;
+}
+
+/* One decreasing-scale recency section (Today / This week / This month /
+   Older) within a conversation list — see lib/format.ts's `recencyBucket`. */
+.conv-date-group + .conv-date-group {
+  margin-top: 6px;
+}
+
+.conv-date-heading {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  text-align: left;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  /* Real body text, not decorative/icon use — --ink-faint clears only 3:1,
+     not the 4.5:1 normal-text minimum (see global.css's token comment). */
+  color: var(--ink-soft);
+  padding: 4px 6px 3px;
+  border-radius: var(--radius-s);
+}
+
+.conv-row {
+  position: relative;
+  border-radius: var(--radius-s);
+}
+
+.conv-row:hover,
+.conv-row-menu-open {
+  background: var(--ink-hover);
+}
+
+.conv-row-active {
+  background: var(--paper-raised) !important;
+  box-shadow: 0 1px 3px rgba(var(--shadow-rgb), 0.08);
+}
+
+.conv-open {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  text-align: left;
+  padding: 7px 10px;
+  transition: padding-right 0.12s ease;
+}
+
+/* Only reserve room for `.conv-row-menu-trigger` (24px, positioned `absolute;
+   right: 4px` in `.conv-row-actions`) once it's actually visible — matching
+   `.conv-row-actions`'s own hover/focus-within opacity condition — so an
+   at-rest row keeps symmetric left/right padding instead of a permanent gap
+   on the right, and only gives up a sliver of title width right when the
+   trigger fades in to avoid it overlapping ellipsis-truncated text.
+   `:not(.conv-row-selectable)` excludes selection mode, which never renders
+   the trigger at all (see `.conv-row-selectable .conv-open` below). */
+.conv-row:not(.conv-row-selectable):hover .conv-open,
+.conv-row:not(.conv-row-selectable):focus-within .conv-open,
+.conv-row-menu-open:not(.conv-row-selectable) .conv-open {
+  padding-right: 32px;
+}
+
+/* Replaces `.conv-open` in place while a row's inline rename (from
+   ConvRowMenu's "Rename" item) is in progress — same shape as
+   `.project-rename-input`, but `width: 100%` instead of relying on `flex: 1`
+   since `.conv-row` (its parent here) isn't itself a flex container the way
+   `.project-group-header` is. */
+.conv-rename-input {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  font-size: 12.5px !important;
+  padding: 6px 9px !important;
+}
+
+.conv-title {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--ink);
+  width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A search-result row: title + a matching excerpt stacked instead of the
+   single truncated title line. Used both by the sidebar row shape reused in
+   ConversationSearch's bigger results list. */
+.conv-open-search {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  padding-right: 10px;
+}
+
+.conv-snippet {
+  font-size: 11.5px;
+  color: var(--ink-soft);
+  width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conv-row-actions {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.conv-row:hover .conv-row-actions,
+.conv-row:focus-within .conv-row-actions,
+.conv-row-menu-open .conv-row-actions {
+  opacity: 1;
+}
+
+/* The "…" trigger that opens ConvRowMenu (Delete / Add to project / Pin /
+   Rename) — replaces the old always-two-controls actions area (an inline
+   project <select> plus a bare delete button). */
+.conv-row-menu-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border-radius: 6px;
+}
+
+.conv-row-menu-trigger .sidebar-action-icon {
+  width: 15px;
+  height: 15px;
+  margin-right: 0;
+}
+
+/* ConvRowMenu's popup — a `.menu` rendered through a portal at a fixed,
+   JS-computed position (see Sidebar.tsx) rather than positioned `absolute`
+   within `.conv-list`, which would get clipped by that container's
+   `overflow-y: auto` near either scrolled edge. */
+.conv-row-menu {
+  z-index: 500;
+}
+
+/* Selection-mode row: a checkbox replaces the "…" menu and the whole row
+   toggles selection instead of opening the conversation. */
+.conv-row-selectable {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.conv-row-selectable .conv-open {
+  padding: 7px 10px 7px 0;
+}
+
+.conv-row-checkbox {
+  flex-shrink: 0;
+  width: 15px;
+  height: 15px;
+  margin-left: 10px;
+  accent-color: var(--accent);
+}
+
+/* -------------------------------- Projects ------------------------------ */
+
+.project-section {
+  margin-bottom: 4px;
+}
+
+.project-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 6px 4px;
+}
+
+.project-section-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+/* Collapses/expands an entire top-level section (Pinned, Projects) — same
+   accordion affordance as each ConvList's own `.conv-date-heading` buttons
+   (chevron + label), just sharing its header row with `.project-add-btn`
+   instead of spanning the row alone. */
+.project-section-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  padding: 3px 4px;
+  border-radius: var(--radius-s);
+}
+
+.project-section-toggle:hover .project-section-title {
+  color: var(--ink-soft);
+}
+
+.project-add-btn,
+.project-action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border-radius: 6px;
+}
+
+.project-add-btn svg,
+.project-action-btn svg {
+  width: 13px;
+  height: 13px;
+}
+
+.project-create-row {
+  padding: 2px 6px 6px;
+}
+
+.project-create-row input {
+  width: 100%;
+  font-size: 13px;
+  padding: 6px 10px !important;
+}
+
+.project-group {
+  margin-bottom: 2px;
+}
+
+.project-group-header {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 4px 4px 2px;
+  border-radius: var(--radius-s);
+}
+
+.project-group-header:hover {
+  background: var(--ink-hover);
+}
+
+.project-collapse-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  border-radius: 6px;
+}
+
+.project-chevron {
+  width: 12px;
+  height: 12px;
+  color: var(--ink-faint);
+  transition: transform 0.15s ease;
+  transform: rotate(90deg);
+}
+
+.project-chevron-collapsed {
+  transform: rotate(0deg);
+}
+
+.project-name-btn {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 3px 2px;
+}
+
+.project-rename-input {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px !important;
+  padding: 4px 8px !important;
+}
+
+.project-count {
+  font-size: 10.5px;
+  color: var(--ink-faint);
+  flex-shrink: 0;
+  padding: 0 2px;
+}
+
+.project-group-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.project-group-header:hover .project-group-actions,
+.project-group-header:focus-within .project-group-actions {
+  opacity: 1;
+}
+
+.project-group .conv-row {
+  margin-left: 18px;
+}
+
+.project-empty {
+  margin-left: 18px;
+  padding: 4px 6px;
+  font-size: 12px;
+}
+
+.sidebar-bottom {
+  padding: 10px 12px 14px;
+  border-top: 1px solid var(--line-soft);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.engine-pill-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.engine-pill {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 5px 5px 12px;
+  border-radius: var(--radius-m);
+  background: var(--paper-raised);
+  border: 1px solid var(--line-soft);
+  flex: 1;
+  min-width: 0;
+  /* Anchors .engine-pill-progress-fill and clips its square corners to this
+     box's own rounded ones. */
+  position: relative;
+  overflow: hidden;
+}
+
+.engine-pill-clickable:hover {
+  border-color: var(--accent-line);
+}
+
+/* The model-name button inside `.engine-pill` — only clickable in the
+   states that carry an onClick (retry / open settings / go to Library). */
+.engine-pill-info {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 4px 0;
+  text-align: left;
+  flex: 1;
+  min-width: 0;
+}
+
+.engine-pill-info:disabled {
+  opacity: 1;
+}
+
+.engine-power-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  flex-shrink: 0;
+  border-radius: 7px;
+}
+
+.engine-power-btn svg {
+  width: 14px;
+  height: 14px;
+}
+
+.pill-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.pill-dot-ok { background: var(--ok); }
+.pill-dot-warm { background: var(--warn); animation: pulse-dot 1.2s ease-in-out infinite; }
+.pill-dot-bad { background: var(--danger); }
+.pill-dot-off { background: var(--ink-faint); }
+
+.pill-label {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink-soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The real loading percentage appended to the model name while starting
+   (see EnginePill and, for where the number comes from, Rust's
+   EngineStatus::Starting doc) — lighter weight than the name itself so it
+   doesn't compete with it, same visual demotion `.app-version` uses. */
+.pill-label-progress {
+  font-weight: 500;
+  color: var(--ink-faint);
+}
+
+/* Sweeps left-to-right across .engine-pill itself as the real loading
+   percentage climbs (see EnginePill and, for where the number comes from,
+   Rust's EngineStatus::Starting doc). `z-index: -1` relative to the pill's
+   own stacking context (.engine-pill's `position: relative`) keeps it
+   behind the dot/label/button, which paint above any negative-z sibling by
+   default — see painting order in the CSS2 spec's Appendix E. */
+.engine-pill-progress-fill {
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  z-index: -1;
+  background: var(--warn-soft);
+  transition: width 0.3s ease;
+}
+
+.sidebar-menu-row {
+  display: flex;
+  align-items: center;
+}
+
+.sidebar-menu-trigger {
+  display: inline-flex;
+  align-items: center;
+}
+
+/* Shared dropdown-menu shell — used by the Sidebar's "More" menu, the
+   composer's "+" menu, and the model quick-picker. Opens upward since every
+   trigger that uses it sits near the bottom of the screen. */
+.menu-wrap {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.menu {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 6px);
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  min-width: 172px;
+  padding: 6px;
+  background: var(--paper-raised);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-m);
+  box-shadow: var(--shadow-pop);
+  animation: pop-up 0.15s ease both;
+}
+
+.menu-right {
+  left: auto;
+  right: 0;
+}
+
+.menu-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  text-align: left;
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--ink-soft);
+  padding: 8px 10px;
+  border-radius: var(--radius-s);
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.menu-item:hover {
+  background: var(--paper-sunken);
+  color: var(--ink);
+}
+
+.menu-item:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.menu-item svg {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+  color: var(--ink-faint);
+}
+
+/* Pushes a trailing icon (ConvRowMenu's "Add to project" forward chevron)
+   to the far right instead of it sitting right after the label text. */
+.menu-item-label {
+  flex: 1;
+}
+
+/* Fixed-width slot for a per-item checkmark (ConvRowMenu's project picker)
+   so unchecked rows still line up with checked ones. */
+.menu-item-check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+}
+
+.menu-item-check svg {
+  color: var(--accent);
+}
+
+.menu-item-danger {
+  color: var(--danger);
+}
+
+.menu-item-danger svg {
+  color: var(--danger);
+}
+
+.menu-item-danger:hover {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+/* ConvRowMenu's submenu header — reads as a back button, not an ordinary
+   item, so it gets its own weight and a divider under it. */
+.menu-item-back {
+  font-weight: 700;
+  color: var(--ink);
+  border-radius: 0;
+  margin-bottom: 4px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.menu-divider {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--line-soft);
+}
+
+/* Wraps each quick-picker row's model-switch button alongside its own
+ * favorite star — a plain, non-interactive flex row so the star's `<button>`
+ * never has to nest inside the option's own `<button>` (invalid HTML). */
+.model-menu-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  width: 100%;
+}
+
+.model-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 200px;
+  text-align: left;
+  padding: 8px 10px;
+  border-radius: var(--radius-s);
+  transition: background 0.15s ease;
+}
+
+.model-menu-item:hover {
+  background: var(--paper-sunken);
+}
+
+.model-menu-item:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.model-menu-name {
+  flex: 1;
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--ink-soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-menu-speed {
+  flex-shrink: 0;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+
+.app-version {
+  margin-left: auto;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--ink-soft);
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+}
+
+.sidebar-action-active {
+  background: var(--paper-raised);
+  color: var(--ink);
+}
+
+/* ---------------------- Mobile: sidebar as a drawer --------------------- */
+/* Breakpoint convention: 600px — keep in sync with every other
+   `max-width: 600px` query in the app (see global.css :root). */
+@media (max-width: 600px) {
+  .shell {
+    grid-template-columns: 1fr;
+  }
+
+  .sidebar-top {
+    /* No macOS traffic lights to clear on a phone. */
+    padding-left: 16px;
+    padding-top: env(safe-area-inset-top, 0px);
+  }
+
+  .sidebar {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: min(85vw, 320px);
+    z-index: 560;
+    transform: translateX(-100%);
+    transition: transform 0.22s ease;
+    box-shadow: var(--shadow-pop);
+  }
+
+  .sidebar-open {
+    transform: translateX(0);
+  }
+
+  .sidebar-scrim {
+    position: fixed;
+    inset: 0;
+    z-index: 555;
+    background: var(--scrim);
+    animation: fade-in 0.18s ease both;
+  }
+
+  .sidebar-bottom {
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+}
+
+/* --------------------------- Conversation search ------------------------- */
+
+/* views/ConversationSearch.tsx — the sidebar's search icon opens this as
+   its own dialog (separate from the More dialog) instead of the old cramped
+   inline sidebar box, so there's real room to read a result's snippet
+   without the main pane ever leaving the conversation. */
+.conv-search-dialog {
+  width: min(720px, calc(100% - 64px));
+  height: min(620px, calc(100% - 64px));
+  display: flex;
+  flex-direction: column;
+  background: var(--paper-raised);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-l);
+  box-shadow: var(--shadow-pop);
+  overflow: hidden;
+  animation: pop-up 0.22s cubic-bezier(0.2, 0.9, 0.3, 1.2) both;
+}
+
+.conv-search-header {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.conv-search-close {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border-radius: 8px;
+}
+
+.conv-search-close svg {
+  width: 18px;
+  height: 18px;
+}
+
+.conv-search-input-wrap {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 16px;
+  border-radius: var(--radius-m);
+  background: var(--paper-sunken);
+  border: 1px solid var(--line-soft);
+}
+
+.conv-search-input-wrap svg {
+  width: 18px;
+  height: 18px;
+  color: var(--ink-faint);
+  flex-shrink: 0;
+}
+
+.conv-search-input {
+  flex: 1;
+  font-size: 16px;
+  padding: 10px 0 !important;
+  background: transparent !important;
+  border: none !important;
+}
+
+.conv-search-input:focus {
+  box-shadow: none !important;
+}
+
+.conv-search-results {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px 16px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+/* One group of the results pane — Recent / matching Conversations, then
+   Settings — each under a small uppercase heading like the sidebar's own
+   `.conv-date-heading`. */
+.conv-search-section {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.conv-search-section-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 14px 6px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  /* Real text — --ink-faint only clears 3:1 (see global.css's tokens). */
+  color: var(--ink-soft);
+}
+
+.conv-search-count {
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--paper-sunken);
+  font-size: 10.5px;
+  letter-spacing: 0;
+}
+
+.conv-search-section .conv-empty {
+  padding: 6px 14px;
+}
+
+.conv-search-hint {
+  padding: 0 14px;
+  font-size: 12.5px;
+  color: var(--ink-soft);
+}
+
+.conv-search-result {
+  border-radius: var(--radius-m);
+  padding: 12px 14px;
+}
+
+.conv-search-result:hover:not(:disabled),
+.conv-search-result:focus-visible {
+  background: var(--ink-hover);
+}
+
+/* Title and how long ago it was last touched, on one line — the title
+   truncates, the time never does. */
+.conv-search-result-head {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  width: 100%;
+  min-width: 0;
+}
+
+.conv-search-result .conv-title {
+  flex: 1;
+  width: auto;
+  min-width: 0;
+  font-size: 14.5px;
+}
+
+.conv-search-when {
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--ink-soft);
+}
+
+.conv-search-result .conv-snippet {
+  font-size: 13px;
+  white-space: normal;
+  overflow: visible;
+  text-overflow: unset;
+}
+
+/* What made a result match, in its title or excerpt (and in a Settings
+   shortcut's name). */
+.conv-search-dialog mark {
+  background: rgba(var(--accent-rgb), 0.16);
+  color: var(--ink);
+  font-weight: 600;
+  border-radius: 3px;
+  padding: 0 1px;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+
+/* Settings categories in columns, each with its More dialog nav icon
+   (components/pageIcons.tsx) and opening that page (see `openSettings`).
+   Cells line their icon up with the results' titles above. */
+.conv-search-shortcuts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 2px 6px;
+}
+
+.conv-search-shortcut {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 8px 14px;
+  border-radius: var(--radius-m);
+  text-align: left;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--ink);
+  transition: background 0.15s ease;
+}
+
+.conv-search-shortcut:hover,
+.conv-search-shortcut:focus-visible {
+  background: var(--ink-hover);
+}
+
+.conv-search-shortcut svg {
+  flex-shrink: 0;
+  box-sizing: border-box;
+  width: 30px;
+  height: 30px;
+  padding: 6px;
+  border-radius: var(--radius-s);
+  background: var(--paper-sunken);
+  color: var(--ink-soft);
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
+.conv-search-shortcut:hover svg,
+.conv-search-shortcut:focus-visible svg {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* Wraps rather than truncating — "Privacy & safety" must stay readable in a
+   phone-width column. */
+.conv-search-shortcut-label {
+  min-width: 0;
+  line-height: 1.25;
+}
+
+/* Breakpoint convention: 600px — keep in sync with every other
+   `max-width: 600px` query in the app (see global.css :root). Same thin
+   tappable scrim margin as the More dialog keeps. */
+@media (max-width: 600px) {
+  .conv-search-dialog {
+    width: calc(100% - 16px);
+    height: calc(100% - 16px);
+  }
+
+  .conv-search-shortcuts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .conv-search-shortcut {
+    padding: 8px 10px;
+  }
+}
+
+/* -------------------------------- Chat ---------------------------------- */
+
+.main-pane {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Chat and the optional right-hand preview panel sit side by side. */
+.chat-layout {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
+.chat {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.chat-scroll {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  min-height: 0;
+  padding-top: var(--titlebar-safe-h);
+  /* useStickToBottom reads any upward scroll as the user leaving the
+     bottom. Scroll anchoring would also nudge the view up whenever content
+     above it collapses (a reply's activity panel being folded away), and
+     stop the reply following mid-stream. */
+  overflow-anchor: none;
+}
+
+/* Jump-to-latest button (see the anchor's comment in ChatView). */
+.chat-jump-anchor {
+  position: relative;
+  height: 0;
+  flex-shrink: 0;
+}
+
+.chat-jump-btn {
+  position: absolute;
+  bottom: 12px;
+  left: 0;
+  right: 0;
+  margin: 0 auto;
+  z-index: 5;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ink-soft);
+  background: var(--glass-bg);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--shadow-card);
+  animation: fade-in 0.15s ease both;
+  transition: background 0.14s ease, color 0.14s ease;
+}
+
+.chat-jump-btn:hover {
+  background: var(--paper-raised);
+  color: var(--ink);
+}
+
+.chat-jump-btn svg {
+  width: 18px;
+  height: 18px;
+}
+
+.chat-col {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 16px 32px 24px;
+}
+
+/* Empty state */
+
+/* A chat with nothing said yet: the composer sits exactly in the middle of the
+   screen, with the greeting just above it, instead of waiting at the bottom.
+   Three grid rows do it: the composer alone in the auto-sized middle one, between
+   two equal ones, so it is centred whatever the greeting's height; the greeting
+   bottom-aligned in the top row, and the banners (which would otherwise push the
+   composer off-centre) and the jump-button anchor in the bottom one. The top row
+   is never shorter than the greeting (see .chat-scroll's max-height) unless the
+   window is too short for it, when the greeting scrolls rather than the composer
+   being squeezed out. Once the first message is sent this class drops and the
+   composer glides to the bottom (see useComposerGlide). */
+.chat.is-empty {
+  position: relative;
+  /* Keeps the glow's z-index: -1 inside .chat. */
+  isolation: isolate;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(max-content, 1fr) auto minmax(0, 1fr);
+}
+
+.chat.is-empty .chat-scroll {
+  grid-area: 1 / 1;
+  align-self: end;
+  /* Caps what the row above reserves for the greeting, which is what
+     max-content counts; the scroll area scrolls past it. */
+  max-height: 45vh;
+}
+
+.chat.is-empty .chat-composer-slot {
+  grid-area: 2 / 1;
+  /* The hint line under the composer box (16px plus its 8px margin, see
+     .composer-hint) stays out of what gets centred, so it is the box you type
+     in that sits mid-screen. It overhangs into the row below, which the
+     banners step around. */
+  margin-bottom: -24px;
+}
+
+/* Both in the same cell: the anchor has no height, so they don't collide. Every
+   item names its column too, or the second one in a row would be auto-placed
+   into a new column beside the first and squeeze the whole layout. */
+.chat.is-empty .chat-jump-anchor,
+.chat.is-empty .chat-banners {
+  grid-area: 3 / 1;
+  align-self: start;
+}
+
+.chat.is-empty .chat-banners {
+  padding-top: 24px;
+}
+
+/* The element useComposerGlide animates; Composer's own .composer-wrap
+   inside it carries the width and padding. */
+.chat-composer-slot {
+  flex-shrink: 0;
+}
+
+/* The banners, one flex item in a normal chat — each is a full-width row, as
+   when they were items of .chat itself. */
+.chat-banners {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+}
+
+/* The empty/non-empty swap above must land in one frame. Nothing here wants a
+   transition, but the global reduced-motion rule (global.css) gives every
+   element a 0.01ms one on `all`, and that would let any property that differs
+   between the two layouts paint a frame or two of the old one: the composer
+   jumping to the top of the screen. That rule only sets the duration, so
+   turning the property off holds. */
+.chat,
+.chat-scroll,
+.chat-composer-slot {
+  transition-property: none;
+}
+
+.chat-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 12px;
+  animation: rise-in 0.5s ease both;
+}
+
+/* Ambient glow behind the greeting — the same --glow-gradient used in
+   onboarding. It hangs off .chat rather than .chat-empty: the scroll area is
+   only as tall as the greeting now, and would crop it with a hard edge. Inset
+   a little from the sides so the breathing scale can't carry it past .chat
+   (and over the sidebar or into horizontal overflow); the greeting sits a
+   little over 100px above the centre line, the composer's own. */
+.chat.is-empty::before {
+  content: "";
+  position: absolute;
+  left: 3%;
+  right: 3%;
+  top: calc(50% - 155px);
+  height: 140px;
+  z-index: -1;
+  pointer-events: none;
+  background: var(--glow-gradient);
+  filter: blur(50px);
+  opacity: 0.9;
+  animation: glow-breathe 9s ease-in-out infinite;
+}
+
+.chat-hello {
+  font-family: var(--font-display);
+  font-size: 34px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.chat-hello-sub {
+  color: var(--ink-soft);
+  font-size: 15px;
+}
+
+/* Messages */
+
+.messages {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  padding-bottom: 8px;
+}
+
+/* Each turn is a column: the message, then its hover actions beneath it. */
+.msg-user-row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+
+.msg-assistant-row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}
+
+.msg-user {
+  max-width: 78%;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-line);
+  color: var(--ink);
+  padding: 11px 16px;
+  border-radius: var(--radius-l) var(--radius-l) 6px var(--radius-l);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.msg-assistant {
+  max-width: 100%;
+  font-size: 15.5px;
+  line-height: 1.65;
+}
+
+/* A sent `/<skill>` turn: the slug as a small pill (echoing the composer's
+   own `/`-autocomplete look) instead of raw slash text, with any trailing
+   free text underneath. */
+.msg-command-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px 3px 7px;
+  background: var(--paper-raised);
+  border: 1px solid var(--accent-line);
+  border-radius: var(--radius-s);
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  font-weight: 600;
+}
+
+.msg-command-chip svg {
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
+}
+
+/* Skill slugs are user-authored and uncapped in length; truncate rather than
+   let the pill grow to fit one. */
+.msg-command-chip-slug {
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.msg-command-rest {
+  margin-top: 6px;
+}
+
+/* Model attribution and/or generation stats — part of the hover-gated
+   `.msg-meta` group on assistant turns. */
+.msg-model {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--ink-soft);
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+
+.msg-model-sep {
+  opacity: 0.5;
+}
+
+/* When the message was sent. Lives inside the hover-gated `.msg-actions-row`
+   on user turns and the hover-gated `.msg-meta` on assistant turns — same
+   muted typography either way, since it's turn metadata, not an action. */
+.msg-date {
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--ink-soft);
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+
+/* Container for the action buttons (+ timestamp, on user turns). */
+.msg-actions-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* User turns: the whole row (icon actions + timestamp) is invisible until
+   the turn is hovered or a button inside is keyboard-focused, so the layout
+   never shifts. Assistant turns keep `.msg-actions` always-on instead — see
+   `.msg-meta` below for what hover-gates there.
+   `:has(:focus-visible)`, not `:focus-within` — a mouse click also leaves a
+   button focused (just not `:focus-visible`), and `:focus-within` would keep
+   the row stuck open after the pointer moves away since nothing else ever
+   blurs it. */
+.msg-user-row .msg-actions-row {
+  opacity: 0;
+  transition: opacity 0.14s ease;
+}
+
+.msg-user-row:hover .msg-actions-row,
+.msg-actions-row:has(:focus-visible) {
+  opacity: 1;
+}
+
+/* Left padding only (focus-ring clearance at the row start) — a right-side
+   padding here would stack invisibly on top of `.msg-actions-row`'s own
+   `gap`, making the boundary before `.msg-meta` a coincidental sum of two
+   unrelated rules instead of one deliberate value. */
+.msg-actions {
+  display: flex;
+  gap: 2px;
+  padding-left: 2px;
+}
+
+/* Assistant turns only: timestamp + model/stats, hover-gated together
+   (unlike `.msg-actions` beside it, which stays always-on) since it's
+   read-only context rather than something to click. */
+.msg-meta {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 0.14s ease;
+}
+
+.msg-assistant-row:hover .msg-meta {
+  opacity: 1;
+}
+
+.msg-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 8px;
+  border-radius: var(--radius-s);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ink-soft);
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.msg-action:hover:not(:disabled) {
+  background: var(--paper-sunken);
+  color: var(--ink-soft);
+}
+
+.msg-action svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* Message actions are icon-only; the label stays in the DOM (and is mirrored
+   in `title`, for the native tooltip) for screen readers, just not painted —
+   same clip-based technique as the global `.sr-only`. */
+.msg-actions .msg-action-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Edit-history / retry-history navigation ("‹ 2/3 ›") — always visible (not
+   hover-gated like `.msg-actions` on a user turn), so the version counter
+   itself is discoverable without hovering the turn. */
+.msg-variant-nav {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 2px;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--ink-soft);
+}
+
+.msg-variant-nav-btn {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px;
+  border-radius: var(--radius-s);
+  color: var(--ink-soft);
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.msg-variant-nav-btn:hover:not(:disabled) {
+  background: var(--paper-sunken);
+  color: var(--ink);
+}
+
+.msg-variant-nav-btn:disabled {
+  opacity: 0.35;
+}
+
+.msg-variant-nav-btn svg {
+  width: 13px;
+  height: 13px;
+}
+
+.msg-variant-nav-count {
+  min-width: 1.6em;
+  text-align: center;
+}
+
+/* "This conversation was forked from [badge]" — shown once, right after the
+   message the fork was created from (`Conversation.forkedFrom`). Always
+   visible, not hover-gated — it's conversation provenance, not a per-message
+   action. */
+.fork-origin-note {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 2px 4px 0;
+  font-size: 11.5px;
+}
+
+.fork-origin-label {
+  flex-shrink: 0;
+  font-style: italic;
+  color: var(--ink-soft);
+}
+
+/* Source deleted: the label is the whole note, with no badge to give way —
+   let it wrap on narrow windows instead of overflowing. */
+.fork-origin-label:only-child {
+  flex-shrink: 1;
+}
+
+/* The badge itself is the link — same "chip" visual language as
+   `.attachment-doc` (file/artifact chips), scaled down to sit inline with
+   `.fork-origin-label`'s muted text. Title is CSS-truncated, not manually
+   cut in JS, so it respects the badge's actual rendered width. */
+.fork-origin-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  max-width: 260px;
+  padding: 3px 8px;
+  border-radius: var(--radius-m);
+  background: var(--paper-sunken);
+  border: 1px solid var(--line-soft);
+  color: var(--ink-soft);
+  font-size: 11.5px;
+  cursor: pointer;
+  transition: border-color 0.12s ease, color 0.12s ease;
+}
+
+.fork-origin-badge:hover {
+  border-color: var(--accent-line);
+  color: var(--ink);
+}
+
+.fork-origin-badge svg {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  color: var(--ink-faint);
+}
+
+.fork-origin-badge-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.fork-origin-badge-date {
+  flex-shrink: 0;
+  color: var(--ink-faint);
+}
+
+.fork-origin-badge-date::before {
+  content: "· ";
+}
+
+/* Brief tint on the message a "jump to original" link (fork-origin hint or,
+   in future, a search result) landed on, so it's obvious which one it was —
+   fades out on its own rather than needing a dismiss. */
+@keyframes msg-highlight-flash {
+  from {
+    background: var(--accent-soft);
+  }
+  to {
+    background: transparent;
+  }
+}
+
+.msg-highlight {
+  animation: msg-highlight-flash 2s ease-out;
+  border-radius: var(--radius-s);
+}
+
+/* Inline editor for a past user message. */
+.msg-edit {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.msg-edit-area {
+  width: 100%;
+  min-height: 64px;
+  resize: vertical;
+  background: var(--paper-raised);
+  border: 1px solid var(--accent-line);
+  border-radius: var(--radius-m);
+  padding: 11px 15px;
+  font-size: 15px;
+  line-height: 1.55;
+}
+
+.msg-edit-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.msg-edit-send {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--accent-ink);
+  background: var(--accent);
+  padding: 6px 16px;
+  border-radius: var(--radius-s);
+  transition: background 0.15s ease;
+}
+
+.msg-edit-send:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.caret {
+  display: inline-block;
+  width: 3px;
+  height: 1.1em;
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  background: var(--accent);
+  animation: pulse-dot 0.9s ease-in-out infinite;
+}
+
+.thinking {
+  display: inline-flex;
+  gap: 5px;
+  padding: 6px 0;
+}
+
+.thinking-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ink-faint);
+  animation: pulse-dot 1.2s ease-in-out infinite;
+}
+
+.thinking-dot:nth-child(2) { animation-delay: 0.2s; }
+.thinking-dot:nth-child(3) { animation-delay: 0.4s; }
+
+.chat-error {
+  background: var(--danger-soft);
+  color: var(--danger);
+  border-radius: var(--radius-m);
+  padding: 12px 16px;
+  font-size: 14px;
+  /* Now a sibling of (not a flex item inside) .messages — see ChatView.tsx —
+     so it needs its own top margin to keep the same visual gap the flex
+     `gap` used to provide. */
+  margin-top: 22px;
+}
+
+/* Engine status banners, all inline above the composer: a failed model load
+   (danger-toned) or an informational heads-up like ParentalLockBanner /
+   SafetyBanner (the -info variant). The idle-unload heads-up instead lives
+   as a fixed-size warning floating over the whole app — see
+   AutoUnloadTooltip and .auto-unload-tooltip below. */
+.engine-banner {
+  padding: 10px 16px;
+  border-radius: var(--radius-m);
+  background: var(--danger-soft);
+  animation: rise-in 0.2s ease both;
+}
+
+.engine-banner-inner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: 656px;
+  margin: 0 auto;
+}
+
+.engine-banner-text {
+  flex: 1;
+  font-size: 14px;
+  color: var(--danger);
+}
+
+.engine-banner-info {
+  background: var(--warn-soft);
+}
+
+.engine-banner-info .engine-banner-text {
+  color: var(--warn);
+}
+
+/* Banner buttons sit on an already-tinted (warn/danger-soft) background —
+   re-applying that same soft tint on hover (the shared .btn-quiet variants'
+   default) barely shows. The app's standard sunken-surface hover reads
+   clearly against either tint, in both themes. */
+.engine-banner .btn-quiet:hover:not(:disabled) {
+  background: var(--paper-sunken);
+}
+
+/* EngineBanner: inline, right above the composer. */
+.engine-banner-inline {
+  margin: 0 32px 8px;
+}
+
+/* SafetyBanner: title/body/hotline are several lines of supportive text, so
+   it stacks vertically instead of the single-line row every other
+   engine-banner uses — the actions (learn more / dismiss) sit below as their
+   own row rather than squeezed beside the text. */
+.safety-banner-inner {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.safety-banner-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* AutoUnloadTooltip: a fixed-size warning that sits just above the sidebar's
+   model row — the model it's warning about — without being anchored to it.
+   Deliberately not a descendant of that column: the sidebar is user-
+   resizable (220-440px, see SIDEBAR_MIN/MAX_WIDTH), so a popover inside it
+   stretches with it, and `.sidebar` sets `backdrop-filter`, which makes the
+   whole column one stacking context a descendant can never paint out of.
+   Positioned against the viewport instead, so its size holds at every
+   sidebar width and it survives the column being collapsed or (below the
+   mobile breakpoint) turned into a closed drawer. Stacks its text above its
+   one action because 300px is too narrow for a single row. */
+.auto-unload-tooltip {
+  position: fixed;
+  /* Flush with `.engine-pill`'s own leading edge (`.sidebar-bottom` pads by
+     12px), so it reads as belonging to the model row beneath it. */
+  left: 12px;
+  /* Clears `.sidebar-bottom` — the engine pill plus the "More" row below it —
+     leaving the popover's bottom edge ~5px above the pill. Measured, not
+     derived: being free of that column is the whole point, so there's no
+     anchor left to hang off, and a few px of drift here is cosmetic. */
+  bottom: calc(100px + env(safe-area-inset-bottom, 0px));
+  width: 300px;
+  max-width: calc(100vw - 24px);
+  /* Above the sidebar and the main pane, just below the titlebar (500).
+     Under it on purpose: ChatToolbar's `.toolbar-panel` is a child of the
+     fixed titlebar and so paints atomically at 500, and a taller value here
+     would clip that panel's scrollable bottom edge. Everything above 500 —
+     the mobile drawer and its scrim, .modal-backdrop, .lightbox — is a
+     focused overlay that should cover a passive countdown anyway. The one
+     thing z-index can't settle is the sidebar's own "More" menu; the
+     component hides for that (see `sidebarMoreMenuOpen`). */
+  z-index: 490;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-radius: var(--radius-m);
+  /* --warn-soft is a 13-14% tint meant to sit on an opaque parent, the way
+     the inline .engine-banner variants do. This one floats over the sidebar
+     and the chat pane instead, so the tint alone let whatever was behind it
+     read straight through. Layering the tint over --paper-raised (every
+     other floating surface's background, see .menu) keeps the warning tone
+     while making the surface opaque, and re-derives itself in dark mode from
+     the same two tokens rather than hard-coding a blended color. */
+  background: linear-gradient(var(--warn-soft), var(--warn-soft)) var(--paper-raised);
+  /* Border plus --shadow-pop, the same pair .menu and .modal use: both
+     --shadow-pop layers are offset downward, so the top edge of a floating
+     surface gets no shadow at all and needs the hairline to define it. */
+  border: 1px solid var(--line-soft);
+  box-shadow: var(--shadow-pop);
+  animation: rise-in 0.2s ease both;
+}
+
+/* --badge-warn-ink rather than --warn: on the warn-tinted surface above,
+   light mode's --warn only reaches ~3.8:1, below AA for text this size.
+   global.css scopes this darker ink to badges, but it's the same problem —
+   warn-colored text on a warn-soft fill — and it clears 4.5:1 here (4.68:1
+   measured). In dark mode it's an alias for --warn, so nothing changes. */
+.auto-unload-tooltip-text,
+.auto-unload-tooltip .btn-warn-quiet,
+.auto-unload-tooltip .btn-warn-quiet:hover:not(:disabled) {
+  color: var(--badge-warn-ink);
+}
+
+.auto-unload-tooltip-text {
+  margin: 0;
+  font-size: 12.5px;
+  /* Clears the close button parked in the top-right corner. */
+  padding-right: 30px;
+  /* Two lines, always. English fits on one once the countdown drops to a
+     single digit and French never does, so without a floor the box would
+     shrink 19px mid-countdown — and, since it's anchored by `bottom`, jump
+     its top edge down a line in one frame. The user asked for a warning that
+     doesn't change size; that includes not changing size at "9s". */
+  min-height: calc(2 * 1.55em);
+}
+
+/* Ignoring the warning and closing it do the same thing — the unload still
+   fires — so this is a quiet corner affordance, not a second button
+   competing with Cancel. */
+.auto-unload-tooltip-close {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  /* --ink-faint, .icon-btn's own color, only reaches 2.56:1 against the
+     warn-tinted surface in dark mode — under WCAG 1.4.11's 3:1 floor for
+     non-text UI, and under the "clears 3:1" contract that token's own
+     comment states. --ink-soft clears it in both themes (5.0:1 light,
+     4.9:1 dark); see styles/contrast.test.ts. */
+  color: var(--ink-soft);
+}
+
+/* The buttons sit on an already-tinted surface, so neither shared hover
+   works here: .btn-warn-quiet's is that same warn tint again, and
+   .btn-quiet's --paper-sunken is a 1.01:1 step against it in light mode —
+   invisible. Hovering back to the bare --paper-raised underneath *lifts* the
+   button out of the tint instead, which reads in both themes. */
+.auto-unload-tooltip .btn-quiet:hover:not(:disabled),
+.auto-unload-tooltip-close:hover {
+  background: var(--paper-raised);
+}
+
+.auto-unload-tooltip-close:hover {
+  color: var(--ink);
+}
+
+.auto-unload-tooltip-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* Web search: live activity + sources */
+
+.searching {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  padding: 6px 0;
+  color: var(--ink-soft);
+  font-size: 14px;
+}
+
+.searching-spinner {
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  border: 2px solid var(--accent-line);
+  border-top-color: var(--accent);
+  animation: spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.searching-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+.sources {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 6px;
+  padding: 0 2px;
+}
+
+.sources-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+}
+
+.sources-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.source-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 280px;
+  padding: 6px 14px 6px 7px;
+  border-radius: 14px;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-line);
+  color: var(--ink-soft);
+  font-size: 12.5px;
+  text-align: left;
+  transition: color 0.12s ease, border-color 0.12s ease, transform 0.1s ease;
+}
+
+.source-chip:hover {
+  color: var(--ink);
+  border-color: var(--accent);
+  transform: translateY(-1px);
+}
+
+.source-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-size: 11px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.source-favicon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  border-radius: 4px;
+  overflow: hidden;
+  color: var(--ink-faint);
+}
+
+.source-favicon img,
+.source-favicon svg {
+  width: 16px;
+  height: 16px;
+  display: block;
+  object-fit: contain;
+}
+
+.source-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.source-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.25;
+}
+
+.source-domain {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  line-height: 1.2;
+  color: var(--ink-soft);
+}
+
+/* A reply's activity panel (reasoning, searches, tool calls) — one collapsible
+   trace above the answer; see ReplyActivity. */
+
+.trace {
+  align-self: stretch;
+  max-width: 100%;
+  margin-bottom: 4px;
+  border: 1px solid var(--accent-line);
+  border-radius: var(--radius-m);
+  background: var(--paper-sunken);
+  overflow: hidden;
+}
+
+.trace-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 12px;
+  color: var(--ink-soft);
+  font-size: 13px;
+  font-weight: 500;
+  text-align: left;
+  transition: color 0.12s ease;
+}
+
+.trace-head:hover {
+  color: var(--ink);
+}
+
+.trace-head svg {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+}
+
+/* Live: a spinner in the icon slot, sized to match the icons it replaces. */
+.trace-head .searching-spinner {
+  margin: 1px;
+}
+
+.trace-chevron {
+  transition: transform 0.16s ease;
+  color: var(--ink-faint);
+}
+
+.trace.is-open .trace-chevron {
+  transform: rotate(90deg);
+}
+
+.trace-head.is-static .trace-chevron {
+  visibility: hidden;
+}
+
+.trace-head.is-static:hover {
+  color: var(--ink-soft);
+}
+
+/* Can carry a live status with a long search query in it — ellipsize rather
+   than wrap, so the collapsed panel stays one line. */
+.trace-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trace-count {
+  flex-shrink: 0;
+  margin-left: auto;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--ink-soft);
+}
+
+.trace-text {
+  padding: 2px 13px 12px 13px;
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: var(--ink-soft);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.trace-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 2px 13px 11px 13px;
+  font-size: 13px;
+}
+
+/* Reasoning first, then the steps it led to. */
+.trace-text + .trace-steps {
+  border-top: 1px solid var(--accent-line);
+  padding-top: 10px;
+}
+
+.trace-step {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  color: var(--ink-soft);
+}
+
+.trace-step-kind {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+}
+
+.trace-step-text {
+  word-break: break-word;
+}
+
+.trace-step-link {
+  color: var(--accent);
+  text-align: left;
+  word-break: break-word;
+  transition: color 0.12s ease;
+}
+
+.trace-step-link:hover {
+  color: var(--accent-hover);
+  text-decoration: underline;
+}
+
+/* Agent-mode consent card. Every text value inside is rendered as a plain
+   React text child (see ToolConsentCard.tsx's doc comment) — this file only
+   styles the shell around it. */
+
+.tool-consent-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 6px 0 10px 0;
+  padding: 14px 16px;
+  border: 1px solid var(--accent-line);
+  border-radius: 14px;
+  background: var(--accent-soft);
+}
+
+.tool-consent-title {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--ink);
+}
+
+.tool-consent-via {
+  font-size: 12px;
+  color: var(--ink-soft);
+}
+
+.tool-consent-summary {
+  font-size: 13.5px;
+  color: var(--ink);
+  word-break: break-word;
+}
+
+.tool-consent-detail {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--paper-raised);
+  border: 1px solid var(--line);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 12.5px;
+  color: var(--ink-soft);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.tool-consent-resolved {
+  font-size: 12.5px;
+  color: var(--ink-soft);
+  word-break: break-word;
+}
+
+.tool-consent-resolved code {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  color: var(--ink);
+}
+
+.tool-consent-flag {
+  font-size: 12.5px;
+  padding: 5px 9px;
+  border-radius: 8px;
+  width: fit-content;
+}
+
+.tool-consent-flag-warn {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+.tool-consent-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.tool-consent-primary {
+  background: var(--accent);
+  color: var(--accent-ink);
+  border: none;
+  border-radius: 999px;
+  font-weight: 600;
+}
+
+.tool-consent-primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.tool-consent-deny-note {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* `ask_user` card. Same shell language as the consent card above (it's the
+   same "agent-mode interactive step" family) but with no warning framing —
+   asking a question isn't a risky action, so nothing here reads as a gate. */
+
+.ask-user-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 6px 0 10px 0;
+  padding: 14px 16px;
+  border: 1px solid var(--accent-line);
+  border-radius: 14px;
+  background: var(--accent-soft);
+}
+
+.ask-user-question {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--ink);
+  word-break: break-word;
+}
+
+.ask-user-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.ask-user-option {
+  padding: 7px 14px;
+  border: 1px solid var(--accent-line);
+  border-radius: 999px;
+  background: var(--paper-raised);
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.ask-user-option:hover:not(:disabled) {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+.ask-user-freeform {
+  display: flex;
+  gap: 8px;
+}
+
+.ask-user-freeform input {
+  flex: 1;
+  min-width: 0;
+}
+
+.ask-user-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* Markdown */
+
+.md > * + * {
+  margin-top: 0.8em;
+}
+
+.md h1, .md h2, .md h3 {
+  font-family: var(--font-display);
+  letter-spacing: -0.01em;
+  margin-top: 1.2em;
+}
+
+.md h1 { font-size: 1.4em; }
+.md h2 { font-size: 1.25em; }
+.md h3 { font-size: 1.1em; }
+
+.md ul, .md ol {
+  padding-left: 1.4em;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35em;
+}
+
+.md code {
+  font-family: var(--font-mono);
+  font-size: 0.88em;
+  background: var(--paper-sunken);
+  padding: 0.15em 0.4em;
+  border-radius: 5px;
+  overflow-wrap: anywhere;
+}
+
+.md blockquote {
+  border-left: 3px solid var(--accent-line);
+  padding-left: 14px;
+  color: var(--ink-soft);
+}
+
+.md-table-wrap {
+  overflow-x: auto;
+}
+
+.md table {
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.md th, .md td {
+  border: 1px solid var(--line);
+  padding: 6px 12px;
+  text-align: left;
+}
+
+.md a {
+  color: var(--accent);
+}
+
+.md img {
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--radius-s);
+}
+
+/* Math (KaTeX). Glyphs inherit the surrounding text color (KaTeX's own CSS
+   uses currentColor throughout, no override needed for dark mode). A display
+   equation can be wider than the bubble — e.g. a long \frac — so it scrolls
+   horizontally instead of forcing the whole bubble wider or wrapping mid-glyph. */
+
+.md .katex-display {
+  margin: 0;
+  padding: 2px 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.md .katex {
+  font-size: 1.05em;
+}
+
+/* Fenced code blocks: a header (language + copy) above the highlighted body. */
+
+.md-code {
+  background: var(--paper-sunken);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-m);
+  overflow: hidden;
+}
+
+.md-code-head {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 6px 8px 6px 14px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.md-code-lang {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  margin-right: auto;
+}
+
+.md-code-copy {
+  padding: 3px 7px;
+}
+
+.md-code pre {
+  margin: 0;
+  padding: 14px 16px;
+  overflow-x: auto;
+  font-size: 13px;
+}
+
+.md-code code {
+  background: none;
+  padding: 0;
+}
+
+/* Syntax highlighting (rehype-highlight/highlight.js token classes), kept to
+   the app's existing palette rather than a stock hljs theme — restrained,
+   not a rainbow, per the Hearth design system. */
+
+.md-code .hljs-comment,
+.md-code .hljs-quote {
+  color: var(--ink-faint);
+  font-style: italic;
+}
+
+.md-code .hljs-keyword,
+.md-code .hljs-selector-tag,
+.md-code .hljs-tag,
+.md-code .hljs-literal,
+.md-code .hljs-name {
+  color: var(--accent);
+}
+
+.md-code .hljs-string,
+.md-code .hljs-attr,
+.md-code .hljs-symbol,
+.md-code .hljs-bullet,
+.md-code .hljs-addition {
+  color: var(--ok);
+}
+
+.md-code .hljs-title,
+.md-code .hljs-section,
+.md-code .hljs-selector-id {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.md-code .hljs-type,
+.md-code .hljs-built_in,
+.md-code .hljs-builtin-name,
+.md-code .hljs-number {
+  color: var(--warn);
+}
+
+.md-code .hljs-deletion {
+  color: var(--danger);
+}
+
+.md-code .hljs-emphasis { font-style: italic; }
+.md-code .hljs-strong { font-weight: 700; }
+
+/* Title-bar trigger for the conversation toolbar (stats + generation
+   settings) — same look as .composer-tool, just not sitting in the composer. */
+.icon-btn {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ink-faint);
+  border: 1px solid transparent;
+  transition: background 0.14s ease, color 0.14s ease, border-color 0.14s ease;
+}
+
+.icon-btn:hover {
+  background: var(--paper-sunken);
+  color: var(--ink-soft);
+}
+
+.icon-btn.is-on {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: var(--accent-line);
+}
+
+.icon-btn svg {
+  width: 17px;
+  height: 17px;
+}
+
+/* Composer */
+
+.composer-wrap {
+  flex-shrink: 0;
+  padding: 8px 32px 12px;
+  max-width: 720px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+.composer {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: var(--glass-bg);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-l);
+  padding: 10px 10px 10px 18px;
+  box-shadow: var(--shadow-card), var(--shadow-glow);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.composer:focus-within {
+  border-color: var(--accent-line);
+  box-shadow: var(--shadow-card), var(--shadow-glow), 0 0 0 3px var(--focus-ring);
+}
+
+/* The input line: attach + web-search buttons, the textarea, and send. */
+.composer-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+/* Round icon buttons in the composer row (+ menu, model picker, mic, improve). */
+.composer-tool {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ink-faint);
+  border: 1px solid transparent;
+  transition: background 0.14s ease, color 0.14s ease, border-color 0.14s ease;
+}
+
+.composer-tool:hover:not(:disabled) {
+  background: var(--paper-sunken);
+  color: var(--ink-soft);
+}
+
+.composer-tool.is-on {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: var(--accent-line);
+}
+
+/* Globally disabled (web-search plugin off in Plugins): greyed and inert,
+   the tooltip points the user to where to enable it. */
+.composer-tool:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.composer-tool svg {
+  width: 18px;
+  height: 18px;
+}
+
+/* Voice typing: the mic while it's actively recording. */
+.composer-tool.is-recording {
+  color: var(--danger);
+  background: var(--danger-soft);
+  border-color: var(--danger);
+  animation: pulse-rec 1.3s ease-in-out infinite;
+}
+
+@keyframes pulse-rec {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(var(--danger-rgb), 0); }
+  50% { box-shadow: 0 0 0 4px rgba(var(--danger-rgb), 0.18); }
+}
+
+/* "Improve my message" while a request is in flight. */
+.composer-tool.is-improving {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: var(--accent-line);
+  cursor: progress;
+  animation: pulse-accent 1.3s ease-in-out infinite;
+}
+
+@keyframes pulse-accent {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(var(--accent-rgb), 0); }
+  50% { box-shadow: 0 0 0 4px rgba(var(--accent-rgb), 0.18); }
+}
+
+/* Read aloud: the message action while a message is being spoken. */
+.msg-action.is-speaking {
+  color: var(--accent);
+}
+
+/* Wraps the textarea so the "/" skill-autocomplete dropdown (reusing the
+   shared .menu shell, which already opens upward) can position against it. */
+.composer-input-wrap {
+  position: relative;
+  flex: 1;
+  display: flex;
+}
+
+.composer textarea {
+  flex: 1;
+  border: none;
+  background: none;
+  padding: 4px 0;
+  resize: none;
+  max-height: 160px;
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+/* While an "Improve my message" request is in flight — read-only, dimmed. */
+.composer textarea.is-improving {
+  color: var(--ink-faint);
+  cursor: progress;
+}
+
+.skill-suggest {
+  width: 100%;
+  max-width: none;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.skill-suggest-name {
+  font-weight: 600;
+  color: var(--ink);
+  flex-shrink: 0;
+}
+
+.skill-suggest-desc {
+  font-size: 12px;
+  color: var(--ink-soft);
+  flex: 1;
+  min-width: 0;
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer textarea:focus {
+  box-shadow: none;
+}
+
+.composer-send {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-size: 17px;
+  font-weight: 700;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s ease, transform 0.1s ease;
+}
+
+.composer-send:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.composer-send:active:not(:disabled) {
+  transform: scale(0.94);
+}
+
+.composer-stop {
+  font-size: 13px;
+}
+
+.composer-hint {
+  height: 16px;
+  line-height: 16px;
+  overflow: hidden;
+  text-align: center;
+  font-size: 11.5px;
+  color: var(--ink-soft);
+  margin-top: 8px;
+}
+
+/* "Improve my message" status text + inline Undo, inside .composer-hint. */
+.composer-hint-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  vertical-align: top;
+}
+
+.composer-hint .searching-spinner {
+  width: 11px;
+  height: 11px;
+  border-width: 1.5px;
+}
+
+.composer-hint-action {
+  font: inherit;
+  font-weight: 600;
+  color: var(--accent);
+  margin-left: 8px;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  border-radius: 4px;
+}
+
+.composer-hint-action:hover {
+  color: var(--accent-hover);
+}
+
+/* Top-right conversation toolbar — stats readout + the per-conversation
+   sampling/context-length tuning that used to live in the composer, now
+   opened from a trigger in the title bar. Reuses the .settings-field/-label/
+   -hint/-slider/-select/-toggle primitives (styled in library.css); the
+   number input, sentinel-value row, and restart-row are exclusive to this
+   panel. Unlike every other popover in this app, this one opens *downward*
+   since it hangs off the title bar rather than the composer. */
+
+.toolbar-panel {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  width: min(360px, calc(100vw - 64px));
+  max-height: min(70vh, 560px);
+  overflow-y: auto;
+  background: var(--paper-raised);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-m);
+  box-shadow: var(--shadow-pop);
+  padding: 16px 18px;
+  z-index: 50;
+  animation: toolbar-panel-in 0.15s ease;
+}
+
+@keyframes toolbar-panel-in {
+  from { opacity: 0; transform: translateY(-6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.toolbar-stats {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.toolbar-stat {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 10px 8px;
+  background: var(--paper-sunken);
+  border-radius: var(--radius-s);
+}
+
+.toolbar-stat-value {
+  font-family: var(--font-display);
+  font-size: 18px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+
+.toolbar-stat-label {
+  font-size: 11px;
+  color: var(--ink-soft);
+}
+
+.gen-panel-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 4px;
+}
+
+.toolbar-generation h3 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 16px;
+}
+
+.toolbar-generation > p.settings-hint {
+  margin: 0 0 16px;
+}
+
+.gen-auto-suggested {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-radius: var(--radius-s);
+  padding: 6px 10px;
+}
+
+.settings-label-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.settings-value {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-soft);
+}
+
+.settings-number {
+  font-size: 13.5px;
+  font-family: var(--font-mono);
+  padding: 7px 10px;
+  border-radius: var(--radius-s);
+  border: 1px solid var(--line);
+  background: var(--paper-raised);
+  color: var(--ink);
+  width: 110px;
+}
+
+.settings-number:focus {
+  border-color: var(--accent-line);
+}
+
+.settings-number:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.settings-sentinel-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.settings-restart-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.settings-restart-row .settings-hint {
+  margin: 0;
+}
+
+/* Attachments — image thumbnails + document chips. Shared by the composer's
+   live preview (with a remove button) and the read-only strip on a sent
+   user message. */
+
+.attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* On a sent message the strip sits above the bubble, aligned to the user's side. */
+.msg-user-row .attachments {
+  justify-content: flex-end;
+  max-width: 78%;
+  margin-bottom: 2px;
+}
+
+.attachment {
+  position: relative;
+}
+
+/* The clickable body of an attachment (opens the lightbox or text panel). Kept
+   visually transparent so the thumbnail/chip below it looks unchanged; the
+   remove × is a separate sibling so the two buttons never nest. */
+.attachment-open {
+  display: block;
+  position: relative;
+  padding: 0;
+  border: 0;
+  background: none;
+  border-radius: var(--radius-m);
+  cursor: pointer;
+}
+
+.attachment-open:disabled {
+  cursor: default;
+}
+
+/* A dark scrim + magnifier over an image thumbnail on hover, hinting that it
+   opens full-size. */
+.attachment-zoom {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-m);
+  background: var(--ink-scrim);
+  color: var(--scrim-ink);
+  opacity: 0;
+  transition: opacity 0.14s ease;
+}
+
+.attachment-open:hover:not(:disabled) .attachment-zoom {
+  opacity: 1;
+}
+
+.attachment-zoom svg {
+  width: 22px;
+  height: 22px;
+}
+
+/* Document chips lift toward the accent on hover, matching other clickables. */
+.attachment-open:hover:not(:disabled) .attachment-doc {
+  border-color: var(--accent-line);
+  color: var(--ink);
+}
+
+.attachment-thumb {
+  display: block;
+  width: 76px;
+  height: 76px;
+  object-fit: cover;
+  border-radius: var(--radius-m);
+  border: 1px solid var(--line-soft);
+  background: var(--paper-sunken);
+}
+
+.attachment-doc {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 220px;
+  padding: 9px 13px;
+  border-radius: var(--radius-m);
+  background: var(--paper-sunken);
+  border: 1px solid var(--line-soft);
+  color: var(--ink-soft);
+  font-size: 13px;
+}
+
+.attachment-doc svg {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  color: var(--ink-faint);
+}
+
+.attachment-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Remove badge — only present in the composer preview (onRemove supplied). */
+.attachment-remove {
+  position: absolute;
+  top: -7px;
+  right: -7px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--ink);
+  color: var(--paper-raised);
+  font-size: 14px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 1px 3px rgba(var(--shadow-rgb), 0.25);
+  transition: transform 0.1s ease;
+}
+
+.attachment-remove:hover {
+  transform: scale(1.1);
+}
+
+/* Artifact chips — files the model created via `create_artifact`, shown under
+   an assistant reply. Reuses the `.attachment`/`.attachment-doc` document chip
+   styling as-is (same visual language, never removable); `.artifacts` just
+   adds the top margin that separates the row from the reply text above it. */
+.msg-assistant-row .artifacts {
+  margin-top: 4px;
+}
+
+.artifact-chip .attachment-open[aria-busy="true"] {
+  opacity: 0.6;
+}
+
+/* ----------------------- Document preview side-panel -------------------- */
+/* Shows an attached document's extracted text — exactly what the model was
+   given. Lives beside the chat (see .chat-layout); images use the lightbox. */
+
+.preview-panel {
+  /* Fluid but bounded, so a narrow window doesn't crush the chat column. */
+  width: clamp(300px, 32%, 400px);
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-left: 1px solid var(--line);
+  background: var(--paper-sunken);
+  /* Clear the fixed title bar, like the chat scroller and sidebar do. */
+  padding-top: var(--titlebar-safe-h);
+  animation: preview-slide-in 0.2s ease both;
+}
+
+.preview-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 10px 12px 16px;
+  border-bottom: 1px solid var(--line-soft);
+  flex-shrink: 0;
+}
+
+.preview-head > svg {
+  width: 17px;
+  height: 17px;
+  flex-shrink: 0;
+  color: var(--ink-faint);
+}
+
+.preview-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.preview-close {
+  width: 30px;
+  height: 30px;
+  border-radius: var(--radius-s);
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ink-faint);
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.preview-close:hover {
+  background: var(--paper-raised);
+  color: var(--ink);
+}
+
+.preview-close svg {
+  width: 16px;
+  height: 16px;
+}
+
+.preview-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px;
+}
+
+.preview-text {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--ink-soft);
+  white-space: pre-wrap;
+  word-break: break-word;
+  /* The whole point is to read/reference the text, so allow selecting a
+     passage (body sets user-select:none globally). */
+  user-select: text;
+}
+
+.preview-empty {
+  color: var(--ink-soft);
+  font-size: 13.5px;
+}
+
+@keyframes preview-slide-in {
+  from { transform: translateX(14px); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+
+/* ----------------------------- Image lightbox --------------------------- */
+/* Full-screen image viewer. Above the title bar (z 500) and settings (z 600),
+   below the toast (z 9999). */
+
+.lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 700;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 56px 32px 32px;
+  background: var(--scrim-strong);
+  backdrop-filter: blur(3px);
+  animation: lightbox-fade-in 0.16s ease both;
+}
+
+.lightbox-img {
+  max-width: 100%;
+  max-height: calc(100vh - 140px);
+  object-fit: contain;
+  border-radius: var(--radius-m);
+  box-shadow: var(--shadow-pop);
+  cursor: default;
+}
+
+.lightbox-caption {
+  max-width: 80%;
+  color: var(--scrim-ink-soft);
+  font-size: 13px;
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lightbox-close {
+  position: absolute;
+  top: 14px;
+  right: 16px;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--scrim-ink);
+  background: var(--scrim-control);
+  transition: background 0.14s ease;
+}
+
+.lightbox-close:hover {
+  background: var(--scrim-control-hover);
+}
+
+.lightbox-close svg {
+  width: 20px;
+  height: 20px;
+}
+
+@keyframes lightbox-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}

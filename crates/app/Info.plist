@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Merged into the generated Info.plist by the Tauri macOS bundler (this file
+     sits next to tauri.conf.json). NSMicrophoneUsageDescription is required for
+     the Voice add-on's "voice typing" — without it macOS denies/*crashes* the
+     app the moment it opens the microphone. The text is what the OS shows in its
+     permission prompt. -->
+<plist version="1.0">
+  <dict>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>OpenPal uses the microphone only for the Voice add-on, to turn what you say into text. The audio is processed on your Mac and never leaves your computer.</string>
+  </dict>
+</plist>

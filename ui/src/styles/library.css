@@ -1,0 +1,1479 @@
+/* Model library */
+
+.library {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.library-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding-top: 16px;
+  min-height: 0;
+}
+
+.library-col {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 12px 36px 48px;
+}
+
+.library-head {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  margin-bottom: 26px;
+}
+
+.library-head h1 {
+  font-family: var(--font-display);
+  font-size: 30px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.library-head p {
+  color: var(--ink-soft);
+  max-width: 520px;
+}
+
+.library-ram {
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+/* Available memory and the Finder shortcut share one muted line rather than
+ * stacking — two fewer lines before the picker, which is what the page is
+ * for. `.btn-quiet` brings its own padding, so the negative margin keeps the
+ * separator dot visually tight against it. */
+.library-head-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 12.5px;
+}
+
+.library-head-meta .btn-quiet {
+  margin-left: -4px;
+}
+
+.library-head-dot {
+  color: var(--ink-faint);
+}
+
+.model-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 16px;
+}
+
+.model-grid-single {
+  grid-template-columns: minmax(0, 480px);
+}
+
+/* The picker's spotlight card fills the column instead of stopping at 480px
+ * and leaving a third of the page empty beside it. */
+.model-grid-wide {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.model-picker-simple {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.model-picker-empty {
+  color: var(--ink-soft);
+  font-size: 14px;
+}
+
+/* The curated picker's segmented stepper (`ModelDial`), replacing a bare
+ * `<input type="range">` — the wrong control for three or four discrete,
+ * nameable options, and stock browser chrome in an app otherwise built
+ * entirely from pills and paper surfaces. */
+.model-dial {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.model-dial-rail {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  gap: 2px;
+  padding: 4px;
+  border-radius: 999px;
+  background: var(--paper-sunken);
+  border: 1px solid var(--line-soft);
+}
+
+.model-dial-stop {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  min-width: 0;
+  padding: 7px 10px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  color: var(--ink-soft);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.model-dial-stop:hover:not(.is-selected) {
+  color: var(--ink);
+}
+
+/* The raised surface alone is enough in light mode (#ffffff on #f1ebdf) but
+ * not in dark, where --paper-raised on --paper-sunken is 1.06:1 and
+ * --shadow-card becomes pure black — invisible on a near-black surface. The
+ * border is what actually marks the selection in dark mode, so it is not
+ * decorative. Deliberately not the accent-soft fill `.logs-tabs` and the
+ * filter chips use: two different controls should not read as the same
+ * state. */
+.model-dial-stop.is-selected {
+  background: var(--paper-raised);
+  border-color: var(--line);
+  box-shadow: var(--shadow-card);
+  color: var(--ink);
+}
+
+.model-dial-stop-name {
+  font-size: 12.5px;
+  font-weight: 600;
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.model-dial-stop.is-selected .model-dial-stop-name {
+  color: var(--accent);
+}
+
+.model-dial-stop-size {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-faint);
+}
+
+.model-dial-captions {
+  display: flex;
+  justify-content: space-between;
+  padding: 0 10px;
+  font-size: 11.5px;
+  color: var(--ink-soft);
+}
+
+.model-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  background: var(--paper-raised);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-l);
+  padding: 22px 22px 18px;
+  box-shadow: var(--shadow-card);
+}
+
+.model-card-recommended {
+  border-color: var(--accent-line);
+}
+
+.model-card-dim {
+  opacity: 0.72;
+}
+
+.model-flag {
+  position: absolute;
+  top: -10px;
+  left: 18px;
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  background: var(--accent);
+  color: var(--accent-ink);
+  padding: 3px 11px;
+  border-radius: 999px;
+}
+
+/* Custom models (never also "our pick", so the two flags can't collide). */
+.model-flag-you {
+  background: var(--paper-sunken);
+  color: var(--ink-soft);
+  border: 1px solid var(--line-soft);
+}
+
+.model-card-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 2px;
+}
+
+.model-card-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.model-card-head :is(h2, h3) {
+  font-family: var(--font-display);
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.model-meta {
+  font-size: 12.5px;
+  color: var(--ink-soft);
+}
+
+.model-desc {
+  font-size: 14px;
+  color: var(--ink-soft);
+  line-height: 1.5;
+}
+
+.model-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.model-why {
+  font-size: 12.5px;
+  color: var(--ink-soft);
+  line-height: 1.5;
+}
+
+.model-speed {
+  font-size: 13.5px;
+  color: var(--ink-soft);
+}
+
+.model-speed strong {
+  color: var(--ink);
+}
+
+.model-error {
+  font-size: 13px;
+  color: var(--danger);
+  background: var(--danger-soft);
+  border-radius: var(--radius-s);
+  padding: 8px 12px;
+}
+
+.model-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: auto;
+  padding-top: 8px;
+  flex-wrap: wrap;
+}
+
+.model-inuse {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--ok);
+}
+
+/* Shared shape for an inline "are you sure" panel that replaces a card's
+ * normal action row — the slow-disk-download warning and the
+ * confirm-before-delete prompts both use it. */
+.model-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+
+.model-confirm-text {
+  font-size: 12.5px;
+  color: var(--ink-soft);
+  line-height: 1.5;
+  margin: 0;
+}
+
+.model-confirm-tip {
+  font-size: 12.5px;
+  color: var(--ink-soft);
+  line-height: 1.5;
+  margin: 0;
+  font-weight: 600;
+}
+
+.model-confirm-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* DeleteProjectDialog's keep/delete/cancel choice — three buttons read
+   better stacked full-width than crammed into one row, especially once
+   translated into a longer language. */
+.model-confirm-actions-stacked {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+/* Factory-reset confirm panel (components/FactoryResetConfirm.tsx) — the
+ * "type ERASE to confirm" field, reusing `.model-confirm` otherwise. */
+.reset-confirm-label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-soft);
+}
+
+.reset-confirm-label input {
+  font-family: var(--font-mono);
+  font-size: 14px;
+  letter-spacing: 0.06em;
+}
+
+.model-progress {
+  flex: 1;
+  min-width: 90px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--paper-sunken);
+  overflow: hidden;
+}
+
+.model-progress-bar {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 999px;
+  transition: width 0.3s ease;
+}
+
+.model-progress-text {
+  font-size: 12px;
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+
+.library-others {
+  margin-top: 34px;
+  padding-top: 22px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.library-others h2 {
+  font-family: var(--font-display);
+  font-size: 17px;
+  font-weight: 700;
+  margin-bottom: 14px;
+}
+
+/* Pairs the "All models" heading with the fit-icon legend. Must follow the
+ * rule above: same specificity, so order is what decides the margin. */
+.library-others-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 14px;
+}
+
+.library-others-head h2 {
+  margin-bottom: 0;
+}
+
+/* ==========================================================================
+   "All models" — one compact two-line row per model (`ModelList` in
+   views/Library.tsx), replacing a 13-column table that could never fit.
+
+   THE WIDTH BUDGET, because every size below is chosen against it: the window
+   ships at 1100px wide and cannot go below 900px (crates/app/tauri.conf.json),
+   the More dialog this page lives in takes 272px of that for its margins,
+   border and left nav (`.more-dialog` in global.css — sized to match the
+   sidebar column the page used to sit beside), `.library-scroll` adds a 10px
+   scrollbar and `.library-col` adds 2x36px of padding under an 860px cap. So
+   the content column is 788px only above a 1142px window, 746px in the
+   default window, and 546px at the minimum. Design for 546px.
+
+   No container queries here: ui/vite.config.ts targets safari15 and the app
+   supports macOS 12 (minimumSystemVersion in tauri.conf.json), whose Safari
+   predates `@container` — one would silently never match on the oldest
+   supported Mac. The breakpoints below are viewport widths the window can
+   actually reach; the 600px the rest of the app uses (see global.css) is
+   unreachable on desktop and belongs to the mobile build.
+   ========================================================================== */
+
+.model-list-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.model-search {
+  flex: 1 1 180px;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  border-radius: var(--radius-s);
+  background: var(--paper-sunken);
+  border: 1px solid var(--line-soft);
+}
+
+.model-search svg {
+  width: 16px;
+  height: 16px;
+  color: var(--ink-faint);
+  flex-shrink: 0;
+}
+
+/* Same resets as the conversation search field (`.conv-search-input`): the
+ * global `input` rules would otherwise paint a second bordered box inside
+ * this pill. */
+.model-search-input {
+  flex: 1;
+  min-width: 0;
+  font-size: 13.5px;
+  padding: 7px 0 !important;
+  background: transparent !important;
+  border: none !important;
+}
+
+.model-search-input:focus {
+  box-shadow: none !important;
+}
+
+.model-filters {
+  display: flex;
+  gap: 4px;
+}
+
+.model-filter-chip {
+  font-size: 12.5px;
+  font-weight: 600;
+  padding: 5px 11px;
+  border-radius: var(--radius-s);
+  border: 1px solid var(--line-soft);
+  background: var(--paper);
+  color: var(--ink-soft);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.model-filter-chip:hover {
+  color: var(--ink);
+}
+
+.model-filter-chip.is-active {
+  background: var(--accent-soft);
+  border-color: var(--accent-line);
+  color: var(--accent);
+}
+
+.model-sort {
+  min-width: 0;
+  padding: 6px 10px;
+  font-size: 12.5px;
+}
+
+.model-list-count {
+  font-size: 12px;
+  color: var(--ink-soft);
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.model-list-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 30px 18px;
+  border: 1px dashed var(--line);
+  border-radius: var(--radius-m);
+  color: var(--ink-soft);
+  font-size: 13.5px;
+  text-align: center;
+}
+
+.model-list {
+  list-style: none;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-m);
+}
+
+/* Line 1 carries the decision (name, fit, size, speed, action); line 2 carries
+ * the spec detail that used to need six of the table's columns. The name track
+ * is `minmax(0, 1fr)` and the fit track `minmax(0, auto)`, so both can shrink
+ * below their content and ellipsis instead of pushing the row wider than the
+ * column — the row is structurally incapable of causing a horizontal
+ * scrollbar, which is the entire point of the rewrite. */
+.model-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr) minmax(0, auto) auto auto auto auto;
+  grid-template-areas:
+    "star name fit  size speed action menu"
+    ".    meta meta meta meta  meta   meta";
+  align-items: center;
+  column-gap: 10px;
+  row-gap: 1px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.model-list > .model-row:last-child {
+  border-bottom: none;
+}
+
+.model-list > .model-row:not(.model-row-group):hover {
+  background: var(--ink-hover);
+}
+
+.model-row-star {
+  grid-area: star;
+  display: flex;
+}
+
+.model-row-name {
+  grid-area: name;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* `flex-shrink: 1` with a floor, so the name gives ground gracefully but
+ * never disappears entirely the way it did when the badge outranked it. */
+.model-row-name-text {
+  font-weight: 600;
+  font-size: 13.5px;
+  flex: 0 1 auto;
+  min-width: 5ch;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Carries over the shrink the table's `.model-table-flag` gave these — a
+ * full-size badge next to a model name is about 50% too big for the row.
+ *
+ * The lopsided `flex-shrink` is the point: the name and this badge share one
+ * flex line, and the name has to win. Without it, at a 546px column the
+ * French labels ellipsis the model name down to nothing while the badge
+ * keeps its full width — the row ends up showing a star, a badge and no name
+ * at all. Only the short "in use" badge reaches line 1 (see `rowTags`); the
+ * rest ride the meta line as text. */
+.model-row-flag {
+  font-size: 10px;
+  padding: 1px 7px;
+  flex: 0 100 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.model-row-icon {
+  display: inline-flex;
+  color: var(--accent);
+  flex: none;
+}
+
+.model-row-icon svg {
+  width: 15px;
+  height: 15px;
+}
+
+.model-row-fit {
+  grid-area: fit;
+  display: flex;
+}
+
+/* Icon-only fit indicator. "Parfaitement adapté" ran ~145px and was the
+ * widest thing on the line — routinely the reason the model name got
+ * ellipsised away. This is ~17px, or ~31px with the bolt. The wording still
+ * exists, in `title` and `.sr-only` text, in full on the spotlight card, and
+ * in the legend beside the list heading. */
+.model-fit {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  flex: none;
+}
+
+.model-fit svg {
+  width: 17px;
+  height: 17px;
+}
+
+/* Reuses the badge-scoped inks, which are the ones tuned to clear 4.5:1 in
+ * both themes. Icons need only 3:1 (WCAG 1.4.11), so these have room to
+ * spare on every paper surface. */
+.model-fit.is-ok {
+  color: var(--badge-ok-ink);
+}
+
+.model-fit.is-warn {
+  color: var(--badge-warn-ink);
+}
+
+/* Doesn't fit in memory — whether it can still stream from disk or not at
+ * all. The qualifier beside it is what separates those two. */
+.model-fit.is-bad {
+  color: var(--danger);
+}
+
+/* Keeps its own yellow whatever the verdict's colour is, and sits a size down
+ * so it reads as a mark on the check rather than a second verdict. */
+.model-fit-bolt {
+  display: inline-flex;
+  color: var(--warn);
+}
+
+.model-fit-bolt svg {
+  width: 13px;
+  height: 13px;
+}
+
+.model-row-size {
+  grid-area: size;
+  font-size: 12.5px;
+  color: var(--ink-soft);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  text-align: right;
+}
+
+.model-row-speed {
+  grid-area: speed;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--ink-soft);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* `.pill-dot-warm` pulses in chat, where it means "working". On a static list
+ * that reads as an alert that never resolves. */
+.model-row-speed .pill-dot-warm {
+  animation: none;
+}
+
+.model-row-summary {
+  grid-area: summary;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 2px;
+  min-width: 0;
+  font-size: 12.5px;
+  font-style: italic;
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+
+.model-row-action {
+  grid-area: action;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.model-row-menu-slot {
+  grid-area: menu;
+  display: flex;
+  justify-content: flex-end;
+  min-width: 24px;
+}
+
+/* Compact `.btn-ghost`: the card footer's 10px/18px is too tall for a ~54px
+ * row and too wide for a 546px column. */
+.model-row-btn {
+  padding: 6px 12px;
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+
+.model-row-status {
+  font-size: 12px;
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+
+.model-row-meta {
+  grid-area: meta;
+  min-width: 0;
+  font-size: 11.5px;
+  color: var(--ink-soft);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.model-row-error {
+  color: var(--danger);
+}
+
+/* Size and speed move down here when their own columns are dropped below.
+ * `display: none` keeps them out of the accessibility tree too, so only one
+ * of the two copies is ever announced. */
+.model-row-meta-compact {
+  display: none;
+}
+
+.model-row-menu-trigger,
+.model-row-disclosure {
+  padding: 4px;
+  border-radius: var(--radius-s);
+}
+
+.model-row-menu-trigger svg,
+.model-row-disclosure svg {
+  width: 16px;
+  height: 16px;
+}
+
+.model-row-disclosure svg {
+  transition: transform 0.15s ease;
+}
+
+.model-row-disclosure.is-open svg {
+  transform: rotate(90deg);
+}
+
+/* `.menu` is `position: absolute` at `z-index: 50`, both wrong for a panel
+ * portalled to <body>: the fixed titlebar is z-index 500 and is also a Tauri
+ * drag region, so an upward-flipping menu would sit under it and lose its
+ * clicks. Same fix, same reason, as `.conv-row-menu` in chat.css — one step
+ * higher, though, since this page lives in the More dialog (.modal-backdrop,
+ * z-index 600) and a panel portalled out of it must still paint above it. */
+.model-row-menu {
+  z-index: 650;
+}
+
+/* On the row's bottom edge, so a download never changes the row's height. */
+.model-row-progress {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  background: var(--paper-sunken);
+  overflow: hidden;
+}
+
+/* A multi-quantization group: shared identity on the parent row, one sub-row
+ * per quantization behind a disclosure. Replaces the table's parent row,
+ * which merged five columns into one left-anchored cell and so read as an
+ * empty grey band once the table was scrolled sideways. */
+.model-row-group {
+  grid-template-areas:
+    "star name summary summary summary action menu"
+    ".    meta meta    meta    meta    meta   meta";
+}
+
+.model-row-quants {
+  grid-column: 1 / -1;
+  list-style: none;
+  margin: 6px 0 0;
+  border-left: 2px solid var(--accent-line);
+}
+
+.model-row-quant {
+  padding: 6px 12px;
+  border-bottom: none;
+}
+
+.model-row-quant:hover {
+  background: var(--ink-hover);
+}
+
+.model-row-quant .model-row-name-text {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ink-soft);
+}
+
+/* An icon-only fit indicator costs a beginner the ability to guess, so the
+ * mapping is one click away rather than something to infer. The same control
+ * explains quantization, the page's one remaining piece of unavoidable
+ * jargon. */
+.info-pop-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  flex: none;
+  border-radius: 999px;
+  color: var(--ink-faint);
+  cursor: pointer;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
+.info-pop-trigger svg {
+  width: 15px;
+  height: 15px;
+}
+
+.info-pop-trigger:hover,
+.info-pop-trigger.is-open {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.info-pop {
+  /* Above the fixed titlebar (a Tauri drag region) and the More dialog this
+   * page lives in — same reasoning as `.model-row-menu`. */
+  z-index: 650;
+  width: max-content;
+  max-width: min(330px, calc(100vw - 24px));
+  padding: 14px 16px;
+  background: var(--paper-raised);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-m);
+  box-shadow: var(--shadow-pop);
+  animation: pop-up 0.15s ease both;
+}
+
+.info-pop-heading {
+  font-family: var(--font-display);
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--ink);
+  margin-bottom: 8px;
+}
+
+.info-pop p {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--ink-soft);
+}
+
+.info-pop p + p {
+  margin-top: 8px;
+}
+
+.fit-legend {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--ink-soft);
+}
+
+/* Wide enough for a verdict glyph plus its qualifier beside it. */
+.fit-legend li {
+  display: grid;
+  grid-template-columns: 34px 1fr;
+  gap: 8px;
+  align-items: start;
+}
+
+/* Nudges the glyph onto the first line's optical baseline. */
+.fit-legend .model-fit {
+  margin-top: 1px;
+}
+
+.fit-legend strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+@media (max-width: 920px) {
+  /* ~566px column, down to 546px at the window's minimum. Everything wider
+   * than this fits on line 1: now that the fit verdict is an icon, a row
+   * needs roughly 406px of fixed width, which still leaves the name ~140px
+   * at the narrowest the window can go. This is the margin for long names
+   * and long translated button labels, and the only breakpoint the list
+   * needs — the 600px the rest of the app uses (see global.css) is
+   * unreachable on desktop and belongs to the mobile build. */
+  .model-row {
+    grid-template-columns: 26px minmax(0, 1fr) auto auto auto;
+    grid-template-areas:
+      "star name fit  action menu"
+      ".    meta meta meta   meta";
+  }
+
+  .model-row-group {
+    grid-template-areas:
+      "star name summary action menu"
+      ".    meta meta    meta   meta";
+  }
+
+  .model-row-size,
+  .model-row-speed {
+    display: none;
+  }
+
+  .model-row-meta-compact {
+    display: inline;
+  }
+}
+
+/* Settings — the category pages of the More dialog (views/SettingsSheet.tsx).
+   Same page shell as Library/Plugins/Skills, on a narrower column since
+   each is a form rather than a grid of cards. */
+
+.settings-page {
+  flex: 1;
+  overflow-y: auto;
+  padding-top: 16px;
+  min-height: 0;
+}
+
+.settings-page-col {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 12px 36px 48px;
+}
+
+.settings-page-head {
+  margin-bottom: 22px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.settings-page-head h1 {
+  font-family: var(--font-display);
+  font-size: 30px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  margin-bottom: 6px;
+}
+
+/* One headed group of related settings within a category (SettingsGroup),
+   set apart from the fields above it by a rule — except straight under the
+   page head, which already draws one. */
+.settings-group {
+  margin-bottom: 20px;
+  border-top: 1px solid var(--line-soft);
+  padding-top: 18px;
+}
+
+.settings-page-head + .settings-group {
+  border-top: none;
+  padding-top: 0;
+}
+
+.settings-group-title {
+  font-size: 16px;
+  font-weight: 700;
+  margin-bottom: 14px;
+}
+
+.settings-group-intro {
+  margin: -8px 0 16px;
+}
+
+.settings-sub {
+  color: var(--ink-soft);
+  font-size: 14px;
+  margin-bottom: 20px;
+}
+
+.settings-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 20px;
+}
+
+.settings-label {
+  font-weight: 700;
+  font-size: 14.5px;
+}
+
+/* A setting just picked from the More dialog's search
+   (`revealSetting` in views/MoreDialog.tsx): a brief tint so the eye lands
+   on it. */
+.settings-search-hit {
+  border-radius: var(--radius-s);
+  animation: settings-search-hit 1.8s ease-out;
+}
+
+@keyframes settings-search-hit {
+  0%,
+  35% {
+    background: var(--accent-soft);
+    box-shadow: 0 0 0 8px var(--accent-soft);
+  }
+  100% {
+    background: transparent;
+    box-shadow: 0 0 0 8px transparent;
+  }
+}
+
+.settings-hint {
+  font-size: 12.5px;
+  color: var(--ink-soft);
+}
+
+.settings-field textarea {
+  resize: vertical;
+  font-size: 14px;
+}
+
+.settings-slider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 12.5px;
+  color: var(--ink-soft);
+}
+
+.settings-slider input {
+  flex: 1;
+}
+
+.settings-toggle {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.settings-toggle input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.settings-text {
+  font-size: 13.5px;
+  font-family: var(--font-mono);
+  padding: 9px 12px;
+  border-radius: var(--radius-s);
+  border: 1px solid var(--line);
+  background: var(--paper-raised);
+}
+
+.settings-text:focus {
+  border-color: var(--accent-line);
+}
+
+.settings-hint code {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  background: var(--paper-sunken);
+  padding: 0.1em 0.4em;
+  border-radius: 5px;
+}
+
+.settings-footer {
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* Update dialog (views/UpdateDialog.tsx) */
+
+.update-notes {
+  max-height: 220px;
+  overflow-y: auto;
+  padding: 12px 14px;
+  margin-bottom: 16px;
+  border-radius: var(--radius-s);
+  border: 1px solid var(--line-soft);
+  background: var(--paper-sunken);
+  font-size: 13px;
+}
+
+.update-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.update-actions-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* Read-aloud voice controls */
+
+.settings-voice-test {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.settings-voice-test .model-error {
+  margin: 0;
+}
+
+.settings-voice-loading {
+  font-size: 12.5px;
+  color: var(--ink-soft);
+  margin: 2px 0 0;
+}
+
+.voice-picker-notice {
+  margin: 0;
+  padding: 8px 12px;
+  font-size: 12.5px;
+  color: var(--ink-soft);
+  background: var(--paper-sunken);
+  border-bottom: 1px solid var(--line-soft);
+}
+
+/* SecuritySection's one-shot "your PIN was turned off" notice after
+ * AppLockGate's recovery-code stage. */
+.app-lock-reset-banner {
+  padding: 8px 12px;
+  background: var(--accent-soft);
+  border-radius: var(--radius-s);
+}
+
+/* Voice picker (select / download a Piper voice) */
+
+.voice-picker {
+  max-height: 230px;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-s);
+  background: var(--paper-raised);
+}
+
+.voice-group + .voice-group {
+  border-top: 1px solid var(--line-soft);
+}
+
+.voice-group-title {
+  position: sticky;
+  top: 0;
+  background: var(--paper-sunken);
+  color: var(--ink-soft);
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  padding: 5px 12px;
+}
+
+.voice-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+}
+
+.voice-row.is-installed {
+  cursor: pointer;
+}
+
+.voice-row.is-installed:hover {
+  background: var(--paper-sunken);
+}
+
+.voice-row.is-selected {
+  background: var(--accent-soft, var(--paper-sunken));
+}
+
+.voice-radio {
+  flex: none;
+  width: 14px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--accent);
+}
+
+.voice-row-info {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  flex: 1;
+  min-width: 0;
+}
+
+.voice-row-name {
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--ink);
+}
+
+.voice-row-meta {
+  font-size: 11.5px;
+  color: var(--ink-soft);
+}
+
+.voice-preview-btn {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--paper-raised);
+  color: var(--ink-soft);
+  cursor: pointer;
+}
+
+.voice-preview-btn:hover:not(:disabled) {
+  border-color: var(--accent-line);
+  color: var(--accent);
+}
+
+.voice-preview-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* A collapsible "Advanced" block (ChatToolbar's generation panel) */
+
+.settings-advanced {
+  margin-bottom: 20px;
+  border-top: 1px solid var(--line-soft);
+  padding-top: 14px;
+}
+
+.settings-advanced summary {
+  cursor: pointer;
+  font-weight: 700;
+  font-size: 14.5px;
+  color: var(--ink-soft);
+  user-select: none;
+}
+
+.settings-advanced[open] summary {
+  margin-bottom: 14px;
+  color: var(--ink);
+}
+
+/* Logs & diagnostics */
+
+.settings-select {
+  font-size: 13.5px;
+  font-family: var(--font-body);
+  padding: 8px 12px;
+  border-radius: var(--radius-s);
+  border: 1px solid var(--line);
+  background: var(--paper-raised);
+  color: var(--ink);
+  cursor: pointer;
+  align-self: flex-start;
+  min-width: 180px;
+}
+
+.settings-select:focus {
+  border-color: var(--accent-line);
+}
+
+.logs-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.logs-tabs button {
+  font-size: 12.5px;
+  font-weight: 600;
+  padding: 5px 12px;
+  border-radius: var(--radius-s);
+  border: 1px solid var(--line-soft);
+  background: var(--paper);
+  color: var(--ink-soft);
+  cursor: pointer;
+}
+
+.logs-tabs button.is-active {
+  background: var(--accent-soft);
+  border-color: var(--accent-line);
+  color: var(--accent);
+}
+
+.logs-view {
+  margin: 0;
+  max-height: 240px;
+  overflow: auto;
+  padding: 10px 12px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-m);
+  background: var(--paper-sunken);
+  color: var(--ink-soft);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  tab-size: 2;
+}
+
+.logs-status {
+  margin: 6px 0 0;
+}
+
+.logs-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.settings-hf-search {
+  display: flex;
+  gap: 8px;
+}
+
+.settings-hf-search input {
+  flex: 1;
+  min-width: 0;
+  font-size: 13.5px;
+}
+
+.settings-hf-files {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 6px;
+  max-height: 230px;
+  overflow-y: auto;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-m);
+  background: var(--paper);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.settings-hf-files li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 10px;
+  border-radius: var(--radius-s);
+}
+
+.settings-hf-files li:hover {
+  background: var(--paper-sunken);
+}
+
+.settings-hf-files li.is-preselected {
+  background: var(--accent-soft);
+}
+
+.settings-hf-file-info {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.settings-hf-file-name {
+  font-size: 13px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-hf-file-meta {
+  font-size: 12px;
+  color: var(--ink-soft);
+}
+
+.settings-hf-added {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ok);
+  white-space: nowrap;
+}
+
+.settings-local-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+
+.settings-remote-pairing {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.settings-remote-pairing img {
+  border-radius: var(--radius-m);
+  border: 1px solid var(--line-soft);
+}
+
+.settings-remote-device-name {
+  cursor: pointer;
+  background: none;
+  border: none;
+  padding: 0;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+}
+
+.settings-remote-device-name:hover {
+  text-decoration: underline;
+}
+
+.settings-see-library {
+  align-self: flex-start;
+  margin-top: 6px;
+  color: var(--accent);
+}
+
+/* Multi-device sync pairing (docs/SYNC_PAIRING_PROTOCOL.md) — a fingerprint
+ * or a freshly created group_secret rendered via `.pairing-code` must read
+ * as the visually dominant element of its card, never a small caption under
+ * a button: the whole protocol's security rests on the human actually
+ * reading and comparing it before confirming. See AddDeviceDialog.tsx /
+ * JoinGroupDialog.tsx and SettingsSheet.tsx's SyncSection. */
+.pairing-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 20px 16px;
+  margin: 10px 0;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-m);
+  background: var(--paper-sunken);
+  text-align: center;
+}
+
+.pairing-code {
+  font-family: var(--font-mono);
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--ink);
+  word-break: break-all;
+}
+
+.pairing-code-hint {
+  font-size: 12.5px;
+  color: var(--ink-soft);
+  margin: 0;
+  max-width: 320px;
+}

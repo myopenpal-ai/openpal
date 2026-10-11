@@ -1,0 +1,14 @@
+# Forces every human-filed issue through one of the four forms, so every ticket
+# carries the same headings. People with write access still see a
+# "Maintainers only" blank-issue link.
+#
+# This is a web-UI convenience, never a validation layer: anything created
+# through the API or `gh` can carry any body at all.
+blank_issues_enabled: false
+contact_links:
+  - name: How to contribute
+    url: https://github.com/myopenpal-ai/openpal/blob/main/CONTRIBUTING.md
+    about: How tickets, branches and pull requests work in this repo.
+  - name: Report a security vulnerability
+    url: https://github.com/myopenpal-ai/openpal/security/advisories/new
+    about: Please report vulnerabilities privately, not as a public issue. See SECURITY.md.

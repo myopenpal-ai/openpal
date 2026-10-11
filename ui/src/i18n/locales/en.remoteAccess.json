@@ -1,0 +1,28 @@
+{
+  "summary": "Remote access",
+  "hint": "Let another device on your network (or a future OpenPal mobile app) use this computer as its inference source. Off by default.",
+  "enableLabel": "Allow other devices to use this computer",
+  "starting": "Starting…",
+  "pairing": {
+    "label": "Pair a device",
+    "hint": "Scan this on the other device, or type the code in by hand.",
+    "addDevice": "Pair a device",
+    "qrAlt": "Pairing QR code",
+    "manualCode": "Code: {{code}}",
+    "waiting": "Waiting for the other device…",
+    "paired": "Paired: {{name}}",
+    "expired": "That pairing code expired. Try again."
+  },
+  "devices": {
+    "label": "Paired devices",
+    "renameHint": "Click to rename",
+    "revoke": "Remove"
+  },
+  "wol": {
+    "label": "Wake-on-LAN",
+    "enabled": "Enabled on this Mac. Another device on the same network can wake it up.",
+    "disabled": "Turned off. A sleeping Mac won't wake for a pairing request until you enable this in System Settings.",
+    "mac": "MAC address: {{mac}}"
+  },
+  "offLan": "To reach this computer from outside your home network, connect both devices to your own VPN (like Tailscale or WireGuard) or set up your router for it, then pair while connected that way. OpenPal doesn't run its own relay service."
+}

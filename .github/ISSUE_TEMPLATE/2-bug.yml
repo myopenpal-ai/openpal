@@ -1,0 +1,151 @@
+name: Bug
+description: Something behaves differently than it should.
+title: "fix(area): "
+labels: ["type/bug", "status/triage"]
+type: Bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe what happened. You do not need to know why — leave
+        `Where this lives` and `Constraints and gotchas` on their default line
+        and a maintainer will fill them in.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: One short paragraph in your own words. What went wrong?
+      placeholder: Stopping a reply and immediately sending another message sometimes leaves the app stuck with no answer and no error.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: The one part of OpenPal this is about. Label the behaviour, not the layer.
+      options:
+        - area/ui
+        - area/chat
+        - area/engine
+        - area/models
+        - area/agent
+        - area/web-search
+        - area/sync
+        - area/remote-access
+        - area/security
+        - area/plugins
+        - area/app
+        - area/build
+        - area/docs
+        - area/i18n-a11y
+        - Unknown / to be decided
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Numbered steps, ending with what you actually saw. What SHOULD happen goes in "Done when" instead, so it is not written twice.
+      placeholder: |
+        1. Load any model and send a message.
+        2. Press Stop while the reply is still streaming.
+        3. Immediately send a second message.
+        4. The composer goes idle and no reply ever arrives. Happens roughly one time in five.
+    validations:
+      required: true
+
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: OS and chip, OpenPal version or commit, and the model in use if it is involved. Worth stating because pull-request CI compiles Linux only — it never builds macOS or Windows.
+      placeholder: macOS 15.6 (Apple M2), OpenPal at 758c2af, Qwen2.5 7B Q4_K_M
+    validations:
+      required: true
+
+  - type: dropdown
+    id: regression
+    attributes:
+      label: Regression
+      description: Did this used to work? A regression gets bisected against git log; long-standing behaviour gets designed.
+      options:
+        - Yes — this used to work
+        - No — it has always behaved this way
+        - Unknown / to be decided
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: "Error text, screenshots or log lines. Reading the logs: `logs/engine.log` (under ~/Library/Application Support/com.myopenpal.openpal on macOS) is plaintext and is truncated every time the engine starts. The app's own log `openpal.DATE.enc` is encrypted and cannot be read from disk — export it from Settings → Advanced → Logs & diagnostics instead. Leave blank if you have none."
+      placeholder: |
+        engine.log tail:
+        srv  log_server_r: request: POST /v1/chat/completions 200
+        srv          cancel: request cancelled
+
+  - type: textarea
+    id: done-when
+    attributes:
+      label: Done when
+      description: The acceptance criteria, as a checklist — this is also where the correct behaviour is described. Each line must be independently decidable, and must say what has to be TRUE, never how to fix it.
+      placeholder: |
+        - [ ] Stopping a reply and immediately sending another always produces either a reply or a visible error — never silence.
+        - [ ] A regression test drives stop-then-send and goes red on the current commit and green after the fix.
+        - [ ] `cargo test -p openpal-core` passes.
+    validations:
+      required: true
+
+  - type: textarea
+    id: out-of-scope
+    attributes:
+      label: Not in scope
+      description: The fence. Name the adjacent things this ticket must NOT touch, and why they stay put. The standing line applies to every ticket — keep it.
+      value: |
+        - A blanket `cargo update`. The `time` crate is pinned at 0.3.47 in `Cargo.lock`; bump only what this ticket names.
+    validations:
+      required: true
+
+  - type: textarea
+    id: user-facing-copy
+    attributes:
+      label: User-facing copy
+      description: Required if the fix adds or changes any visible string. Give the i18n key and BOTH languages — `ui/src/i18n/keys.test.ts` fails the PR if the en and fr key sets differ. Leave blank if no visible text changes.
+
+  - type: textarea
+    id: where
+    attributes:
+      label: Where this lives
+      description: Pointers an implementer opens first — files, symbols, prior art — each with one line on what it does TODAY. Facts about the current code only, never instructions. A maintainer fills this in; you can leave the default line.
+      value: |
+        _To be filled at triage._
+    validations:
+      required: true
+
+  - type: textarea
+    id: constraints
+    attributes:
+      label: Constraints and gotchas
+      description: The few repo rules that actually bite this ticket. A maintainer fills this in; you can leave the default line.
+      value: |
+        _To be filled at triage._
+    validations:
+      required: true
+
+  - type: textarea
+    id: open-questions
+    attributes:
+      label: Open questions
+      description: Anything undecided, plus any theory about the cause you want on record — it will be marked as a suggestion, not a decision. Every question here should carry a proposed default, and none of them should block a "Done when" line.
+
+  - type: input
+    id: template-version
+    attributes:
+      label: Template version
+      value: v1
+    validations:
+      required: true

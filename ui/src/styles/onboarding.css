@@ -1,0 +1,505 @@
+/* Onboarding — full-window scenes, generous space, one ambient glow
+   (shared with the chat empty-state via --glow-gradient). */
+
+.onboarding {
+  position: relative;
+  height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.ob-glow {
+  position: absolute;
+  width: 900px;
+  height: 900px;
+  border-radius: 50%;
+  background: var(--glow-gradient);
+  filter: blur(50px);
+  top: -380px;
+  right: -280px;
+  pointer-events: none;
+  animation: glow-breathe 9s ease-in-out infinite;
+}
+
+.ob-scene {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 26px;
+  max-width: 720px;
+  /* 40px inline (not the usual 48) so the content box is exactly 640px — the
+     width of the recommendation card and its model list (both
+     max-width: 640px). Keeping the 48px gutter would leave them 8px wider
+     than the box, and see below, a scroll container can't afford that. */
+  padding: 0 40px;
+  /* A scene can be taller than a short window (the recommendation card, or the
+     "pick a different one" list on a small screen). Cap the scene at the
+     window height and scroll inside it, so it never overflows .onboarding
+     (overflow: hidden) — whose flex-centering would otherwise clip the top and
+     bottom of the content. Fits-and-centers scenes (the rest of the flow) are
+     unaffected: they never hit the cap. */
+  max-height: 100vh;
+  overflow-y: auto;
+}
+
+/* Welcome screen is pure branding — nothing on it is meant to be copied, so
+   make none of its text selectable (a stray click-drag otherwise paints a
+   selection highlight around the headline and copy). */
+.ob-welcome {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* Each step's heading (or the section, as a fallback) is focused
+   programmatically on mount to move the screen-reader cursor to the new
+   scene — not to reveal an interactive control. Don't paint the browser's
+   default focus ring around that pure text; the incoming click/selection
+   elsewhere is what makes it disappear, which reads as a glitchy "halo". */
+.ob-scene h1:focus,
+.ob-scene:focus {
+  outline: none;
+}
+
+.ob-appear {
+  animation: rise-in 0.6s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.ob-brand {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 15px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.ob-display {
+  font-family: var(--font-display);
+  font-size: clamp(38px, 6vw, 56px);
+  font-weight: 700;
+  line-height: 1.08;
+  letter-spacing: -0.015em;
+}
+
+.ob-title {
+  font-family: var(--font-display);
+  font-size: 32px;
+  font-weight: 700;
+  line-height: 1.15;
+  letter-spacing: -0.01em;
+}
+
+.ob-sub {
+  font-size: 16.5px;
+  color: var(--ink-soft);
+  max-width: 460px;
+  line-height: 1.6;
+}
+
+/* Welcome: the three guarantees presented as three side-by-side cards
+   (a real list, so a screen reader hears it as three items), then a small
+   caveat about Web Search / Agent tools. */
+.ob-perks {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  width: 100%;
+  max-width: 640px;
+}
+
+.ob-perk {
+  background: var(--paper-raised);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-m);
+  box-shadow: var(--shadow-card);
+  padding: 16px 14px;
+  font-size: 13.5px;
+  line-height: 1.45;
+  color: var(--ink-soft);
+}
+
+.ob-note {
+  font-size: 12.5px;
+  color: var(--ink-faint);
+  max-width: 480px;
+  line-height: 1.5;
+}
+
+.ob-name-form {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
+  width: 100%;
+  max-width: 360px;
+}
+
+.ob-name-label {
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ob-name-label > span {
+  align-self: flex-start;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+}
+
+.ob-name-input {
+  width: 100%;
+  font-size: 18px;
+  text-align: center;
+}
+
+.ob-name-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+/* "Skip this step" and "Skip setup": the two quiet ways out of a scene. */
+.ob-skips {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 2px 14px;
+}
+
+.ob-headline {
+  font-family: var(--font-display);
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--ink);
+  max-width: 480px;
+}
+
+.ob-eyebrow {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.ob-reassure {
+  font-size: 13px;
+  color: var(--ink-soft);
+}
+
+.ob-update-choice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: 420px;
+  font-size: 13px;
+  color: var(--ink-soft);
+  text-align: left;
+  cursor: pointer;
+}
+
+.ob-update-choice input[type="checkbox"] {
+  flex: none;
+  width: 16px;
+  height: 16px;
+}
+
+/* Scan stats */
+
+.ob-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(120px, 1fr));
+  gap: 14px;
+}
+
+/* Breakpoint convention: 600px — keep in sync with every other
+   `max-width: 600px` query in the app (see global.css :root). Grid tracks
+   don't wrap the way flex-wrap does, so the 4-column layout above simply
+   overflows a phone-width viewport rather than reflowing — confirmed live
+   on the Android emulator (the first and last cards got clipped by
+   .onboarding's `overflow: hidden`). */
+@media (max-width: 600px) {
+  .ob-stats {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .ob-perks {
+    grid-template-columns: 1fr;
+  }
+}
+
+.ob-stat {
+  background: var(--paper-raised);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-m);
+  box-shadow: var(--shadow-card);
+  padding: 18px 16px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ob-stat-label {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+}
+
+/* Values wrap rather than overflowing: the four cards share a fixed ~126px
+   column (minmax(120px, 1fr)), and longer values — "Ready for AI ✓" in
+   English, "Prêt pour l'IA ✓" in French — are wider than that at 19px bold.
+   `white-space: nowrap` used to make the widest value spill past the card's
+   border; short values (chip, memory, free space) never wrap on their own. */
+.ob-stat-value {
+  font-family: var(--font-display);
+  font-size: 19px;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.ob-stat-good {
+  color: var(--ok);
+}
+
+.ob-stat-check {
+  font-size: 15px;
+}
+
+/* Recommendation card */
+
+.ob-card {
+  background: var(--paper-raised);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-l);
+  box-shadow: var(--shadow-card);
+  padding: 34px 38px 26px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  max-width: 640px;
+}
+
+.ob-card-head {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.ob-model-name {
+  font-family: var(--font-display);
+  font-size: 36px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.ob-model-desc {
+  font-size: 16px;
+  color: var(--ink-soft);
+  max-width: 420px;
+}
+
+.ob-reasons {
+  list-style: none;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  text-align: left;
+}
+
+.ob-reasons li {
+  font-size: 14.5px;
+  color: var(--ink-soft);
+  padding-left: 26px;
+  position: relative;
+}
+
+.ob-reasons li::before {
+  content: "✓";
+  position: absolute;
+  left: 4px;
+  color: var(--ok);
+  font-weight: 700;
+}
+
+.ob-card-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+/* Model list — "Pick a different one" swaps the card for it, the recommended
+   model first among equally-sized rows. */
+
+.ob-alts {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  max-width: 640px;
+  max-height: 360px;
+  overflow-y: auto;
+  padding: 2px;
+}
+
+.ob-alt-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 14px;
+  text-align: left;
+  padding: 12px 16px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-m);
+  background: var(--paper-raised);
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.ob-alt-row:hover {
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+}
+
+/* The model the card was showing — where "Hide other options" returns to. */
+.ob-alt-row[aria-current="true"] {
+  border-color: var(--accent-line);
+}
+
+.ob-alt-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ob-alt-name {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 15px;
+  white-space: nowrap;
+}
+
+.ob-alt-why {
+  font-size: 13px;
+  color: var(--ink-soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Download */
+
+.ob-ring {
+  filter: drop-shadow(0 6px 18px var(--accent-soft));
+}
+
+.ob-waking {
+  font-size: 34px;
+  color: var(--accent);
+  animation: breathe 1.6s ease-in-out infinite;
+}
+
+/* Recovery code setup (RecoverySetup.tsx) */
+
+.rec-code {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--ink);
+  background: var(--paper-raised);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-m);
+  box-shadow: var(--shadow-card);
+  padding: 18px 26px;
+  max-width: 100%;
+  user-select: all;
+  word-break: break-all;
+}
+
+.rec-code-actions {
+  display: flex;
+  justify-content: center;
+}
+
+.rec-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: 420px;
+  font-size: 14px;
+  color: var(--ink-soft);
+  text-align: left;
+  cursor: pointer;
+}
+
+.rec-checkbox input[type="checkbox"] {
+  flex: none;
+  width: 16px;
+  height: 16px;
+}
+
+.rec-error {
+  font-size: 14px;
+  color: var(--danger);
+}
+
+/* Recovery code unlock (RecoveryUnlock.tsx) */
+
+.rec-unlock-form {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  max-width: 420px;
+}
+
+.rec-unlock-label {
+  align-self: flex-start;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+}
+
+.rec-unlock-input {
+  width: 100%;
+  font-family: var(--font-mono);
+  font-size: 17px;
+  letter-spacing: 0.04em;
+  text-align: center;
+}
+
+/* App lock gate (AppLockGate.tsx) */
+
+/* `PinPad` renders as a full-screen, opaque overlay (see its own doc
+ * comment) at z-index 700 — this sits above that so the "erase everything"
+ * escape hatch stays reachable during the PIN stage too, not just the
+ * recovery/reset stages that render in normal flow. */
+.app-lock-erase-link {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  z-index: 750;
+}

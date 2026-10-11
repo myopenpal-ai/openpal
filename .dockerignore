@@ -1,0 +1,24 @@
+# Docker build context trimming for crates/relay's image (see docker-compose.yml).
+# The relay only needs the Cargo workspace manifest/lockfile plus the crate
+# sources reachable from openpal-relay's dependency graph; everything below
+# is either huge, irrelevant to that build, or both.
+
+.git/
+target/
+
+# Frontend (Tauri UI) — not a Cargo workspace member, not needed to build the relay.
+ui/
+node_modules/
+
+# Bundler-staged engine binaries / plugin sources / build output — desktop-app only.
+crates/app/resources/llama/
+crates/app/resources/plugins/
+bundler/out/
+
+# Docs, knowledge graph, models — never needed inside the image.
+docs/
+graphify-out/
+*.gguf
+*.gguf.part
+
+.DS_Store

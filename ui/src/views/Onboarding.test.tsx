@@ -1,0 +1,962 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import "../i18n";
+import Onboarding from "./Onboarding";
+import { useStore } from "../state/store";
+import type {
+  DownloadEvent,
+  EngineStatus,
+  HardwareInfo,
+  ModelInfo,
+  ModelSpec,
+  Settings,
+  SystemReport,
+} from "../lib/types";
+
+const {
+  downloadModel,
+  cancelDownload,
+  getSettings,
+  getModels,
+  updateSettings,
+  installMockDefaults,
+} = vi.hoisted(() => {
+  const downloadModel = vi.fn();
+  const cancelDownload = vi.fn();
+  const getSettings = vi.fn();
+  const getModels = vi.fn();
+  const updateSettings = vi.fn();
+  // Re-installed after a full reset before every test, so a `…Once` that an
+  // earlier (failing) test left unconsumed can't leak into the next one.
+  const installMockDefaults = () => {
+    // Emits the `started` Channel event the store listens for, then never
+    // settles — the mocked-tier equivalent of a download genuinely in flight
+    // (jsdom has no Channel wire, and `downloads` is only cleared when the
+    // promise settles). Tests override this to simulate "nothing downloading".
+    downloadModel.mockReset().mockImplementation(
+      (_modelId: string, onEvent: (e: DownloadEvent) => void) => {
+        onEvent({ type: "started", data: { totalBytes: 100, resumedFromBytes: 1 } });
+        return new Promise<void>(() => {});
+      },
+    );
+    cancelDownload.mockReset().mockResolvedValue(undefined);
+    getSettings.mockReset().mockResolvedValue({ onboardingCompleted: false });
+    // `refreshModels` runs after a download failure / completion; return the
+    // store's current list so the recommended model stays mounted.
+    getModels.mockReset().mockImplementation(async () => useStore.getState().models);
+    updateSettings.mockReset().mockResolvedValue(undefined);
+  };
+  installMockDefaults();
+  return { downloadModel, cancelDownload, getSettings, getModels, updateSettings, installMockDefaults };
+});
+
+vi.mock("../lib/api", () => ({
+  api: { downloadModel, cancelDownload, getSettings, getModels, updateSettings },
+}));
+
+const SPEC: ModelSpec = {
+  id: "qwen3-4b",
+  name: "Qwen 3 4B",
+  family: "Qwen",
+  publisher: "Qwen",
+  description: "A test model.",
+  strengths: [],
+  url: "https://example.com/qwen3-4b.gguf",
+  fileName: "qwen3-4b.gguf",
+  sizeBytes: 4 * 1024 ** 3,
+  quant: "Q4_K_M",
+  sha256: null,
+  paramsB: 4,
+  moe: false,
+  contextMax: 32768,
+  qualityScore: 50,
+  license: "Apache 2.0",
+  extraArgs: [],
+  hidden: false,
+  curated: false,
+  source: "catalog",
+  localPath: null,
+  vision: false,
+  taskScores: {},
+  releaseDate: "2025-01-01",
+};
+
+const MODEL: ModelInfo = {
+  spec: SPEC,
+  status: { type: "notInstalled" },
+  fit: "perfect",
+  why: "Fits easily in your memory.",
+  isRecommended: true,
+  favorite: false,
+};
+
+// A second model, so a test can pick something other than the recommendation.
+const ALT: ModelInfo = {
+  ...MODEL,
+  spec: { ...SPEC, id: "alt-model", name: "Alt Model 1B", fileName: "alt.gguf", sizeBytes: 1024 ** 3 },
+  fit: "good",
+  why: "Fits fine.",
+  isRecommended: false,
+};
+
+const HARDWARE: HardwareInfo = {
+  chip: "Apple M2",
+  isAppleSilicon: true,
+  totalRamBytes: 16 * 1024 ** 3,
+  availableRamBytes: 12 * 1024 ** 3,
+  cpuCores: 8,
+  hasMetal: true,
+  freeDiskBytes: 500 * 1024 ** 3,
+  osVersion: "14.0",
+};
+
+const RUNNING: EngineStatus = {
+  type: "running",
+  data: { modelId: "qwen3-4b", port: 1, diskSlow: false, autoUnloadAt: null },
+};
+const STARTING: EngineStatus = {
+  type: "starting",
+  data: { modelId: "qwen3-4b", progressPercent: null },
+};
+const FAILED_ENGINE: EngineStatus = { type: "failed", data: { message: "boom" } };
+
+/** The model finishing its download: installed, nothing in flight any more. */
+const INSTALLED: ModelInfo = {
+  ...MODEL,
+  status: { type: "installed", data: { path: "/m/qwen3-4b.gguf", sizeBytes: 1 } },
+};
+
+/** Onboarding primed to recommend qwen3-4b (not installed). */
+function seedNoDownload() {
+  useStore.setState({
+    models: [MODEL],
+    report: {
+      hardware: HARDWARE,
+      recommendation: {
+        primaryModelId: "qwen3-4b",
+        headline: "Qwen 3 4B is the best fit for your Mac.",
+        reasons: ["Fits easily in your memory."],
+        ranked: [{ modelId: "qwen3-4b", fit: "perfect", why: "Fits easily in your memory." }],
+      },
+    } as SystemReport,
+    settings: { autoLoadOnStartup: true, defaultModelId: null } as unknown as Settings,
+    engine: { type: "stopped" },
+    downloads: {},
+    downloadErrors: {},
+    notice: null,
+  });
+}
+
+const click = (name: string | RegExp) =>
+  userEvent.click(screen.getByRole("button", { name }));
+
+const skipStep = () => click("Skip this step");
+
+/** The "Skip setup?" confirmation that skipping the whole setup goes through. */
+const skipDialog = () => screen.getByRole("alertdialog", { name: "Skip setup?" });
+const noDialog = () => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+
+/** Opens the confirmation from whichever scene is showing (its "Skip setup" button). */
+const openSkipSetup = () => click("Skip setup");
+
+async function confirmSkip() {
+  await userEvent.click(within(skipDialog()).getByRole("button", { name: "Skip setup" }));
+}
+
+const completedSaves = () =>
+  updateSettings.mock.calls.filter(([s]) => s?.onboardingCompleted === true);
+
+// Drivers, each starting from a fresh render on the welcome scene.
+const SCAN_HEADING = /^First, let's see what your Mac can\sdo\.$/;
+async function toName() {
+  await click("Let's set things up");
+  await screen.findByRole("heading", { name: "What should we call you?" });
+}
+async function toScan() {
+  await toName();
+  await skipStep(); // the name step's own skip
+  await screen.findByRole("heading", { name: SCAN_HEADING });
+}
+async function toRecommend() {
+  await toScan();
+  await click("Show my match");
+  await screen.findByRole("heading", { name: "Qwen 3 4B" });
+}
+async function toDownload() {
+  await toRecommend();
+  await click(/^Download/);
+  await screen.findByRole("heading", { name: "Bringing Qwen 3 4B home…" });
+}
+async function toSecurity() {
+  await toScan();
+  await skipStep(); // skips the model setup
+  await screen.findByRole("heading", { name: "Add a PIN?" });
+}
+async function toReady() {
+  await toSecurity();
+  await skipStep();
+  // "Almost there." with no model, "All set." once one is on its way.
+  await screen.findByRole("heading", { name: /^(All set|Almost there)\.$/ });
+}
+
+const MSG_NO_MODEL =
+  "You can't chat until you pick a model, but you can do that anytime in Models.";
+const MSG_DOWNLOADING =
+  "Your model download will stop. You can resume it anytime in Models, but you can't chat until a model is ready.";
+const MSG_MODEL_READY =
+  "Your model is installed. All that's left is an optional PIN and the update check. You can find both in Settings later.";
+const FINAL_NO_MODEL =
+  "Pick a model in Models whenever you're ready, and you can start chatting. Once it's downloaded, it runs on your Mac, even with the internet off.";
+const FINAL_DOWNLOAD_STOPPED =
+  "Your download was stopped. Resume it in Models whenever you're ready, and you can start chatting.";
+
+beforeEach(() => {
+  installMockDefaults();
+  seedNoDownload();
+});
+
+describe("Onboarding: the two skip buttons", () => {
+  it("the welcome screen offers only Skip setup: its main button already moves on", () => {
+    render(<Onboarding />);
+
+    expect(screen.getByRole("button", { name: "Skip setup" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Skip this step" })).not.toBeInTheDocument();
+  });
+
+  it("the name screen's Skip this step moves on without asking and saves no name", async () => {
+    render(<Onboarding />);
+    await toName();
+
+    await skipStep();
+
+    // The title holds a non-breaking space, which `getByRole`'s `name` doesn't
+    // normalize the way Playwright's does — hence the regex.
+    expect(
+      await screen.findByRole("heading", { name: SCAN_HEADING }),
+    ).toBeInTheDocument();
+    noDialog();
+    expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({ userName: null }));
+    expect(useStore.getState().settings?.onboardingCompleted).not.toBe(true);
+  });
+
+  it.each([
+    ["name", toName],
+    ["scan", toScan],
+    ["recommend", toRecommend],
+  ])("the %s screen's Skip setup asks first", async (_scene, drive) => {
+    render(<Onboarding />);
+    await drive();
+
+    await openSkipSetup();
+
+    expect(skipDialog()).toBeInTheDocument();
+    expect(updateSettings).not.toHaveBeenCalledWith(
+      expect.objectContaining({ onboardingCompleted: true }),
+    );
+  });
+
+  it.each([
+    ["scan", toScan],
+    ["recommend", toRecommend],
+  ])(
+    "the %s screen's Skip this step skips the model setup and lands on the PIN offer",
+    async (_scene, drive) => {
+      render(<Onboarding />);
+      await drive();
+
+      await skipStep();
+
+      expect(await screen.findByRole("heading", { name: "Add a PIN?" })).toBeInTheDocument();
+      noDialog();
+      expect(cancelDownload).not.toHaveBeenCalled();
+      expect(downloadModel).not.toHaveBeenCalled();
+      expect(useStore.getState().settings?.onboardingCompleted).not.toBe(true);
+    },
+  );
+
+  it("the download screen's Skip this step drops the download in flight and lands on the PIN offer", async () => {
+    render(<Onboarding />);
+    await toDownload();
+
+    await skipStep();
+
+    expect(cancelDownload).toHaveBeenCalledWith("qwen3-4b");
+    expect(await screen.findByRole("heading", { name: "Add a PIN?" })).toBeInTheDocument();
+    noDialog();
+    expect(useStore.getState().settings?.onboardingCompleted).not.toBe(true);
+  });
+
+  it("the download screen's Skip this step cancels nothing when no download is in flight", async () => {
+    // A failed download: the store clears its in-flight entry on rejection. `Once`,
+    // so the rejection can't leak into whichever test runs next.
+    downloadModel.mockRejectedValueOnce(new Error("download failed"));
+    render(<Onboarding />);
+    await toRecommend();
+    await click(/^Download/);
+    await screen.findByRole("heading", { name: "Hmm, that didn't finish." });
+
+    await skipStep();
+
+    expect(cancelDownload).not.toHaveBeenCalled();
+    expect(await screen.findByRole("heading", { name: "Add a PIN?" })).toBeInTheDocument();
+  });
+
+  it("skipping the model setup cancels the model the user actually picked, not the recommended one", async () => {
+    useStore.setState({
+      models: [MODEL, ALT],
+      report: {
+        hardware: HARDWARE,
+        recommendation: {
+          primaryModelId: "qwen3-4b",
+          headline: "Qwen 3 4B is the best fit for your Mac.",
+          reasons: ["Fits easily in your memory."],
+          ranked: [
+            { modelId: "qwen3-4b", fit: "perfect", why: "Fits easily in your memory." },
+            { modelId: "alt-model", fit: "good", why: "Fits fine." },
+          ],
+        },
+      } as SystemReport,
+    });
+    render(<Onboarding />);
+    await toRecommend();
+    await click("Pick a different one");
+    await click(/Alt Model 1B/);
+    await click(/^Download/);
+    await screen.findByRole("heading", { name: "Bringing Alt Model 1B home…" });
+
+    await skipStep();
+
+    expect(cancelDownload).toHaveBeenCalledTimes(1);
+    expect(cancelDownload).toHaveBeenCalledWith("alt-model");
+  });
+
+  it("an installed model with a stale progress entry is not 'a download in flight'", async () => {
+    useStore.setState({
+      models: [INSTALLED],
+      downloads: { "qwen3-4b": { receivedBytes: 1, totalBytes: 100, bytesPerSec: 0, etaSeconds: 0 } },
+    });
+    render(<Onboarding />);
+
+    await openSkipSetup();
+    expect(within(skipDialog()).getByText(MSG_NO_MODEL)).toBeInTheDocument();
+    await confirmSkip();
+
+    expect(cancelDownload).not.toHaveBeenCalled();
+  });
+
+  it("the PIN offer's Skip this step moves on to the final screen without asking", async () => {
+    render(<Onboarding />);
+    await toSecurity();
+
+    await skipStep();
+
+    expect(await screen.findByRole("heading", { name: "Almost there." })).toBeInTheDocument();
+    noDialog();
+  });
+
+  it("the PIN offer's Skip setup asks, and finishes without the final screen once confirmed", async () => {
+    render(<Onboarding />);
+    await toSecurity();
+
+    await openSkipSetup();
+    await confirmSkip();
+
+    await waitFor(() => expect(completedSaves()).toHaveLength(1));
+    expect(useStore.getState().settings?.onboardingCompleted).toBe(true);
+  });
+
+  it("the name screen's skip buttons are inert while the name is saving", async () => {
+    render(<Onboarding />);
+    await toName();
+    await userEvent.type(screen.getByLabelText("Your name"), "Ada");
+    let finishSave: () => void = () => {};
+    updateSettings.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finishSave = resolve;
+        }),
+    );
+    await click("Continue");
+
+    expect(screen.getByRole("button", { name: "Skip this step" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Skip setup" })).toBeDisabled();
+
+    finishSave();
+    expect(await screen.findByRole("heading", { name: SCAN_HEADING })).toBeInTheDocument();
+  });
+
+  it("a half-typed name is discarded by Skip this step and never saved by Skip setup", async () => {
+    render(<Onboarding />);
+    await toName();
+    await userEvent.type(screen.getByLabelText("Your name"), "Ada");
+
+    await openSkipSetup();
+    expect(skipDialog()).toBeInTheDocument();
+    // Opening the dialog must not submit the form behind it.
+    expect(updateSettings).not.toHaveBeenCalled();
+    await userEvent.click(within(skipDialog()).getByRole("button", { name: "Cancel" }));
+
+    await skipStep();
+
+    expect(await screen.findByRole("heading", { name: SCAN_HEADING })).toBeInTheDocument();
+    expect(updateSettings).toHaveBeenCalledTimes(1);
+    expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({ userName: null }));
+  });
+
+  it("the scan screen offers both skips while the hardware report is still loading", async () => {
+    useStore.setState({ report: null });
+    render(<Onboarding />);
+    await toScan();
+
+    expect(screen.getByText("Taking a look…")).toBeInTheDocument();
+    await openSkipSetup();
+    expect(skipDialog()).toBeInTheDocument();
+    await userEvent.click(within(skipDialog()).getByRole("button", { name: "Cancel" }));
+
+    await skipStep();
+
+    expect(await screen.findByRole("heading", { name: "Add a PIN?" })).toBeInTheDocument();
+  });
+
+  it("the download screen keeps both skips when the model won't load", async () => {
+    useStore.setState({ models: [INSTALLED], engine: FAILED_ENGINE });
+    render(<Onboarding />);
+    await toRecommend();
+    await click(/^Use /);
+    await screen.findByRole("heading", { name: "It needs another nudge." });
+
+    await openSkipSetup();
+    expect(skipDialog()).toBeInTheDocument();
+    await userEvent.click(within(skipDialog()).getByRole("button", { name: "Cancel" }));
+    await skipStep();
+
+    expect(await screen.findByRole("heading", { name: "Add a PIN?" })).toBeInTheDocument();
+    expect(cancelDownload).not.toHaveBeenCalled();
+  });
+
+  it("the download screen keeps both skips while the model is waking up", async () => {
+    useStore.setState({ models: [INSTALLED], engine: STARTING });
+    render(<Onboarding />);
+    await toRecommend();
+    await click(/^Use /);
+    await screen.findByRole("heading", { name: "Waking it up…" });
+
+    await openSkipSetup();
+    expect(within(skipDialog()).getByText(MSG_MODEL_READY)).toBeInTheDocument();
+    await userEvent.click(within(skipDialog()).getByRole("button", { name: "Cancel" }));
+    await skipStep();
+
+    expect(await screen.findByRole("heading", { name: "Add a PIN?" })).toBeInTheDocument();
+    expect(cancelDownload).not.toHaveBeenCalled();
+  });
+
+  it("skipping the model setup also drops a restart queued behind a download that hasn't settled", async () => {
+    let settleFirst: () => void = () => {};
+    downloadModel.mockImplementationOnce(
+      (_modelId: string, onEvent: (e: DownloadEvent) => void) => {
+        onEvent({ type: "started", data: { totalBytes: 100, resumedFromBytes: 1 } });
+        return new Promise<void>((resolve) => {
+          settleFirst = resolve;
+        });
+      },
+    );
+    render(<Onboarding />);
+    await toDownload();
+    // Cancel goes back to the recommendation, but the cancelled download hasn't
+    // settled yet — so pressing Download again only queues a restart behind it.
+    await click("Cancel");
+    await click(/^Download/);
+    await screen.findByRole("heading", { name: "Bringing Qwen 3 4B home…" });
+
+    await skipStep();
+    await screen.findByRole("heading", { name: "Add a PIN?" });
+    // The first download now settles: nothing may start after the user skipped.
+    await act(async () => {
+      settleFirst();
+    });
+    await waitFor(() => expect(useStore.getState().downloads).toEqual({}));
+
+    expect(downloadModel).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("Onboarding: the final screen follows whether a model exists", () => {
+  it("with no model it is almost there, says to pick one in Models, and offers Get started", async () => {
+    render(<Onboarding />);
+    await toReady();
+
+    expect(screen.getByRole("heading", { name: "Almost there." })).toBeInTheDocument();
+    expect(screen.getByText(FINAL_NO_MODEL)).toBeInTheDocument();
+    expect(screen.queryByText(/is awake and listening/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Say hello" })).not.toBeInTheDocument();
+    // It has no skip of its own: its one button finishes.
+    expect(screen.queryByRole("button", { name: /skip/i })).not.toBeInTheDocument();
+
+    await click("Get started");
+
+    await waitFor(() => expect(useStore.getState().settings?.onboardingCompleted).toBe(true));
+  });
+
+  it("with a model running it is all set, says it is awake, and offers Say hello", async () => {
+    render(<Onboarding />);
+    await toReady();
+
+    act(() => useStore.setState({ engine: RUNNING }));
+
+    expect(await screen.findByRole("heading", { name: "All set." })).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Qwen 3 4B is awake and listening. It runs entirely on your Mac, even with the internet off.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Say hello" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Get started" })).not.toBeInTheDocument();
+  });
+
+  it("names the model the engine is actually running, not the recommended one", async () => {
+    useStore.setState({ models: [MODEL, ALT] });
+    render(<Onboarding />);
+    await toReady();
+
+    act(() =>
+      useStore.setState({
+        engine: {
+          type: "running",
+          data: { modelId: "alt-model", port: 1, diskSlow: false, autoUnloadAt: null },
+        },
+      }),
+    );
+
+    expect(
+      await screen.findByText(
+        "Alt Model 1B is awake and listening. It runs entirely on your Mac, even with the internet off.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("while the model is still loading it says so, instead of claiming it is awake", async () => {
+    render(<Onboarding />);
+    await toReady();
+
+    act(() => useStore.setState({ engine: STARTING }));
+
+    expect(
+      await screen.findByText("Loading Qwen 3 4B into memory. Just a moment."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/is awake and listening/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Say hello" })).toBeInTheDocument();
+  });
+
+  it("a failed engine reads as no model", async () => {
+    render(<Onboarding />);
+    await toReady();
+
+    act(() => useStore.setState({ engine: FAILED_ENGINE }));
+
+    expect(screen.getByText(FINAL_NO_MODEL)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Get started" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Say hello" })).not.toBeInTheDocument();
+  });
+
+  it("the line under the headline is a live region, since it follows the engine", async () => {
+    render(<Onboarding />);
+    await toReady();
+
+    expect(screen.getByRole("status")).toHaveTextContent(FINAL_NO_MODEL);
+    act(() => useStore.setState({ engine: STARTING }));
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Loading Qwen 3 4B into memory. Just a moment.",
+    );
+  });
+
+  it("after a download was stopped it says so, and that it can be resumed", async () => {
+    render(<Onboarding />);
+    await toDownload();
+    await skipStep(); // stops the download in flight
+    await screen.findByRole("heading", { name: "Add a PIN?" });
+
+    await skipStep();
+
+    expect(await screen.findByText(FINAL_DOWNLOAD_STOPPED)).toBeInTheDocument();
+    expect(screen.queryByText(FINAL_NO_MODEL)).not.toBeInTheDocument();
+  });
+
+  it("without a stopped download it gives the plain no-model text", async () => {
+    // The model setup skipped from the scan screen: nothing was ever downloading.
+    render(<Onboarding />);
+    await toReady();
+
+    expect(screen.queryByText(FINAL_DOWNLOAD_STOPPED)).not.toBeInTheDocument();
+    expect(screen.getByText(FINAL_NO_MODEL)).toBeInTheDocument();
+  });
+});
+
+describe("Onboarding: Skip setup asks before leaving", () => {
+  it("states what leaving costs, and Cancel stays put", async () => {
+    render(<Onboarding />);
+
+    await openSkipSetup();
+
+    expect(within(skipDialog()).getByText(MSG_NO_MODEL)).toBeInTheDocument();
+    // The consequence is what a screen reader hears with the title.
+    expect(skipDialog()).toHaveAccessibleDescription(MSG_NO_MODEL);
+    expect(updateSettings).not.toHaveBeenCalled();
+
+    await userEvent.click(within(skipDialog()).getByRole("button", { name: "Cancel" }));
+
+    noDialog();
+    expect(screen.getByRole("button", { name: "Let's set things up" })).toBeInTheDocument();
+    expect(updateSettings).not.toHaveBeenCalled();
+    expect(useStore.getState().settings?.onboardingCompleted).not.toBe(true);
+  });
+
+  it("the confirm button is the plain accent button, not the red destructive one", async () => {
+    render(<Onboarding />);
+    await openSkipSetup();
+
+    const confirm = within(skipDialog()).getByRole("button", { name: "Skip setup" });
+    expect(confirm).toHaveClass("btn");
+    expect(confirm).not.toHaveClass("btn-danger-quiet");
+  });
+
+  it("Escape dismisses it without skipping and hands focus back to Skip setup", async () => {
+    render(<Onboarding />);
+    const opener = screen.getByRole("button", { name: "Skip setup" });
+
+    await userEvent.click(opener);
+    expect(skipDialog()).toBeInTheDocument();
+    await userEvent.keyboard("{Escape}");
+
+    noDialog();
+    expect(opener).toHaveFocus();
+    expect(updateSettings).not.toHaveBeenCalled();
+  });
+
+  it("a backdrop click dismisses it; a click inside it does not", async () => {
+    render(<Onboarding />);
+    await openSkipSetup();
+
+    await userEvent.click(within(skipDialog()).getByText(MSG_NO_MODEL));
+    expect(skipDialog()).toBeInTheDocument();
+
+    await userEvent.click(skipDialog().parentElement!);
+    noDialog();
+    expect(updateSettings).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Let's set things up" })).toBeInTheDocument();
+  });
+
+  it("confirming completes onboarding without touching any download", async () => {
+    render(<Onboarding />);
+
+    await openSkipSetup();
+    await confirmSkip();
+
+    await waitFor(() => expect(completedSaves()).toHaveLength(1));
+    expect(useStore.getState().settings?.onboardingCompleted).toBe(true);
+    expect(cancelDownload).not.toHaveBeenCalled();
+  });
+
+  it("warns that a download in flight will stop, and Cancel leaves it running", async () => {
+    render(<Onboarding />);
+    await toDownload();
+
+    await openSkipSetup();
+
+    expect(within(skipDialog()).getByText(MSG_DOWNLOADING)).toBeInTheDocument();
+
+    await userEvent.click(within(skipDialog()).getByRole("button", { name: "Cancel" }));
+
+    expect(cancelDownload).not.toHaveBeenCalled();
+    expect(screen.getByRole("heading", { name: "Bringing Qwen 3 4B home…" })).toBeInTheDocument();
+  });
+
+  it("confirming mid-download completes onboarding, and only then drops the download", async () => {
+    render(<Onboarding />);
+    await toDownload();
+
+    await openSkipSetup();
+    // Nothing is cancelled or completed until the skip is confirmed.
+    expect(cancelDownload).not.toHaveBeenCalled();
+    expect(completedSaves()).toHaveLength(0);
+    await confirmSkip();
+
+    await waitFor(() => expect(cancelDownload).toHaveBeenCalledWith("qwen3-4b"));
+    expect(useStore.getState().settings?.onboardingCompleted).toBe(true);
+    // Saved first: cancelling first would race the store's post-download
+    // settings re-read against the save (and a failed save would lose it).
+    expect(cancelDownload.mock.invocationCallOrder[0]).toBeGreaterThan(
+      updateSettings.mock.invocationCallOrder[
+        updateSettings.mock.calls.findIndex(([s]) => s?.onboardingCompleted === true)
+      ],
+    );
+  });
+
+  it("confirming with nothing in flight cancels no model", async () => {
+    // A failed download: the scene lands on the error branch with nothing to cancel.
+    downloadModel.mockRejectedValueOnce(new Error("download failed"));
+    render(<Onboarding />);
+    await toRecommend();
+    await click(/^Download/);
+    await screen.findByRole("heading", { name: "Hmm, that didn't finish." });
+
+    await openSkipSetup();
+    await confirmSkip();
+
+    await waitFor(() => expect(useStore.getState().settings?.onboardingCompleted).toBe(true));
+    expect(cancelDownload).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["running", RUNNING],
+    ["loading", STARTING],
+  ])("says the model is installed while it is %s", async (_state, engine) => {
+    render(<Onboarding />);
+    await toSecurity();
+    act(() => useStore.setState({ engine }));
+
+    await openSkipSetup();
+
+    expect(within(skipDialog()).getByText(MSG_MODEL_READY)).toBeInTheDocument();
+  });
+
+  it("a download in flight outranks a running engine in the wording", async () => {
+    useStore.setState({
+      engine: RUNNING,
+      downloads: { "qwen3-4b": { receivedBytes: 1, totalBytes: 100, bytesPerSec: 0, etaSeconds: 0 } },
+    });
+    render(<Onboarding />);
+
+    await openSkipSetup();
+
+    expect(within(skipDialog()).getByText(MSG_DOWNLOADING)).toBeInTheDocument();
+  });
+
+  it("confirming mid-download drops the model the user picked, not the recommended one", async () => {
+    useStore.setState({
+      models: [MODEL, ALT],
+      report: {
+        hardware: HARDWARE,
+        recommendation: {
+          primaryModelId: "qwen3-4b",
+          headline: "Qwen 3 4B is the best fit for your Mac.",
+          reasons: ["Fits easily in your memory."],
+          ranked: [
+            { modelId: "qwen3-4b", fit: "perfect", why: "Fits easily in your memory." },
+            { modelId: "alt-model", fit: "good", why: "Fits fine." },
+          ],
+        },
+      } as SystemReport,
+    });
+    render(<Onboarding />);
+    await toRecommend();
+    await click("Pick a different one");
+    await click(/Alt Model 1B/);
+    await click(/^Download/);
+    await screen.findByRole("heading", { name: "Bringing Alt Model 1B home…" });
+
+    await openSkipSetup();
+    await confirmSkip();
+
+    await waitFor(() => expect(cancelDownload).toHaveBeenCalledWith("alt-model"));
+    expect(cancelDownload).toHaveBeenCalledTimes(1);
+  });
+
+  it("stays up while the skip is saving, even if the scene moves on underneath it", async () => {
+    let finishSave: () => void = () => {};
+    render(<Onboarding />);
+    await toDownload();
+    updateSettings.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finishSave = resolve;
+        }),
+    );
+    await openSkipSetup();
+    await confirmSkip();
+
+    // The download finishes and the engine comes up while the save is in flight.
+    act(() => useStore.setState({ models: [INSTALLED], downloads: {}, engine: RUNNING }));
+    await screen.findByRole("heading", { name: "Add a PIN?" });
+
+    // The skip is already underway, so the dialog doesn't vanish and hand back a
+    // live PIN offer that the save is about to leave anyway.
+    expect(skipDialog()).toBeInTheDocument();
+    expect(within(skipDialog()).getByRole("button", { name: "Skip setup" })).toBeDisabled();
+
+    finishSave();
+    await waitFor(() => expect(useStore.getState().settings?.onboardingCompleted).toBe(true));
+    // The download had finished, so there is nothing to stop — but a stale cancel is harmless.
+    expect(completedSaves()).toHaveLength(1);
+  });
+
+  it("locks while the skip is saving: buttons, Escape and the backdrop are all inert", async () => {
+    let finishSave: () => void = () => {};
+    updateSettings.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finishSave = resolve;
+        }),
+    );
+    render(<Onboarding />);
+    await openSkipSetup();
+    await confirmSkip();
+
+    const dialog = skipDialog();
+    expect(within(dialog).getByRole("button", { name: "Skip setup" })).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: "Cancel" })).toBeDisabled();
+    // Escape is handled on the dialog itself, so fire it there (focus may have
+    // left the now-disabled button); the backdrop is the dialog's parent.
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    await userEvent.click(dialog.parentElement!);
+    expect(skipDialog()).toBeInTheDocument();
+    expect(updateSettings).toHaveBeenCalledTimes(1);
+
+    finishSave();
+    await waitFor(() => expect(useStore.getState().settings?.onboardingCompleted).toBe(true));
+  });
+
+  it("hands the scene back when saving fails, and a second try is not stuck busy", async () => {
+    // `completeOnboarding` swallows the failure into a notice and leaves
+    // onboarding open — the dialog must close, and not stay locked for next time.
+    updateSettings.mockRejectedValueOnce(new Error("disk full"));
+    render(<Onboarding />);
+
+    await openSkipSetup();
+    await confirmSkip();
+
+    await waitFor(() => noDialog());
+    expect(screen.getByRole("button", { name: "Let's set things up" })).toBeInTheDocument();
+    expect(useStore.getState().settings?.onboardingCompleted).not.toBe(true);
+    expect(useStore.getState().notice).toContain("disk full");
+
+    // Second attempt: the Once is spent, so the save now succeeds.
+    await openSkipSetup();
+    const dialog = skipDialog();
+    expect(within(dialog).getByRole("button", { name: "Skip setup" })).toBeEnabled();
+    expect(within(dialog).getByRole("button", { name: "Cancel" })).toBeEnabled();
+    await confirmSkip();
+
+    await waitFor(() => expect(useStore.getState().settings?.onboardingCompleted).toBe(true));
+    expect(updateSettings).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps the download running when saving the skip fails", async () => {
+    render(<Onboarding />);
+    await toDownload();
+    // Armed only now, so it is the skip's own save that fails (the name step
+    // earlier in the flow saved fine).
+    updateSettings.mockRejectedValueOnce(new Error("disk full"));
+
+    await openSkipSetup();
+    await confirmSkip();
+
+    await waitFor(() => noDialog());
+    expect(cancelDownload).not.toHaveBeenCalled();
+    expect(screen.getByRole("heading", { name: "Bringing Qwen 3 4B home…" })).toBeInTheDocument();
+  });
+
+  it("closes when the scene moves on underneath it, instead of going stale", async () => {
+    render(<Onboarding />);
+    await toDownload();
+    await openSkipSetup();
+    expect(within(skipDialog()).getByText(MSG_DOWNLOADING)).toBeInTheDocument();
+
+    // The download finishes and the engine comes up: Onboarding moves to the
+    // PIN offer on its own, so "your download will stop" no longer applies.
+    act(() => useStore.setState({ models: [INSTALLED], downloads: {}, engine: RUNNING }));
+
+    const heading = await screen.findByRole("heading", { name: "Add a PIN?" });
+    noDialog();
+    // Focus follows the new scene, rather than sitting behind a modal that is gone.
+    expect(heading).toHaveFocus();
+    expect(completedSaves()).toHaveLength(0);
+  });
+});
+
+describe("Onboarding: picking a different model", () => {
+  /** The recommended model plus one alternative, as a recommendation lists them. */
+  function seedTwoModels() {
+    useStore.setState({
+      models: [MODEL, ALT],
+      report: {
+        hardware: HARDWARE,
+        recommendation: {
+          primaryModelId: "qwen3-4b",
+          headline: "Qwen 3 4B is the best fit for your Mac.",
+          reasons: ["Fits easily in your memory."],
+          ranked: [
+            { modelId: "qwen3-4b", fit: "perfect", why: "Fits easily in your memory." },
+            { modelId: "alt-model", fit: "good", why: "Fits fine." },
+          ],
+        },
+      } as SystemReport,
+    });
+  }
+
+  const rows = () =>
+    Array.from(document.querySelectorAll<HTMLElement>(".ob-alt-row")).map((r) => r.textContent);
+
+  it("swaps the card for a list, recommended model first and tagged", async () => {
+    seedTwoModels();
+    render(<Onboarding />);
+    await toRecommend();
+
+    await click("Pick a different one");
+
+    // The big card is gone — nothing is pushed down by the list any more.
+    expect(screen.queryByRole("heading", { name: "Qwen 3 4B" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Download/ })).not.toBeInTheDocument();
+    const [first, second] = screen.getAllByRole("button", { name: /GB/ });
+    expect(first).toHaveTextContent("Qwen 3 4B");
+    expect(first).toHaveTextContent("Recommended");
+    expect(second).toHaveTextContent("Alt Model 1B");
+    expect(second).not.toHaveTextContent("Recommended");
+    expect(rows()).toHaveLength(2);
+  });
+
+  it("moves keyboard focus onto the list when it opens", async () => {
+    seedTwoModels();
+    render(<Onboarding />);
+    await toRecommend();
+
+    await click("Pick a different one");
+
+    expect(screen.getByRole("button", { name: /Qwen 3 4B/ })).toHaveFocus();
+  });
+
+  it("'Hide other options' brings the card back and hands focus to its toggle", async () => {
+    seedTwoModels();
+    render(<Onboarding />);
+    await toRecommend();
+    await click("Pick a different one");
+
+    await click("Hide other options");
+
+    expect(screen.getByRole("heading", { name: "Qwen 3 4B" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Pick a different one" })).toHaveFocus();
+    expect(rows()).toHaveLength(0);
+  });
+
+  it("keeps the recommendation first and tagged after another model was picked", async () => {
+    seedTwoModels();
+    render(<Onboarding />);
+    await toRecommend();
+    await click("Pick a different one");
+    await click(/Alt Model 1B/);
+    await screen.findByRole("heading", { name: "Alt Model 1B" });
+
+    await click("Pick a different one");
+
+    const [first, second] = screen.getAllByRole("button", { name: /GB/ });
+    expect(first).toHaveTextContent("Qwen 3 4B");
+    expect(first).toHaveTextContent("Recommended");
+    expect(first).not.toHaveAttribute("aria-current");
+    expect(second).toHaveTextContent("Alt Model 1B");
+    expect(second).toHaveAttribute("aria-current", "true");
+
+    // And the recommendation is one click back.
+    await click(/Qwen 3 4B/);
+    expect(await screen.findByRole("heading", { name: "Qwen 3 4B" })).toBeInTheDocument();
+  });
+});

@@ -1,0 +1,35 @@
+# Dev / self-host deploy skeleton for the Phase 1 sync relay
+# (docs/design/MULTI_DEVICE_SYNC.md). No TLS, no auth — put a reverse proxy in
+# front for anything beyond local development. See crates/relay/src/main.rs
+# for the full "not production-ready" caveat.
+#
+# Usage:
+#   docker compose up --build
+#   curl -X POST localhost:8787/mailbox/test -d '{"ciphertext":"aGVsbG8="}' -H 'content-type: application/json'
+
+services:
+  relay:
+    build:
+      context: .
+      dockerfile: crates/relay/Dockerfile
+    ports:
+      - "8787:8787"
+    environment:
+      RELAY_DB_PATH: /home/relay/data/relay.sqlite
+      PORT: "8787"
+      RUST_LOG: info
+      RELAY_RATE_LIMIT_PER_MINUTE: "600"
+    volumes:
+      - relay-data:/home/relay/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "openpal-relay", "--healthcheck"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+volumes:
+  # Named volume so the SQLite mailbox file survives container
+  # restarts/recreations.
+  relay-data:

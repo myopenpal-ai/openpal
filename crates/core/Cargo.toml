@@ -1,0 +1,101 @@
+[package]
+name = "openpal-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "OpenPal core logic: hardware detection, model catalog & selection, resumable downloads, and llama.cpp engine management. No GUI dependencies."
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+reqwest = { workspace = true }
+futures-util = { workspace = true }
+tracing = { workspace = true }
+base64 = { workspace = true }
+regex = { workspace = true }
+sysinfo = "0.39"
+sha2 = "0.10"
+rand = "0.8"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+pdf-extract = "0.12.0"
+semver = "1"
+minisign-verify = "0.2"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
+async-trait = "0.1"
+readable-readability = "0.4"
+kuchiki = "0.8"
+# Phase 6.1 (docs/SPACES_AUTHORING.md §9): the wrap-file KDF. `alloc` is all
+# `hash_password_into` (raw key derivation) needs — `password-hash`'s
+# PHC-string machinery is never pulled in.
+argon2 = { version = "0.5.3", default-features = false, features = ["alloc", "zeroize"] }
+# Promoted from transitive (via reqwest -> rustls) to direct: AES-256-GCM for
+# the wrap file. Default features are enough for `aead`.
+ring = "0.17"
+# Promoted from transitive (via rustls/keyring) to direct: `Zeroizing` for
+# `DataKey`, the KEK, and the passphrase buffer.
+zeroize = "1"
+# Device identity (docs/SYNC_PAIRING_PROTOCOL.md "Key derivations"): Ed25519
+# signing keypair. Pinned to the 2.x line, NOT the newer 3.0 release line
+# (`cargo info` confirms 3.0.0 is latest-overall) — 3.0 moved to rand_core
+# 0.9, which is incompatible with `rand = "0.8"` (pinned above, and used
+# throughout this crate's "randomness always via OsRng" convention), whose
+# `OsRng` only implements rand_core 0.6's `RngCore`/`CryptoRng`. 2.2.0 (the
+# 2.x line's latest) still depends on rand_core 0.6, so it accepts
+# `rand::rngs::OsRng` directly. The `rand_core` feature is required to pull
+# in `SigningKey::generate`, which needs a `CryptoRngCore` bound.
+ed25519-dalek = { version = "2.2", features = ["rand_core"] }
+# Device identity: X25519 static ("box") keypair for pairing/rotation ECDH.
+# Same 2.x-not-3.0 pin as ed25519-dalek above, same reason (3.0 is on
+# rand_core 0.9). `static_secrets` enables `StaticSecret` itself — x25519-dalek
+# gates it behind a feature deliberately, to make "this secret is reused
+# across multiple ECDH calls" an opt-in rather than the default shape.
+x25519-dalek = { version = "2.0", features = ["static_secrets"] }
+# Remote Access (`crate::remote`): the gateway's self-signed TLS cert. `ring`
+# (not the default `aws_lc_rs`) so this stays on the same crypto backend
+# `reqwest`'s `rustls-tls` already resolved the workspace to (confirmed via
+# Cargo.lock: no `aws-lc-rs`/`aws-lc-sys`/`cmake` anywhere) — the default
+# feature would otherwise add a second crypto backend plus a `cmake`+C build
+# step, exactly the kind of native-toolchain risk this feature's
+# best-effort Windows/Linux scope wants to avoid.
+rcgen = { version = "0.14", default-features = false, features = ["ring", "pem", "crypto"] }
+# Remote Access: the inbound gateway server (chat-completions proxy +
+# pairing). Default features (json, tokio, http1) are enough.
+axum = "0.8"
+# Remote Access: TLS termination in front of `axum`. `tls-rustls-no-provider`
+# for the same reason as `rcgen` above — `tls-rustls` alone pulls in
+# `aws_lc_rs`/`aws-lc-sys` (a second crypto backend needing `cmake`) even
+# though `rustls` elsewhere in this workspace already resolved to `ring`.
+axum-server = { version = "0.8", default-features = false, features = ["tls-rustls-no-provider"] }
+# Remote Access: LAN discovery (`_openpal._tcp.local.`). Pure Rust, no system
+# Bonjour/Avahi dependency — works the same whether or not the OS has one.
+mdns-sd = "0.21"
+# Remote Access: direct dependency (not just transitive, via `reqwest`) so
+# `gateway.rs` can explicitly install the process-wide `ring` crypto
+# provider before serving TLS — `axum-server`'s `tls-rustls-no-provider`
+# feature deliberately doesn't install one itself, and rustls panics
+# without one installed.
+rustls = { version = "0.23", default-features = false, features = ["ring", "tls12", "std"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+# SQLCipher, split per target (`crypto::sqlcipher`): Apple links CommonCrypto
+# for free (+121 KB, zero new crates); everywhere else vendors OpenSSL
+# (+3.6 MB, two crates). `crates/app/Cargo.toml`'s bare `rusqlite` dependency
+# (once it needs one) must stay featureless — Cargo unifies features per
+# target across the workspace, so it already inherits whichever variant
+# resolves here. A second features list there, even one meant to mirror
+# this, is how vendored OpenSSL could silently land on macOS too.
+[target.'cfg(target_vendor = "apple")'.dependencies]
+rusqlite = { version = "0.40.1", features = ["bundled-sqlcipher"] }
+
+[target.'cfg(not(target_vendor = "apple"))'.dependencies]
+rusqlite = { version = "0.40.1", features = ["bundled-sqlcipher-vendored-openssl"] }
+
+[dev-dependencies]
+http-body-util = "0.1.5"
+tempfile = "3"
+tower = { version = "0.5.3", features = ["util"] }

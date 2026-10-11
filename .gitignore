@@ -1,0 +1,33 @@
+# Rust
+/target/
+
+# Node
+node_modules/
+ui/dist/
+ui/coverage/
+ui/test-results/
+ui/playwright-report/
+ui/blob-report/
+
+# Engine binaries staged by the bundler (re-fetch with: cargo run -p openpal-bundler -- fetch-engine)
+crates/app/resources/llama/*
+!crates/app/resources/llama/.gitkeep
+
+# Built-in plugin sources staged by the bundler for packaged builds
+# (re-stage with: cargo run -p openpal-bundler -- stage-plugins)
+crates/app/resources/plugins/*
+!crates/app/resources/plugins/.gitkeep
+
+# Bundler artifacts
+bundler/out/
+
+# Relay's local dev mailbox DB (RELAY_DB_PATH default: ./relay.sqlite)
+/relay.sqlite
+/relay.sqlite-*
+
+# Models are never committed
+*.gguf
+*.gguf.part
+
+# macOS
+.DS_Store

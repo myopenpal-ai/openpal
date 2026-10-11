@@ -1,0 +1,1229 @@
+{
+  "common": {
+    "cancel": "Annuler",
+    "save": "Enregistrer",
+    "close": "Fermer",
+    "favorite": "Ajouter {{name}} aux favoris",
+    "unfavorite": "Retirer {{name}} des favoris"
+  },
+  "appShell": {
+    "skipToContent": "Aller au contenu principal",
+    "openSidebar": "Ouvrir la barre latérale",
+    "closeSidebar": "Fermer la barre latérale"
+  },
+  "moreDialog": {
+    "search": {
+      "placeholder": "Rechercher un réglage",
+      "results_one": "{{count}} résultat",
+      "results_other": "{{count}} résultats",
+      "noResults": "Aucun résultat pour « {{query}} »"
+    }
+  },
+  "settingsSheet": {
+    "done": "Terminé",
+    "sections": {
+      "general": {
+        "label": "Général",
+        "subtitle": "Votre compte, la langue de l'application et les mises à jour."
+      },
+      "chat": {
+        "label": "Discussion",
+        "subtitle": "La façon dont votre assistant vous parle et ce que ses réponses affichent."
+      },
+      "model": {
+        "label": "Modèle d'IA",
+        "subtitle": "Quand votre IA se charge, comment elle fonctionne sur cet ordinateur, et l'ajout de vos propres modèles."
+      },
+      "privacy": {
+        "label": "Confidentialité et sécurité",
+        "subtitle": "Verrouillez OpenPal avec un code PIN, fixez des limites pour les enfants et obtenez de l'aide quand c'est important."
+      },
+      "devices": {
+        "label": "Appareils",
+        "subtitle": "Gardez vos discussions synchronisées et utilisez OpenPal sur vos autres appareils."
+      },
+      "data": {
+        "label": "Vos données",
+        "subtitle": "Où sont conservés vos discussions et vos réglages, et comment les sauvegarder ou repartir de zéro."
+      },
+      "advanced": {
+        "label": "Avancé",
+        "subtitle": "Des outils en plus pour les utilisateurs expérimentés. Aucun n'est nécessaire pour utiliser OpenPal."
+      }
+    },
+    "updates": {
+      "title": "Mises à jour"
+    },
+    "performance": {
+      "title": "Performances"
+    },
+    "account": {
+      "label": "Compte",
+      "signedInAs": "Connecté avec {{email}} · forfait {{tier}}.",
+      "quotaUsed": "{{used}} sur {{limit}} requêtes cloud utilisées pour cette période.",
+      "signOut": "Se déconnecter",
+      "signedOutHint": "Connectez-vous pour débloquer les modèles cloud et les fonctionnalités premium. Tout le reste continue de fonctionner exactement comme aujourd'hui, sans connexion.",
+      "signIn": "Se connecter"
+    },
+    "language": {
+      "label": "Langue"
+    },
+    "toggle": {
+      "on": "Activé",
+      "off": "Désactivé"
+    },
+    "userName": {
+      "label": "Votre nom",
+      "hint": "OpenPal l'utilise pour vous accueillir quand vous démarrez une nouvelle discussion. Laissez-le vide pour un accueil générique.",
+      "placeholder": "Saisissez votre nom"
+    },
+    "personality": {
+      "label": "Personnalité",
+      "hint": "Comment votre assistant doit-il se comporter ? Rédigé comme des instructions qu'il relit avant chaque discussion."
+    },
+    "showThinking": {
+      "label": "Afficher le raisonnement du modèle",
+      "hint": "Certains modèles raisonnent étape par étape avant de répondre. Affichez ce raisonnement dans une note repliable au-dessus de chaque réponse. Le désactiver le masque immédiatement dans les nouvelles réponses, et arrête complètement le raisonnement du modèle au prochain chargement de votre modèle, pour des réponses un peu plus rapides."
+    },
+    "generationStats": {
+      "label": "Afficher les statistiques de génération",
+      "hint": "Affiche la vitesse de chaque réponse (jetons par seconde) et sa durée totale (raisonnement et réponse compris) en petit texte en dessous."
+    },
+    "autoUnload": {
+      "label": "Chargement intelligent du modèle",
+      "hint": "Pendant que vous tapez, votre IA reste chargée (ou commence à charger si elle est en veille) pour être prête plus vite. Après un moment d'inactivité sans rien à faire, elle se décharge automatiquement pour libérer de la mémoire. Vous recevrez d'abord un avertissement, que vous pouvez annuler.",
+      "durationLabel": "Décharger après",
+      "durationAriaLabel": "Durée d'inactivité avant déchargement",
+      "min1": "1 min",
+      "max2hr": "2 h",
+      "idleMinutes_one": "{{count}} min d'inactivité",
+      "idleMinutes_other": "{{count}} min d'inactivité"
+    },
+    "autoLoadStartup": {
+      "label": "Charger le modèle au démarrage",
+      "hint": "Charge automatiquement un modèle d'IA à l'ouverture d'OpenPal (votre dernier modèle utilisé, ou le modèle par défaut fixé ci-dessous) pour qu'il soit prêt avant même que vous commenciez à taper. Désactivez cette option pour ouvrir sur une discussion inactive à la place."
+    },
+    "defaultModel": {
+      "label": "Modèle par défaut au démarrage",
+      "hint": "Le modèle qu'OpenPal charge à l'ouverture. Utiliser un autre modèle ailleurs (Bibliothèque, sélecteur de modèle) ne change que votre session en cours. Cela ne modifie pas ce réglage.",
+      "noModels": "Installez un modèle pour choisir un modèle de démarrage par défaut.",
+      "lastUsed": "Dernier modèle utilisé",
+      "lastUsedWithName": "Dernier modèle utilisé (actuellement {{name}})"
+    },
+    "voice": {
+      "title": "Voix de lecture",
+      "subtitle": "Comment sonne le module Voix lorsqu'il lit les réponses à voix haute.",
+      "notReadyHint": " Activez Voix dans les modules complémentaires pour l'entendre.",
+      "pickerLabel": "Voix",
+      "pickerHint": "Choisissez une voix, ou téléchargez-en une dans une autre langue ou un autre style.",
+      "loadingVoices": "Chargement des voix…",
+      "missingNotice": "La voix sélectionnée n'est plus installée. Choisissez-en une ci-dessous.",
+      "sampleText": "Bonjour ! Voici à quoi je ressemblerai quand je lirai vos messages à voix haute.",
+      "speed": {
+        "label": "Vitesse de parole",
+        "slow": "Plus lent",
+        "fast": "Plus rapide"
+      },
+      "liveliness": {
+        "label": "Vivacité",
+        "low": "Régulier",
+        "high": "Vif"
+      },
+      "pause": {
+        "label": "Pause entre les phrases",
+        "short": "Courte",
+        "long": "Longue"
+      },
+      "testButton": "Tester la voix",
+      "testing": "Lecture…",
+      "stop": "Arrêter",
+      "preview": "Aperçu",
+      "stopPreview": "Arrêter l'aperçu",
+      "previewName": "Aperçu de {{name}}",
+      "downloading": "Téléchargement…",
+      "download": "Télécharger"
+    },
+    "agentMode": {
+      "summary": "Outils de l'agent",
+      "hint": "Autorisez votre assistant à exécuter des commandes shell, exécuter du code et lire ou écrire des fichiers. Tout reste confiné à un dossier de votre choix, avec votre accord pour chaque action.",
+      "unavailableOnMobile": "Les outils de l'agent ne sont pas encore disponibles sur mobile.",
+      "enableLabel": "Activer les outils de l'agent",
+      "grants": {
+        "label": "Autorisations permanentes",
+        "hint": "Actions que vous avez autorisées à toujours être permises. Révoquez-en une pour redemander votre accord.",
+        "empty": "Aucune autorisation permanente pour l'instant.",
+        "revoke": "Révoquer",
+        "expires": "Expire le {{date}}"
+      }
+    },
+    "triage": {
+      "summary": "Réglages intelligents",
+      "hint": "Classe discrètement ce que vous demandez (rédaction, code, mathématiques…) pour garder des réglages de réponse adaptés. Changez un réglage vous-même à tout moment pour reprendre la main. Rien de tout ceci n'apparaît dans la discussion."
+    },
+    "safetyDetection": {
+      "summary": "Bandeau d'aide en cas de crise",
+      "hint": "Après chaque réponse, vérifie discrètement si votre message contient des signes de détresse ou d'automutilation et, le cas échéant, affiche un bandeau dans la discussion avec des moyens d'obtenir de l'aide. Vérification faite localement, sur votre Mac ; désactivez-la ici si vous préférez ne pas la voir."
+    },
+    "parentalControls": {
+      "summary": "Contrôle parental",
+      "loading": "Chargement…",
+      "hint": "Fixez des limites quotidiennes sur les moments et la durée d'utilisation d'OpenPal pour de nouveaux messages. Les conversations passées restent toujours lisibles. Seul l'envoi de nouveaux messages est mis en pause.",
+      "stateOn": "Le contrôle parental est activé.",
+      "stateOff": "Le contrôle parental est désactivé.",
+      "noLimits": "Aucune limite n'est encore activée.",
+      "limitSchedule": "Discussion autorisée de {{start}} à {{end}}.",
+      "limitUsage_one": "Jusqu'à {{count}} minute d'utilisation par jour.",
+      "limitUsage_other": "Jusqu'à {{count}} minutes d'utilisation par jour.",
+      "limitMessage_one": "Jusqu'à {{count}} message par jour.",
+      "limitMessage_other": "Jusqu'à {{count}} messages par jour.",
+      "turnOn": "Activer le contrôle parental",
+      "changeSettings": "Modifier les réglages",
+      "enterPin": "Saisissez votre code pour modifier ces réglages",
+      "wrongPin": "Ce code n'est pas le bon. Réessayez.",
+      "saving": "Enregistrement…",
+      "turnOff": "Désactiver le contrôle parental",
+      "needsLimit": "Activez au moins une limite ci-dessus.",
+      "schedule": {
+        "label": "N'autoriser la discussion qu'à certaines heures",
+        "hint": "Une heure de fin antérieure à l'heure de début couvre la nuit : de 20:00 à 07:00 autorise les soirées et les petits matins, et bloque la journée.",
+        "from": "De",
+        "to": "à",
+        "startAria": "Début de la plage autorisée",
+        "endAria": "Fin de la plage autorisée"
+      },
+      "usage": {
+        "label": "Limiter le temps passé ici chaque jour",
+        "hint": "Une fois le temps du jour écoulé, l'envoi est mis en pause jusqu'à demain.",
+        "minutesLabel": "Minutes par jour"
+      },
+      "message": {
+        "label": "Limiter le nombre de messages envoyés chaque jour",
+        "hint": "Une fois les messages du jour épuisés, l'envoi est mis en pause jusqu'à demain.",
+        "countLabel": "Messages par jour"
+      },
+      "pin": {
+        "createLabel": "Choisissez un code",
+        "createHint": "Ce code vous sera demandé pour modifier ou désactiver le contrôle parental plus tard.",
+        "changeLabel": "Changer le code",
+        "changeHint": "Choisir un nouveau code remplace l'actuel.",
+        "enterNew": "Choisissez un nouveau code",
+        "confirmNew": "Confirmez votre nouveau code",
+        "newPinSet": "Nouveau code défini. Enregistrez pour l'appliquer.",
+        "mismatch": "Les deux codes ne correspondent pas.",
+        "lockedFor": "Trop de tentatives. Réessayez dans {{seconds}}s."
+      }
+    },
+    "customModels": {
+      "label": "Ajouter vos propres modèles",
+      "hint": "Affiche en bas de la page Modèles un moyen d'ajouter d'autres modèles que nos sélections, depuis un lien Hugging Face ou un fichier .gguf sur votre ordinateur. Les modèles déjà ajoutés restent disponibles dans tous les cas."
+    },
+    "diagnostics": {
+      "summary": "Journaux et diagnostics",
+      "upToDate": "Vous êtes à jour.",
+      "clearedLogs_one": "{{count}} ancien fichier journal supprimé.",
+      "clearedLogs_other": "{{count}} anciens fichiers journaux supprimés.",
+      "logLevel": {
+        "label": "Niveau de détail",
+        "hint": "La quantité d'informations qu'OpenPal consigne dans son journal. Plus de détails aident quand quelque chose ne va pas et que vous voulez expliquer ce qui s'est passé. Prend effet la prochaine fois que vous ouvrez OpenPal.",
+        "error": "Erreurs uniquement",
+        "warn": "Avertissements",
+        "info": "Normal",
+        "debug": "Détaillé",
+        "trace": "Tout"
+      },
+      "forceCpu": {
+        "label": "Exécuter uniquement sur le processeur",
+        "hint": "Ignore la carte graphique et exécute le modèle sur votre processeur. Essayez ceci si l'app plante ou se bloque au début d'une réponse, car certains pilotes GPU ne sont pas fiables. C'est généralement plus lent, et prend effet au prochain chargement de votre modèle."
+      },
+      "diskOffload": {
+        "label": "Exécuter d'énormes modèles depuis le disque",
+        "hint": "Permet aux modèles d'IA trop volumineux pour tenir en mémoire de fonctionner quand même, en lisant directement depuis votre stockage. Cela fonctionne pour certains modèles, mais les réponses peuvent prendre plusieurs minutes. N'activez ceci que si l'attente ne vous dérange pas."
+      },
+      "autoUnloadDiskSlow": {
+        "label": "Décharger aussi automatiquement les modèles diffusés depuis le disque",
+        "hint": "Désactivé par défaut : un modèle exécuté depuis le disque utilise déjà à peine votre mémoire graphique, et le recharger peut prendre plusieurs minutes. Cela ne vaut généralement pas la peine de le décharger. Activez ceci si vous préférez récupérer la mémoire."
+      },
+      "updates": {
+        "label": "Mises à jour d'OpenPal",
+        "hint": "OpenPal {{version}}. Une fois activé, OpenPal contacte brièvement github.com après chaque lancement pour vérifier une nouvelle version. Aucune autre donnée n'est envoyée. Désactivé par défaut.",
+        "unavailableOnMobile": "Les mises à jour de cette application passent par le Play Store.",
+        "checking": "Vérification…",
+        "checkNow": "Vérifier les mises à jour maintenant"
+      },
+      "engineUpdates": {
+        "label": "Mises à jour du moteur IA",
+        "hint": "Le moteur IA (llama.cpp) est mis à jour plus souvent qu'OpenPal lui-même, et le mettre à jour peut ajouter la prise en charge de nouveaux modèles. Une fois activé, OpenPal contacte brièvement github.com après chaque lancement pour vérifier une nouvelle version. Aucune autre donnée n'est envoyée. Désactivé par défaut.",
+        "checking": "Vérification…",
+        "checkNow": "Vérifier les mises à jour du moteur maintenant",
+        "install": "Mettre à jour vers {{tag}}",
+        "installing": "Installation…",
+        "installed": "Installé. Redémarrez l'IA pour l'utiliser."
+      },
+      "dataDir": {
+        "label": "Où se trouvent vos données",
+        "hint": "Le dossier contenant vos discussions, modèles et réglages.",
+        "portableHint": " Il s'agit d'une copie portable, donc tout reste dans ce dossier."
+      },
+      "exportData": {
+        "label": "Exporter vos données",
+        "hint": "Enregistrez un .zip de tout ce qui est stocké sur cet appareil (discussions, projets et fichiers créés par l'IA) sous forme de fichiers ordinaires que vous pouvez ouvrir sans OpenPal.",
+        "button": "Exporter les données…",
+        "exporting": "Exportation…",
+        "done": "{{conversations}} discussion(s), {{projects}} projet(s) et {{artifacts}} fichier(s) exportés.",
+        "doneWithSkipped": "{{conversations}} discussion(s), {{projects}} projet(s) et {{artifacts}} fichier(s) exportés, mais {{skipped}} fichier(s) n'ont pas pu être inclus."
+      },
+      "importData": {
+        "label": "Importer depuis un autre appareil",
+        "hint": "Choisissez un fichier .zip exporté depuis OpenPal sur un autre appareil (ou un export précédent sur celui-ci) pour y récupérer ses discussions, projets et fichiers.",
+        "button": "Importer des données…",
+        "importing": "Importation…",
+        "done": "{{conversations}} discussion(s), {{projects}} projet(s) et {{artifacts}} fichier(s) importés.",
+        "doneWithSkipped": "{{conversations}} discussion(s), {{projects}} projet(s) et {{artifacts}} fichier(s) importés, mais {{skipped}} fichier(s) n'ont pas pu être inclus."
+      },
+      "logs": {
+        "label": "Journaux récents",
+        "hint": "Les lignes les plus récentes enregistrées par OpenPal. Tout élément sensible est masqué automatiquement.",
+        "tabApp": "Appli",
+        "tabEngine": "Moteur d'IA",
+        "loading": "Chargement…",
+        "empty": "Aucun journal pour l'instant.",
+        "refresh": "Actualiser",
+        "copied": "Copié !",
+        "copy": "Copier",
+        "exportLogs": "Exporter les journaux",
+        "exported": "Journaux exportés.",
+        "clear": "Supprimer les anciens journaux"
+      }
+    },
+    "sync": {
+      "summary": "Synchronisation",
+      "create": {
+        "label": "Créer un groupe de synchronisation",
+        "hint": "Créez un nouveau groupe de synchronisation sur cet appareil, puis ajoutez-y vos autres appareils.",
+        "labelPlaceholder": "p. ex. Mon ordinateur portable",
+        "button": "Créer le groupe",
+        "creating": "Création…",
+        "doneLabel": "Groupe de synchronisation créé",
+        "saveWarning": "Enregistrez-le en lieu sûr. Vous en aurez besoin pour ajouter un autre appareil, et il ne sera plus jamais affiché.",
+        "copy": "Copier",
+        "copied": "Copié !",
+        "done": "Terminé"
+      },
+      "join": {
+        "label": "Rejoindre un groupe existant",
+        "hint": "Vous avez déjà créé un groupe de synchronisation sur un autre appareil ? Rejoignez-le depuis ici.",
+        "button": "Rejoindre un groupe…"
+      },
+      "devices": {
+        "label": "Appareils de ce groupe",
+        "thisDevice": "Cet appareil",
+        "remove": "Retirer",
+        "removeConfirm": "Retirer « {{label}} » de ce groupe de synchronisation ? Il perdra l'accès, et la clé partagée sera renouvelée pour tous les autres appareils.",
+        "removeButton": "Retirer l'appareil",
+        "removing": "Retrait…"
+      },
+      "addDevice": "Ajouter un appareil…",
+      "dataSync": {
+        "label": "Synchroniser les discussions",
+        "hint": "Gardez vos discussions à jour sur tous les appareils que vous avez associés ci-dessus.",
+        "relayUrl": {
+          "label": "Serveur de synchronisation (facultatif)",
+          "placeholder": "Laissez vide pour utiliser le serveur par défaut",
+          "hint": "À modifier uniquement si vous hébergez votre propre serveur de synchronisation. La plupart des personnes peuvent laisser ce champ vide."
+        }
+      }
+    },
+    "experimental": {
+      "summary": "Fonctionnalités expérimentales",
+      "hint": "Débloque des fonctionnalités et des plugins encore en test. Ils peuvent changer, mal fonctionner ou disparaître.",
+      "enableLabel": "Activer les fonctionnalités expérimentales",
+      "disableDialog": {
+        "title": "Désactiver les fonctionnalités expérimentales ?",
+        "body": "Ces fonctionnalités expérimentales sont activées et cesseront de fonctionner : {{features}}. Elles seront rétablies telles quelles si vous réactivez les fonctionnalités expérimentales.",
+        "confirm": "Désactiver"
+      }
+    }
+  },
+  "sidebar": {
+    "resizeHandle": "Redimensionner la barre latérale",
+    "newChat": "Nouvelle discussion",
+    "conversationsAriaLabel": "Conversations",
+    "emptyState": "Vos discussions apparaîtront ici.",
+    "searchPlaceholder": "Rechercher dans les discussions",
+    "clearSearch": "Effacer la recherche",
+    "noSearchResults": "Aucune discussion correspondante.",
+    "search": "Rechercher dans les discussions",
+    "searchView": {
+      "hint": "La recherche parcourt les titres des discussions et tous leurs messages.",
+      "recent": "Récentes",
+      "conversations": "Discussions",
+      "resultCount_one": "{{count}} discussion correspondante",
+      "resultCount_other": "{{count}} discussions correspondantes"
+    },
+    "selectConversations": "Sélectionner des discussions",
+    "selectConversation": "Sélectionner « {{title}} »",
+    "selectAll": "Sélectionner toutes les discussions",
+    "deselectAll": "Désélectionner toutes les discussions",
+    "selectedCount_one": "{{count}} sélectionnée",
+    "selectedCount_other": "{{count}} sélectionnées",
+    "deleteSelected": "Supprimer les discussions sélectionnées",
+    "deleteConfirm": {
+      "title": "Supprimer la discussion ?",
+      "message": "Supprimer « {{title}} » ? Cette action est irréversible.",
+      "messageMany_one": "Supprimer {{count}} discussion ? Cette action est irréversible.",
+      "messageMany_other": "Supprimer {{count}} discussions ? Cette action est irréversible.",
+      "confirmButton": "Supprimer"
+    },
+    "rowMenu": {
+      "ariaLabel": "Plus d'actions pour « {{title}} »",
+      "addToProject": "Ajouter à un projet",
+      "pin": "Épingler",
+      "unpin": "Désépingler",
+      "rename": "Renommer",
+      "delete": "Supprimer"
+    },
+    "pinned": "Épinglées",
+    "projects": "Projets",
+    "newProject": "Nouveau projet",
+    "newProjectPlaceholder": "Nom du projet",
+    "moveToProject": "Déplacer vers un projet",
+    "noProject": "Aucun projet",
+    "expandProject": "Développer « {{name}} »",
+    "collapseProject": "Réduire « {{name}} »",
+    "renameProject": "Renommer « {{name}} »",
+    "deleteProjectAriaLabel": "Supprimer « {{name}} »",
+    "deleteProjectConfirm": {
+      "title": "Supprimer « {{name}} » ?",
+      "message_one": "Ce projet contient {{count}} discussion. La supprimer avec le projet, ou la conserver en la retirant simplement du projet ?",
+      "message_other": "Ce projet contient {{count}} discussions. Les supprimer avec le projet, ou les conserver en les retirant simplement du projet ?",
+      "messageEmpty": "Supprimer « {{name}} » ? Cette action est irréversible.",
+      "keepConversations": "Conserver les discussions",
+      "deleteConversations": "Supprimer aussi les discussions",
+      "confirmButton": "Supprimer"
+    },
+    "emptyProject": "Aucune discussion dans ce projet pour l'instant.",
+    "more": "Plus",
+    "models": "Modèles",
+    "browse": "Parcourir",
+    "plugins": "Modules",
+    "skills": "Compétences",
+    "account": "Compte",
+    "signedInAs": "Connecté en tant que {{email}}",
+    "signIn": "Connexion",
+    "settings": "Réglages",
+    "appVersion": "v{{version}}",
+    "engine": {
+      "ready": "Prêt",
+      "warmingUp": "Préchauffage…",
+      "warmingUpPercent": "Préchauffage… {{percent}} %",
+      "warmingUpSlow": "Préchauffage… modèle énorme, peut prendre plusieurs minutes",
+      "needsAttention": "Nécessite votre attention (cliquez pour réessayer)",
+      "asleep": "En veille",
+      "noModelInstalled": "Aucun modèle installé pour l'instant",
+      "remoteUnpaired": "Jumelez un ordinateur pour discuter",
+      "remoteUnreachable": "Impossible de joindre {{name}} (cliquez pour vérifier)",
+      "remotePairedIdle": "Jumelé, mais aucun modèle n'est chargé sur l'ordinateur",
+      "waitForReply": "Attendez la fin de la réponse avant de décharger",
+      "unloadTitle": "Décharger le modèle et arrêter llama.cpp",
+      "unload": "Décharger",
+      "loadTitle": "Charger le modèle et démarrer llama.cpp",
+      "load": "Charger"
+    }
+  },
+  "chatToolbar": {
+    "conversationSettings": "Paramètres de la conversation",
+    "stats": {
+      "messages_one": "message",
+      "messages_other": "messages",
+      "contextTokens": "jetons de contexte"
+    },
+    "generation": {
+      "title": "Génération",
+      "resetToDefaults": "Réinitialiser aux valeurs par défaut",
+      "hint": "Comment votre IA choisit les prochains mots pour cette discussion. Les valeurs par défaut correspondent à celles de llama.cpp. Ne les modifiez que si vous savez ce qu'elles font.",
+      "cloudContextHint": " La longueur du contexte n'est pas affichée ici, car c'est un réglage fixe et partagé du modèle en ligne.",
+      "autoSuggested": "Valeurs par défaut suggérées pour {{model}}. Modifiez-les librement. Vos changements sont enregistrés avec cette discussion."
+    },
+    "contextLength": {
+      "label": "Longueur du contexte",
+      "hint": "La quantité de cette conversation que votre IA peut garder en mémoire à la fois. Plus c'est grand, plus cela utilise de RAM. Modifier ceci recharge l'IA, ce qui prend un moment, et si vous la réduisez, l'IA risque de perdre le fil des débuts de cette discussion.",
+      "tokensOption_one": "{{value}} jeton",
+      "tokensOption_other": "{{value}} jetons",
+      "restartHint": "Ne s'appliquera qu'au redémarrage de votre modèle.",
+      "restartButton": "Redémarrer le modèle pour appliquer"
+    },
+    "cloudNoParamsHint": "Ce modèle n'a pas encore indiqué quels réglages de génération il prend en charge, donc aucun n'est affiché pour éviter d'en envoyer un qu'il rejetterait.",
+    "sliders": {
+      "temperature": {
+        "label": "Créativité (température)",
+        "hint": "À gauche : concentré et précis. À droite : ludique et imaginatif.",
+        "left": "Concentré",
+        "right": "Imaginatif"
+      },
+      "topP": {
+        "label": "Échantillonnage par noyau (Top P)",
+        "hint": "Ne considère que le plus petit groupe de mots probables dont les probabilités additionnées atteignent cette part. Plus c'est bas, plus les choix sont restreints ; 1,0 désactive cette option.",
+        "left": "Restreint",
+        "right": "Large"
+      },
+      "topK": {
+        "label": "Top K",
+        "hint": "Ne considère que ce nombre de mots les plus probables. 0 désactive cette option.",
+        "left": "Désactivé",
+        "right": "Souple"
+      },
+      "minP": {
+        "label": "Min P",
+        "hint": "Écarte les mots bien moins probables que le meilleur choix. 0 désactive cette option.",
+        "left": "Désactivé",
+        "right": "Strict"
+      },
+      "repeatPenalty": {
+        "label": "Pénalité de répétition",
+        "hint": "Décourage la répétition des mêmes mots. 1,0 désactive cette option.",
+        "left": "Désactivé",
+        "right": "Forte"
+      },
+      "repeatLastN": {
+        "label": "Fenêtre de pénalité de répétition",
+        "hint": "Nombre de mots récents pris en compte par la pénalité de répétition. 0 désactive cette option.",
+        "left": "Désactivé",
+        "right": "Mémoire longue"
+      },
+      "presencePenalty": {
+        "label": "Pénalité de présence",
+        "hint": "Pousse le modèle à aborder de nouveaux sujets plutôt que de s'en tenir à ceux déjà mentionnés.",
+        "left": "Désactivé",
+        "right": "Forte"
+      },
+      "frequencyPenalty": {
+        "label": "Pénalité de fréquence",
+        "hint": "Éloigne le modèle des mots qu'il a déjà beaucoup utilisés dans cette réponse.",
+        "left": "Désactivé",
+        "right": "Forte"
+      }
+    },
+    "maxTokens": {
+      "label": "Longueur maximale de la réponse",
+      "hint": "Limite le nombre de mots (jetons) que peut contenir une réponse. Les réponses plus longues utilisent plus de mémoire et prennent plus de temps.",
+      "noLimit": "Sans limite"
+    },
+    "seed": {
+      "label": "Graine",
+      "hint": "Fixez ceci pour obtenir la même réponse à la même question à chaque fois (utile pour les tests).",
+      "random": "Aléatoire"
+    },
+    "advanced": {
+      "summary": "Avancé"
+    }
+  },
+  "autoUnloadBanner": {
+    "unloadingIn": "Déchargement de votre IA dans {{seconds}}s pour libérer de la mémoire.",
+    "announce": "Votre IA va bientôt être déchargée pour libérer de la mémoire.",
+    "dismiss": "Ignorer (votre IA se déchargera quand même)"
+  },
+  "signInDialog": {
+    "title": "Connexion",
+    "waitingHint": "Terminez la connexion dans votre navigateur, puis revenez ici.",
+    "tryAgain": "Réessayer"
+  },
+  "pairingDialog": {
+    "compareHint": "Vérifiez que ce code correspond bien sur les deux écrans avant de continuer.",
+    "confirm": "Confirmer",
+    "reject": "Refuser",
+    "tryAgain": "Réessayer",
+    "expired": "Cette demande a expiré avant d'être confirmée. Veuillez réessayer.",
+    "addDevice": {
+      "title": "Ajouter un appareil",
+      "waitingHint": "Sur le nouvel appareil, choisissez « Rejoindre un groupe existant », puis revenez ici.",
+      "listening": "En attente d'un appareil qui souhaite rejoindre…",
+      "incomingHint": "« {{deviceLabel}} » souhaite rejoindre ce groupe de synchronisation."
+    },
+    "joinGroup": {
+      "title": "Rejoindre un groupe de synchronisation",
+      "hint": "Saisissez le code de synchronisation de votre autre appareil, ainsi qu'un nom pour celui-ci.",
+      "secretLabel": "Code de synchronisation",
+      "labelLabel": "Nom de cet appareil",
+      "joinButton": "Rejoindre",
+      "connecting": "Connexion…",
+      "awaitingOtherDevice": "En attente de la confirmation de l'autre appareil…",
+      "readyPrompt": "Les codes correspondent sur les deux écrans. Terminer l'ajout ?",
+      "finishButton": "Terminer l'ajout"
+    }
+  },
+  "updateDialog": {
+    "title": "Mise à jour disponible",
+    "readyToInstall": "OpenPal {{version}} est prêt à être installé.",
+    "progressOf": "{{received}} sur {{total}}",
+    "progressAriaLabel": "Installation de la mise à jour",
+    "skip": "Ignorer cette version",
+    "later": "Plus tard",
+    "installing": "Installation…",
+    "tryAgain": "Réessayer",
+    "updateAndRestart": "Mettre à jour et redémarrer"
+  },
+  "plugins": {
+    "title": "Modules",
+    "subtitle": "Les modules étendent ce que votre assistant peut faire, comme parcourir des modèles Hugging Face ou lire les réponses à voix haute. Activez-en un et il se configure tout seul ; tout continue de fonctionner sur votre Mac.",
+    "empty": "Aucun module n'est encore installé.",
+    "disable": "Désactiver",
+    "enable": "Activer",
+    "versionByAuthor": "v{{version}} · par {{author}}",
+    "setupProgressAriaLabel": "Configuration de {{name}}",
+    "retry": "Réessayer",
+    "experimental": "Expérimental",
+    "service": {
+      "running": "En cours",
+      "starting": "Démarrage…",
+      "stopped": "Arrêté",
+      "failed": "Échec du service"
+    },
+    "names": {
+      "smartModelRouter": "Routeur de modèles intelligent"
+    }
+  },
+  "format": {
+    "timeAgo": {
+      "justNow": "à l'instant",
+      "minAgo_one": "il y a {{count}} min",
+      "minAgo_other": "il y a {{count}} min",
+      "hourAgo_one": "il y a une heure",
+      "hourAgo_other": "il y a {{count}} heures",
+      "yesterday": "hier",
+      "daysAgo_one": "il y a {{count}} jour",
+      "daysAgo_other": "il y a {{count}} jours"
+    },
+    "recencyBucket": {
+      "today": "Aujourd'hui",
+      "thisWeek": "Cette semaine",
+      "thisMonth": "Ce mois-ci",
+      "older": "Plus ancien"
+    },
+    "eta": {
+      "almostDone": "presque terminé",
+      "underMinute": "moins d'une minute restante",
+      "aboutMinute": "environ une minute restante",
+      "minutesLeft_one": "environ {{count}} minute restante",
+      "minutesLeft_other": "environ {{count}} minutes restantes",
+      "hoursLeft_one": "environ une heure restante",
+      "hoursLeft_other": "environ {{count}} heures restantes"
+    },
+    "tokensPerSec": {
+      "fast_one": "environ {{count}} jeton par seconde",
+      "fast_other": "environ {{count}} jetons par seconde",
+      "medium_one": "environ {{count}} jeton par seconde",
+      "medium_other": "environ {{count}} jetons par seconde",
+      "veryLongWait": "si lent qu'une réponse courte pourrait prendre plus d'une heure",
+      "longWait_one": "très lent (une réponse courte pourrait prendre {{count}} minute ou plus)",
+      "longWait_other": "très lent (une réponse courte pourrait prendre {{count}} minutes ou plus)",
+      "slow": "lent (attendez-vous à patienter plusieurs minutes pour chaque réponse)"
+    },
+    "tokensPerSecCompact": {
+      "fast_one": "{{count}} jeton/s",
+      "fast_other": "{{count}} jetons/s",
+      "medium_one": "{{count}} jeton/s",
+      "medium_other": "{{count}} jetons/s",
+      "slow": "< 1 jeton/s"
+    },
+    "fitLabel": {
+      "perfect": "Parfaitement adapté",
+      "good": "Bien adapté",
+      "tight": "Un peu juste",
+      "diskSlow": "S'exécute lentement depuis le disque",
+      "tooBig": "Trop volumineux pour ce Mac"
+    },
+    "roughFitLabel": {
+      "no": "Ne devrait pas fonctionner",
+      "yes": "Devrait fonctionner"
+    },
+    "architecture": {
+      "moe": "MoE",
+      "dense": "Dense"
+    },
+    "paramsActive": "{{total}} ({{active}} actifs)"
+  },
+  "onboarding": {
+    "welcome": {
+      "headline1": "Votre IA à vous.",
+      "headline2": "Privée, gratuite, et",
+      "headline3": "juste ici, sur votre Mac.",
+      "perks": [
+        "Aucun compte n'est nécessaire pour commencer.",
+        "Tout reste sur ce Mac.",
+        "Vos conversations restent les vôtres."
+      ],
+      "note": "NB : des fonctionnalités comme la recherche web et les outils de l'agent peuvent interagir avec des services externes et risquent d'exposer une partie des données de votre session. Vous pouvez désactiver ces options dans les Réglages.",
+      "start": "Configurons tout ça"
+    },
+    "name": {
+      "title": "Comment devons-nous vous appeler ?",
+      "sub": "Ce nom sert uniquement à personnaliser votre accueil.",
+      "label": "Votre nom",
+      "placeholder": "Saisissez votre nom",
+      "continue": "Continuer"
+    },
+    "scan": {
+      "title": "D'abord, voyons ce que votre Mac sait faire.",
+      "chip": "Puce",
+      "memory": "Mémoire",
+      "graphics": "Graphismes",
+      "graphicsReady": "Prêt pour l'IA",
+      "graphicsStandard": "Standard",
+      "freeSpace": "Espace libre",
+      "showMatch": "Voir ma recommandation",
+      "loading": "On jette un coup d'œil…"
+    },
+    "recommend": {
+      "madeForMac": "Fait pour votre Mac",
+      "byPublisher": "par {{publisher}}",
+      "useModel": "Utiliser {{name}}",
+      "download": "Télécharger · {{size}}",
+      "hideAlternatives": "Masquer les autres options",
+      "pickDifferent": "Choisir un autre modèle",
+      "recommendedTag": "Recommandé",
+      "reassure": "Vous pourrez changer de modèle à tout moment.",
+      "preparing": "Préparation de votre recommandation…"
+    },
+    "download": {
+      "failedTitle": "Hmm, ça n'a pas abouti.",
+      "tryAgain": "Réessayer",
+      "goBack": "Retour",
+      "bringingHome": "Téléchargement de {{name}} en cours…",
+      "progressOf": "{{received}} sur {{total}}",
+      "reassure": "N'hésitez pas à faire autre chose. On continue en arrière-plan.",
+      "needsNudgeTitle": "Il a besoin d'un coup de pouce.",
+      "wakingTitle": "Réveil en cours…",
+      "loadingIntoMemory": "Chargement de {{name}} en mémoire. Un instant."
+    },
+    "skipStep": "Passer cette étape",
+    "skipSetup": "Passer la configuration",
+    "skipConfirm": {
+      "title": "Passer la configuration ?",
+      "noModel": "Vous ne pourrez pas discuter tant que vous n'aurez pas choisi de modèle, mais vous pouvez le faire à tout moment dans Modèles.",
+      "downloading": "Le téléchargement de votre modèle sera interrompu. Vous pourrez le reprendre à tout moment dans Modèles, mais vous ne pourrez pas discuter tant qu'aucun modèle n'est prêt.",
+      "modelReady": "Votre modèle est installé. Il ne reste qu'un code PIN facultatif et la vérification des mises à jour. Vous les retrouverez plus tard dans les Réglages."
+    },
+    "ready": {
+      "allSet": "Tout est prêt.",
+      "yourAi": "Votre IA",
+      "awake": "{{name}} est réveillé et à l'écoute. Il fonctionne entièrement sur votre Mac, même sans connexion internet.",
+      "almostThere": "On y est presque.",
+      "noModel": "Choisissez un modèle dans Modèles quand vous voudrez, et vous pourrez commencer à discuter. Une fois téléchargé, il fonctionne sur votre Mac, même sans connexion internet.",
+      "downloadStopped": "Votre téléchargement a été interrompu. Reprenez-le dans Modèles quand vous voudrez, et vous pourrez commencer à discuter.",
+      "updateChoice": "Vérifier github.com pour de nouvelles versions après chaque lancement (désactivé par défaut ; modifiable à tout moment dans les Réglages)",
+      "sayHello": "Dire bonjour",
+      "getStarted": "Commencer"
+    }
+  },
+  "appLock": {
+    "gate": {
+      "pinTitle": "Saisissez votre code PIN",
+      "attemptsRemaining_one": "Il vous reste {{count}} tentative avant de pouvoir utiliser votre code de récupération.",
+      "attemptsRemaining_other": "Il vous reste {{count}} tentatives avant de pouvoir utiliser votre code de récupération.",
+      "wrongPin": "Ce code PIN n'est pas le bon.",
+      "lockedFor": "Réessayez dans {{seconds}} s",
+      "recoveryTitle": "Utilisez plutôt votre code de récupération",
+      "recoveryIntro": "Trop de tentatives. Saisissez le code de récupération que vous avez enregistré pour revenir dans l'application et désactiver le code PIN.",
+      "recoveryInputLabel": "Code de récupération",
+      "recoveryInputPlaceholder": "ABCDE-FGHJK-MNPQR-STVWX-YZ",
+      "recoveryButton": "Déverrouiller",
+      "recoveryConfirming": "Vérification de votre code…",
+      "recoveryError": "Impossible de déverrouiller : {{message}}",
+      "resetTitle": "Tout effacer et repartir à zéro",
+      "eraseLink": "Impossible de vous reconnecter ? Effacez tout et repartez à zéro"
+    },
+    "reset": {
+      "warning": "Cette action supprime définitivement toutes les conversations, tous les projets, tous les réglages et toutes les compétences. Les modèles téléchargés sont conservés. Cette action est irréversible.",
+      "instruction": "Tapez {{phrase}} pour confirmer",
+      "confirmButton": "Tout effacer",
+      "working": "Traitement en cours…"
+    },
+    "onboarding": {
+      "offerTitle": "Ajouter un code PIN ?",
+      "offerBody": "Vous avez déjà enregistré un code de récupération plus tôt. Il vous permettra de revenir dans l'application si jamais vous oubliez ce code PIN. Vous pourrez en ajouter un plus tard dans les Réglages.",
+      "setPinButton": "Définir un code PIN",
+      "createPinTitle": "Choisissez un code PIN",
+      "confirmPinTitle": "Confirmez votre code PIN",
+      "backButton": "Retour",
+      "pinMismatch": "Les codes PIN ne correspondent pas."
+    },
+    "settings": {
+      "summary": "Verrouillage de l'application",
+      "hint": "Demander un code PIN à chaque démarrage d'OpenPal.",
+      "stateOn": "Activé",
+      "stateOff": "Désactivé",
+      "turnOn": "Activer",
+      "changeSettings": "Changer le code PIN",
+      "turnOff": "Désactiver",
+      "saving": "Enregistrement…",
+      "enterPin": "Saisissez votre code PIN",
+      "resetBanner": "Votre code PIN a été désactivé après avoir utilisé votre code de récupération pour revenir dans l'application. Définissez-en un nouveau ci-dessous, ou laissez-le désactivé.",
+      "pin": {
+        "wrongPin": "Ce code PIN n'est pas le bon.",
+        "lockedFor": "Réessayez dans {{seconds}} s",
+        "createLabel": "Définir un code PIN",
+        "changeLabel": "Changer le code PIN",
+        "createHint": "Choisissez un code PIN facile à retenir. Vous pourrez toujours revenir dans l'application avec votre code de récupération si vous l'oubliez.",
+        "changeHint": "Choisissez un nouveau code PIN, ou laissez les choses telles quelles et enregistrez simplement.",
+        "newPinSet": "Nouveau code PIN défini. Enregistrez pour l'appliquer.",
+        "enterNew": "Saisissez un nouveau code PIN",
+        "confirmNew": "Confirmez votre nouveau code PIN",
+        "mismatch": "Les codes PIN ne correspondent pas."
+      },
+      "dangerZone": {
+        "summary": "Zone dangereuse",
+        "eraseButton": "Effacer toutes les données et repartir à zéro"
+      }
+    }
+  },
+  "discover": {
+    "title": "Parcourir Hugging Face",
+    "subtitle": "Recherchez les modèles GGUF tendance sur Hugging Face, directement ici. Ouvrez-en un, choisissez un fichier, et il se télécharge comme n'importe quel autre modèle de votre bibliothèque.",
+    "searchPlaceholder": "Rechercher des modèles…",
+    "searchLabel": "Rechercher des modèles",
+    "sortLabel": "Trier par",
+    "sort": {
+      "trending": "Tendance",
+      "downloads": "Les plus téléchargés",
+      "likes": "Les plus aimés",
+      "lastModified": "Récemment mis à jour"
+    },
+    "fitToggle": "N'afficher que les modèles adaptés à mon Mac",
+    "looking": "Recherche…",
+    "emptyResults": "Aucun modèle GGUF ne correspond. Essayez une autre recherche.",
+    "emptyFitting": "Aucun de ces résultats n'est estimé compatible avec votre Mac. Essayez de charger plus de résultats, de lancer une autre recherche, ou désactivez la case pour tout voir.",
+    "loadingMore": "Chargement de plus de résultats…",
+    "gatedBadge": "Restreint",
+    "fitEstimateHint": "estimation",
+    "backToBrowse": "← Retour à la recherche",
+    "byOwner": "par {{owner}}",
+    "gatedNotice": "Ce modèle nécessite d'accepter une licence sur huggingface.co, donc OpenPal ne peut pas encore le télécharger.",
+    "downloadsCount": "⬇ {{count}} téléchargements",
+    "contextNote": "Hugging Face indique une fenêtre de contexte de {{count}} jetons, mais OpenPal exécute les modèles que vous ajoutez ici avec 8 192 jetons.",
+    "openOnHf": "Ouvrir sur huggingface.co",
+    "loadingGeneric": "Chargement…",
+    "modelCardSummary": "Fiche du modèle",
+    "noModelCard": "Pas encore de fiche pour ce modèle.",
+    "filesHeading": "Fichiers",
+    "filesCount_one": "{{count}} fichier",
+    "filesCount_other": "{{count}} fichiers",
+    "moeUncertain": "impossible de vérifier le statut MoE (estimation prudente affichée)",
+    "longAnswerEstimate": "{{speed}} · une longue réponse prendrait environ {{duration}}",
+    "addedBadge": "✓ Ajouté",
+    "adding": "Ajout…",
+    "addToLibrary": "Ajouter à la bibliothèque",
+    "seeInLibrary": "Le voir dans votre bibliothèque de modèles →"
+  },
+  "library": {
+    "title": "Modèles",
+    "subtitle": "Chaque modèle vit et fonctionne entièrement sur votre Mac. Choisissez celui qui vous convient. En changer ne prend que quelques secondes.",
+    "showInFinder": "Afficher les téléchargements dans le Finder",
+    "otherModelsHeading": "Tous les modèles",
+    "availableRam": "Mémoire disponible : {{ram}}",
+    "list": {
+      "quantCount_one": "{{count}} quantification",
+      "quantCount_other": "{{count}} quantifications",
+      "quantsAriaLabel": "Afficher les {{count}} quantifications de {{name}}",
+      "curatedFlag": "Défaut OpenPal",
+      "curatedFlagTitle": "Un des modèles par défaut présélectionnés par OpenPal",
+      "searchPlaceholder": "Rechercher un modèle",
+      "searchAriaLabel": "Rechercher un modèle par nom, auteur ou quantification",
+      "filtersAriaLabel": "Filtrer les modèles",
+      "filter": {
+        "all": "Tous",
+        "installed": "Installés",
+        "compatible": "Compatibles"
+      },
+      "sortLabel": "Trier par",
+      "sort": {
+        "recommended": "Recommandé",
+        "name": "Nom",
+        "size": "Taille",
+        "speed": "Vitesse"
+      },
+      "count_one": "{{count}} modèle",
+      "count_other": "{{count}} modèles",
+      "emptyFiltered": "Aucun modèle ne correspond à votre recherche.",
+      "resetFilters": "Effacer la recherche et les filtres",
+      "moreActionsAriaLabel": "Plus d'actions pour {{name}}",
+      "fitInfo": {
+        "label": "Que signifient les icônes de compatibilité ?",
+        "heading": "Est-ce que ça tourne sur ce Mac ?",
+        "perfect": "Tient avec de la mémoire en réserve. L'éclair signale les plus rapides.",
+        "good": "Tient dans votre mémoire et fonctionne bien.",
+        "tight": "Tient, mais tout juste. Vos autres applications s'en ressentiront.",
+        "diskSlow": "Ne tient pas dans votre mémoire. Il reste utilisable, en lisant depuis votre disque pendant qu'il répond, mais c'est bien plus lent.",
+        "tooBig": "Demande plus de mémoire que n'en a ce Mac."
+      },
+      "quantInfo": {
+        "label": "Qu'est-ce qu'une quantification ?",
+        "heading": "Les quantifications",
+        "body": "Le même modèle, compressé plus ou moins fort, un peu comme enregistrer une photo dans une taille de fichier plus petite. Une version plus petite occupe moins de mémoire et répond plus vite ; une plus grande conserve un peu plus de qualité.",
+        "naming": "Les noms indiquent simplement le niveau de compression : Q4 est plus compressé que Q8. Dans le doute, prenez celle qui convient le mieux à votre Mac."
+      }
+    },
+    "cloudModelsHeading": "Modèles en ligne",
+    "byPublisher": "par {{publisher}}",
+    "inUse": "✓ Utilisé",
+    "goToChat": "Aller à la discussion",
+    "useThisModel": "Utiliser ce modèle",
+    "requiresPlan": "Nécessite l'offre {{tier}}.",
+    "signInToUnlock": "Connectez-vous pour débloquer",
+    "pickerEmpty": "Aucune de nos sélections ne convient encore à ce Mac. Parcourez Hugging Face dans Découvrir, ou activez « Ajouter vos propres modèles » dans Réglages → Modèle d'IA.",
+    "sliderAriaLabel": "Modèle : vitesse contre intelligence",
+    "fastLightweight": "Rapide et léger",
+    "smartHeavy": "Intelligent et lourd",
+    "diskSlowConfirm": {
+      "title": "{{name}} dépasse votre mémoire",
+      "base": "Ce modèle est trop volumineux pour votre mémoire, mais il peut quand même fonctionner directement depuis le disque, mais lentement.",
+      "checking": "Vérification de la vitesse de votre disque…",
+      "stillUnknown": "Les réponses peuvent prendre plusieurs minutes.",
+      "blocked": "Votre disque est trop lent pour que ce soit utilisable. Cela ne fonctionne bien que sur un disque interne rapide.",
+      "speedEstimate": "Vitesse estimée sur votre disque : {{speed}}",
+      "fasterAlternative": "Envie de réponses rapides à la place ? {{name}} tourne à pleine vitesse sur cette machine."
+    },
+    "deleteConfirm": {
+      "removeTitle": "Retirer {{name}} ?",
+      "discardTitle": "Abandonner ce téléchargement ?",
+      "remove": "Retirer {{name}} de votre bibliothèque ? Vous pourrez toujours le retélécharger plus tard.",
+      "discard": "Abandonner le téléchargement partiel de {{name}} ? Les octets déjà téléchargés seront supprimés."
+    },
+    "downloadAnyway": "Télécharger quand même",
+    "recommendedFlag": "Notre choix pour votre Mac",
+    "customFlag": "Ajouté par vous",
+    "modelMeta": "par {{publisher}} · {{params}} · {{size}}",
+    "defaultAtStartup": "Par défaut au démarrage",
+    "defaultAtStartupTitle": "OpenPal s'ouvre avec ce modèle (réglable dans les Réglages)",
+    "readsImages": "Lit les images",
+    "readsImagesTitle": "Peut lire les images que vous joignez",
+    "speedEstimateLabel": "Vitesse estimée sur votre {{chip}} :",
+    "speedLongAnswer": "une longue réponse : environ {{duration}}",
+    "downloadProgressOf": "{{received}} sur {{total}}",
+    "downloadProgressAriaLabel": "Téléchargement de {{name}}",
+    "waking": "Réveil en cours…",
+    "wakingSlow": "Réveil en cours… cet énorme modèle peut prendre plusieurs minutes.",
+    "fileMissing": "Son fichier a été déplacé ou supprimé.",
+    "removeFromLibrary": "Retirer de la bibliothèque",
+    "removeFromLibraryAriaLabel": "Retirer {{name}} de la bibliothèque",
+    "remove": "Retirer",
+    "removeAriaLabel": "Retirer {{name}}",
+    "resumeDownload": "Reprendre le téléchargement",
+    "downloadSize": "Télécharger · {{size}}",
+    "discard": "Abandonner",
+    "discardAriaLabel": "Abandonner {{name}}",
+    "cancelDownloadAriaLabel": "Annuler le téléchargement de {{name}}",
+    "addModel": {
+      "label": "Ajouter votre propre modèle",
+      "hint": "Envie d'autre chose que nos sélections ? Collez un lien Hugging Face (ou un identifiant comme « TheOrg/TheModel-GGUF ») pour parcourir ses fichiers, ou choisissez un fichier .gguf déjà présent sur votre Mac. Vos propres modèles peuvent demander plus d'attention, car nos estimations de mémoire pour ceux-ci restent approximatives.",
+      "placeholder": "huggingface.co/TheOrg/TheModel-GGUF",
+      "searching": "Recherche…",
+      "findFiles": "Trouver les fichiers",
+      "fileCount_one": "{{count}} fichier",
+      "fileCount_other": "{{count}} fichiers",
+      "added": "✓ Ajouté",
+      "adding": "Ajout…",
+      "add": "Ajouter",
+      "waitingForPick": "En attente de votre choix…",
+      "chooseFile": "Choisir un fichier sur votre Mac…"
+    }
+  },
+  "chatView": {
+    "sources": {
+      "label": "Sources"
+    },
+    "parentalLock": {
+      "schedule": "La discussion est en pause. Elle reprend à {{time}}.",
+      "tomorrow": "C'est terminé pour aujourd'hui. On repart de zéro demain.",
+      "placeholder": "La discussion est en pause pour le moment"
+    },
+    "thinking": {
+      "live": "Réflexion…",
+      "done": "Réflexion"
+    },
+    "activity": {
+      "searching": "Recherche sur le web : « {{query}} »",
+      "readingResults": "Lecture des résultats…",
+      "reading": "Lecture de {{host}}…",
+      "tool": "Utilisation de {{tool}}…",
+      "researching": "Recherche en cours…",
+      "workingItOut": "Analyse en cours…",
+      "waitingApproval": "En attente de votre autorisation",
+      "waitingAnswer": "En attente de votre réponse"
+    },
+    "liveRegion": {
+      "thinking": "Réflexion…"
+    },
+    "toolActivity": {
+      "title": "Recherche sur le web",
+      "searchesCount_one": "{{count}} recherche",
+      "searchesCount_other": "{{count}} recherches",
+      "pagesReadCount_one": "{{count}} page lue",
+      "pagesReadCount_other": "{{count}} pages lues",
+      "searchedLabel": "Recherché",
+      "searchedQuery": "« {{query}} »",
+      "readLabel": "Lu"
+    },
+    "agentActivity": {
+      "title": "Outils de l'agent",
+      "callCount_one": "{{count}} action",
+      "callCount_other": "{{count}} actions",
+      "helperLabel": "Assistant {{kind}}"
+    },
+    "toolConsent": {
+      "wantsTo": "{{tool}} veut :",
+      "requestedBy": "Demandé par l'assistant {{kind}}",
+      "resolvedPathPrefix": "Correspond à :",
+      "outsideWorkspace": "Ceci est en dehors de votre dossier de travail de l'agent.",
+      "dangerFlags": {
+        "forkBombShape": "On dirait que ça pourrait créer des processus de façon incontrôlée.",
+        "rawDeviceIo": "On dirait que ça lit ou écrit directement sur un disque.",
+        "networkFetchPipeShell": "On dirait que ça télécharge quelque chose et l'exécute immédiatement.",
+        "sudoOrPrivEsc": "On dirait que ça essaie de s'exécuter en tant qu'un autre utilisateur ou d'obtenir plus d'accès.",
+        "derivedFromRecentOutput": "Ce texte semble copié depuis ce qu'un outil vient de renvoyer. Vérifiez qu'il n'a pas été glissé dans un fichier ou une page lue."
+      },
+      "allowOnce": "Autoriser une fois",
+      "alwaysAllow": "Toujours autoriser",
+      "deny": "Refuser",
+      "denyNoteLabel": "Expliquez pourquoi (facultatif)",
+      "denyNotePlaceholder": "ex. « pas besoin de lire ce fichier »",
+      "autoApproved": "Approuvé automatiquement par une autorisation permanente",
+      "denied": "Refusé",
+      "rejected": "Bloqué automatiquement",
+      "resultOk": "Terminé",
+      "resultFailed": "Échoué",
+      "resultRunning": "En cours…"
+    },
+    "askUser": {
+      "title": "Une question de l'assistant",
+      "stepLabel": "Question posée",
+      "answerPlaceholder": "Tapez votre réponse…",
+      "send": "Envoyer",
+      "skip": "Ignorer",
+      "skippedAnswer": "(Aucune réponse donnée)"
+    },
+    "copyButton": {
+      "copy": "Copier",
+      "copied": "Copié"
+    },
+    "speakButton": {
+      "readAloud": "Lire à voix haute",
+      "stop": "Arrêter"
+    },
+    "attachment": {
+      "view": "Voir {{name}}",
+      "preview": "Aperçu de {{name}}",
+      "remove": "Supprimer {{name}}",
+      "removeTitle": "Supprimer"
+    },
+    "docPreview": {
+      "ariaLabel": "Aperçu de {{name}}",
+      "closeAriaLabel": "Fermer l'aperçu",
+      "noText": "Aucun texte lisible n'a été trouvé dans ce fichier."
+    },
+    "artifact": {
+      "open": "Ouvrir {{name}}"
+    },
+    "artifactPreview": {
+      "ariaLabel": "Aperçu de {{name}}",
+      "closeAriaLabel": "Fermer l'aperçu",
+      "download": "Télécharger",
+      "downloadAriaLabel": "Télécharger {{name}}",
+      "empty": "Ce fichier est vide."
+    },
+    "emptyState": {
+      "title": "En quoi puis-je vous aider ?",
+      "titleWithName": "Bonjour, {{name}}. En quoi puis-je vous aider ?",
+      "subtitle": "Demandez n'importe quoi. Tout reste entre vous et votre Mac."
+    },
+    "messageEdit": {
+      "textareaLabel": "Modifier le message",
+      "send": "Envoyer"
+    },
+    "message": {
+      "edit": "Modifier",
+      "fork": "Créer une branche",
+      "retry": "Réessayer",
+      "youSaid": "Vous avez dit :",
+      "assistantSaid": "L'assistant a dit :"
+    },
+    "variantNav": {
+      "previous": "Version précédente",
+      "next": "Version suivante",
+      "counter": "{{current}} sur {{total}}"
+    },
+    "forkDialog": {
+      "title": "Créer une branche de cette conversation ?",
+      "message": "Cela crée une nouvelle conversation distincte contenant les messages jusqu'à ce point. La conversation d'origine reste inchangée.",
+      "confirm": "Créer une branche"
+    },
+    "forkOriginHint": "Cette conversation a été créée à partir d'une branche de",
+    "forkOriginDeleted": "Cette conversation a été créée à partir d'une branche d'une conversation supprimée",
+    "forkOriginBadge": {
+      "unknownSource": "Conversation d'origine",
+      "ariaLabel": "Ouvrir « {{title}} »"
+    },
+    "scrollToBottom": "Aller au dernier message",
+    "engineBanner": {
+      "tryAgain": "Réessayer",
+      "dismiss": "Ignorer"
+    },
+    "safetyBanner": {
+      "title": "On dirait que vous traversez un moment très difficile.",
+      "body": "Vous n'êtes pas seul(e) : une aide gratuite et confidentielle est disponible à tout moment, jour et nuit.",
+      "hotline": "Rendez-vous sur findahelpline.com pour trouver une ligne d'aide vérifiée pour votre pays ; la plupart sont gratuites, par appel ou SMS.",
+      "learnMore": "Trouver une ligne d'aide",
+      "learnMoreUrl": "https://findahelpline.com",
+      "dismiss": "Ignorer",
+      "dismissAriaLabel": "Ignorer le message d'aide en cas de crise"
+    },
+    "modelPicker": {
+      "switchModel": "Changer de modèle",
+      "current": "actuel"
+    },
+    "composer": {
+      "textareaLabel": "Message",
+      "placeholderWebSearch": "Demandez-moi n'importe quoi. Je peux chercher sur le web…",
+      "placeholderDefault": "Demandez-moi n'importe quoi…",
+      "startingSlow": "Préchauffage d'un modèle énorme. La première réponse peut prendre plusieurs minutes…",
+      "startingNormal": "Préchauffage, un instant…",
+      "placeholderStopped": "Choisissez un modèle dans Modèles pour commencer",
+      "hintStopped": "Choisissez un modèle pour commencer",
+      "imageTooLarge": "Cette image est trop volumineuse à joindre. Essayez-en une de moins de 16 Mo.",
+      "pastedImageName": "image collée",
+      "visionOnlyPaste": "Ce modèle ne peut pas voir les images. Choisissez un modèle capable de voir, comme Gemma, pour envoyer des images.",
+      "addMenuTitle": "Ajouter des fichiers ou activer des outils",
+      "addImagesOrFiles": "Ajouter des images ou des fichiers",
+      "addFilesOnly": "Ajouter des fichiers",
+      "webSearchOffCloud": "La recherche web n'est pas disponible en discutant avec un modèle en ligne",
+      "webSearchOffMobile": "La recherche web n'est pas encore disponible sur mobile",
+      "webSearchOnForChat": "La recherche web est activée pour cette discussion",
+      "webSearchOffForChat": "La recherche web est désactivée pour cette discussion",
+      "webSearchOnLabel": "Recherche web : activée",
+      "agentToolsOffMobile": "Les outils de l'agent ne sont pas encore disponibles sur mobile",
+      "agentToolsOffDisabled": "Activez les outils de l'agent dans Réglages pour les utiliser",
+      "agentToolsOnForChat": "Les outils de l'agent sont activés pour cette discussion",
+      "agentToolsOffForChat": "Les outils de l'agent sont désactivés pour cette discussion",
+      "agentToolsOnLabel": "Outils de l'agent : activés",
+      "agentToolsLabel": "Outils de l'agent",
+      "webSearchLabel": "Recherche web",
+      "micListening": "Écoute en cours (cliquez pour arrêter)",
+      "micTypeByTalking": "Écrire en parlant",
+      "micTurnOnVoice": "Activez Voix dans Modules pour dicter",
+      "stop": "Arrêter",
+      "send": "Envoyer",
+      "improve": {
+        "title": "Votre IA reformule ce que vous avez écrit pour le rendre plus clair. Vous pouvez toujours annuler.",
+        "offEmpty": "Écrivez d'abord un message",
+        "offSkillOnly": "Écrivez d'abord un message après la /compétence",
+        "offNotReady": "Choisissez d'abord un modèle",
+        "offStarting": "Préchauffage, réessayez dans un instant",
+        "offBusy": "Attendez la fin de la réponse en cours",
+        "offTooLong": "Ce message est trop long pour être amélioré. Envoyez-le tel quel.",
+        "offDiskSlow": "Indisponible quand un modèle tourne depuis le disque",
+        "offImproving": "Amélioration de votre message…",
+        "working": "Amélioration de votre message…",
+        "stopTitle": "Arrêter l'amélioration",
+        "done": "Amélioré par votre IA.",
+        "undo": "Annuler",
+        "undoLabel": "Annuler : retrouver ce que j'avais écrit",
+        "undone": "Retour à ce que vous aviez écrit.",
+        "noChange": "Votre message est déjà clair.",
+        "noAnswer": "Votre IA a manqué de place en réfléchissant. Réessayez, ou désactivez « Afficher le raisonnement du modèle » dans Réglages.",
+        "failed": "Impossible de l'améliorer cette fois. Votre message est intact.",
+        "stopped": "Arrêté. Votre message est intact."
+      }
+    }
+  },
+  "skillsView": {
+    "title": "Compétences",
+    "descriptionBefore": "Les compétences sont des instructions réutilisables que vous rédigez une fois. Enregistrez-en une, puis tapez ",
+    "descriptionAfter": " dans la discussion pour l'utiliser. Tout ce que vous tapez ensuite est ajouté après les instructions de la compétence.",
+    "newSkill": "Nouvelle compétence",
+    "emptyState": "Aucune compétence pour l'instant. Créez-en une pour commencer.",
+    "edit": "Modifier",
+    "export": "Exporter",
+    "delete": "Supprimer",
+    "deleteConfirm": "Supprimer la compétence « {{name}} » ? Cette action est irréversible.",
+    "editSkillTitle": "Modifier la compétence",
+    "newSkillTitle": "Nouvelle compétence",
+    "triggeredByBefore": "Déclenchée par ",
+    "triggeredByAfter": " dans la discussion.",
+    "nameLabel": "Nom",
+    "namePlaceholder": "Résumer",
+    "descriptionLabel": "Description",
+    "descriptionPlaceholder": "Condenser un texte en points clés",
+    "instructionsLabel": "Instructions",
+    "instructionsPlaceholder": "Vous êtes un expert du résumé. Lisez le message de l'utilisateur et…",
+    "saving": "Enregistrement…",
+    "import": "Importer",
+    "importTitle": "Importer une compétence",
+    "importSubtitle": "Ajoutez une compétence provenant d'ailleurs, sous forme de fichier, de dossier ou d'archive zip.",
+    "importFileOption": "Un fichier (.md)",
+    "importFileDesc": "Un seul fichier Markdown, importé comme nouvelle compétence.",
+    "importFolderOption": "Un dossier",
+    "importFolderDesc": "Un dossier contenant un fichier SKILL.md, plus d'éventuels fichiers complémentaires.",
+    "importZipOption": "Une archive .zip",
+    "importZipDesc": "Un dossier de compétence zippé provenant d'ailleurs.",
+    "importChoose": "Choisir…",
+    "importing": "Importation…",
+    "fileCount_one": "{{count}} fichier",
+    "fileCount_other": "{{count}} fichiers",
+    "supportingFilesNote_one": "Cette compétence inclut aussi un fichier complémentaire : {{files}}. Pour le modifier, utilisez Exporter pour enregistrer cette compétence en .zip, modifiez le fichier, puis réimportez-la.",
+    "supportingFilesNote_other": "Cette compétence inclut aussi {{count}} fichiers complémentaires : {{files}}. Pour les modifier, utilisez Exporter pour enregistrer cette compétence en .zip, modifiez les fichiers, puis réimportez-la."
+  },
+  "writingTools": {
+    "translateSubtitle": "Traduisez du texte ici même, avec le modèle d'IA déjà lancé sur votre Mac.",
+    "correctSubtitle": "Corrigez la grammaire et le style ici même, avec le modèle d'IA déjà lancé sur votre Mac.",
+    "modeTranslate": "Traduire",
+    "modeCorrect": "Corriger",
+    "detectLanguage": "Détecter la langue",
+    "sourceLangAriaLabel": "Traduire depuis",
+    "targetLangAriaLabel": "Traduire vers",
+    "chooseLanguage": "Choisir une langue",
+    "sourceLabel": "Votre texte",
+    "sourcePlaceholder": "Collez ou tapez votre texte ici…",
+    "uploadDocument": "Importer un document",
+    "uploadedFile": "Chargé : {{name}}",
+    "unsupportedFileError": "Ce fichier ne contient aucun texte qu'OpenPal peut lire.",
+    "resultLabel": "Résultat",
+    "resultPlaceholder": "Votre résultat apparaîtra ici.",
+    "copy": "Copier",
+    "copied": "Copié",
+    "download": "Télécharger",
+    "correctedSuffix": "corrigé",
+    "chunkProgress": "Traitement de la partie {{current}} sur {{total}}. La qualité peut varier légèrement aux limites de section.",
+    "acceptAllChanges": "Tout accepter",
+    "rejectAllChanges": "Tout rejeter",
+    "acceptChange": "Appliquer cette suggestion",
+    "rejectChange": "Revenir à l'original",
+    "engineBusy": "Votre IA est occupée avec une autre réponse pour le moment. Ceci démarrera dès qu'elle sera libre.",
+    "stop": "Arrêter",
+    "runTranslate": "Traduire",
+    "runCorrect": "Corriger",
+    "localFirstNote": "Rien de ce que vous tapez ici ne quitte votre Mac."
+  },
+  "improveView": {
+    "title": "Améliorer un message",
+    "subtitle": "Reformulez un message avant même de démarrer une discussion, avec l’IA que vous utilisez déjà.",
+    "sourceLabel": "Votre message",
+    "sourcePlaceholder": "Collez ou tapez un message ici…",
+    "resultLabel": "Message amélioré",
+    "resultPlaceholder": "Votre message amélioré apparaîtra ici.",
+    "run": "Améliorer",
+    "stop": "Arrêter",
+    "copy": "Copier",
+    "copied": "Copié",
+    "startChat": "Démarrer une discussion avec ce texte",
+    "tooLong": "Ce message est trop long à améliorer. Essayez quelque chose de plus court.",
+    "engineBusy": "Votre IA est occupée à répondre. Ceci démarrera dès qu'elle sera libre.",
+    "localNote": "Ceci utilise la même IA que celle avec qui vous discutez déjà, jamais un second modèle."
+  },
+  "markdown": {
+    "languageLabel": "Langage : {{language}}",
+    "copyCode": "Copier le code",
+    "copy": "Copier",
+    "copied": "Copié",
+    "codeScrollable": "Code, défilable",
+    "tableScrollable": "Tableau, défilable"
+  }
+}

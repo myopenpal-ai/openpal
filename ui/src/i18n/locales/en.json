@@ -1,0 +1,1229 @@
+{
+  "common": {
+    "cancel": "Cancel",
+    "save": "Save",
+    "close": "Close",
+    "favorite": "Add {{name}} to favorites",
+    "unfavorite": "Remove {{name}} from favorites"
+  },
+  "appShell": {
+    "skipToContent": "Skip to main content",
+    "openSidebar": "Open sidebar",
+    "closeSidebar": "Close sidebar"
+  },
+  "moreDialog": {
+    "search": {
+      "placeholder": "Search settings",
+      "results_one": "{{count}} result",
+      "results_other": "{{count}} results",
+      "noResults": "No results for “{{query}}”"
+    }
+  },
+  "settingsSheet": {
+    "done": "Done",
+    "sections": {
+      "general": {
+        "label": "General",
+        "subtitle": "Your account, the app's language, and updates."
+      },
+      "chat": {
+        "label": "Chat",
+        "subtitle": "How your assistant talks to you, and what its replies show."
+      },
+      "model": {
+        "label": "AI model",
+        "subtitle": "When your AI loads, how it runs on this computer, and adding models of your own."
+      },
+      "privacy": {
+        "label": "Privacy & safety",
+        "subtitle": "Lock OpenPal with a PIN, set limits for children, and get help when it matters."
+      },
+      "devices": {
+        "label": "Devices",
+        "subtitle": "Keep your conversations in sync, and use OpenPal across your other devices."
+      },
+      "data": {
+        "label": "Your data",
+        "subtitle": "Where your conversations and settings are kept, and how to back them up or start over."
+      },
+      "advanced": {
+        "label": "Advanced",
+        "subtitle": "Extra tools for experienced users. You don't need any of these to use OpenPal."
+      }
+    },
+    "updates": {
+      "title": "Updates"
+    },
+    "performance": {
+      "title": "Performance"
+    },
+    "account": {
+      "label": "Account",
+      "signedInAs": "Signed in as {{email}} · {{tier}} plan.",
+      "quotaUsed": "{{used}} of {{limit}} cloud requests used this period.",
+      "signOut": "Sign out",
+      "signedOutHint": "Sign in to unlock cloud models and premium features. Everything else keeps working exactly as it does today, signed out.",
+      "signIn": "Sign in"
+    },
+    "language": {
+      "label": "Language"
+    },
+    "toggle": {
+      "on": "On",
+      "off": "Off"
+    },
+    "userName": {
+      "label": "Your name",
+      "hint": "OpenPal uses it to greet you when you start a new chat. Leave it empty for a generic greeting.",
+      "placeholder": "Enter your name"
+    },
+    "personality": {
+      "label": "Personality",
+      "hint": "How should your assistant behave? Written as instructions it reads before every chat."
+    },
+    "showThinking": {
+      "label": "Show model thinking",
+      "hint": "Some models reason step by step before answering. Show that thinking as a collapsible note above each reply. Turning it off hides it from new replies right away, and stops the model thinking entirely the next time your model loads, so replies come a little faster."
+    },
+    "generationStats": {
+      "label": "Show generation stats",
+      "hint": "Show each reply's speed (tokens per second) and how long it took (thinking and the answer combined) in small text beneath it."
+    },
+    "autoUnload": {
+      "label": "Smart model loading",
+      "hint": "While you're typing, your AI stays loaded (or starts loading if it's asleep) so it's ready sooner. Once it's sat idle a while with nothing to do, it unloads automatically to free up memory. You'll get a heads-up first, and you can cancel it.",
+      "durationLabel": "Unload after",
+      "durationAriaLabel": "Auto-unload idle duration",
+      "min1": "1 min",
+      "max2hr": "2 hr",
+      "idleMinutes_one": "{{count}} min idle",
+      "idleMinutes_other": "{{count}} min idle"
+    },
+    "autoLoadStartup": {
+      "label": "Load model on startup",
+      "hint": "Load an AI model automatically when OpenPal opens (your last-used model, or the fixed default below) so it's ready before you start typing. Turn this off to open to an idle chat instead."
+    },
+    "defaultModel": {
+      "label": "Default model at startup",
+      "hint": "Which model OpenPal loads when you open it. Using a different model elsewhere (Library, the model switcher) only changes your session. It won't change this.",
+      "noModels": "Install a model to choose a startup default.",
+      "lastUsed": "Last used model",
+      "lastUsedWithName": "Last used model (currently {{name}})"
+    },
+    "voice": {
+      "title": "Read-aloud voice",
+      "subtitle": "How the Voice add-on sounds when it reads replies aloud.",
+      "notReadyHint": " Turn on Voice in Add-ons to hear it.",
+      "pickerLabel": "Voice",
+      "pickerHint": "Pick a voice, or download another language or style.",
+      "loadingVoices": "Loading voices…",
+      "missingNotice": "Your selected voice isn’t installed anymore. Pick one below.",
+      "sampleText": "Hi there! This is how I'll sound when I read your messages aloud.",
+      "speed": {
+        "label": "Speaking speed",
+        "slow": "Slower",
+        "fast": "Faster"
+      },
+      "liveliness": {
+        "label": "Liveliness",
+        "low": "Even",
+        "high": "Lively"
+      },
+      "pause": {
+        "label": "Pause between sentences",
+        "short": "Short",
+        "long": "Long"
+      },
+      "testButton": "Test voice",
+      "testing": "Playing…",
+      "stop": "Stop",
+      "preview": "Preview",
+      "stopPreview": "Stop preview",
+      "previewName": "Preview {{name}}",
+      "downloading": "Downloading…",
+      "download": "Download"
+    },
+    "agentMode": {
+      "summary": "Agent tools",
+      "hint": "Let your assistant run shell commands, run code, and read or write files. Everything stays sandboxed to one folder you choose, with your approval for every action.",
+      "unavailableOnMobile": "Agent tools aren't available on mobile yet.",
+      "enableLabel": "Enable agent tools",
+      "grants": {
+        "label": "Standing permissions",
+        "hint": "Actions you've told your assistant to always allow. Revoke any of these to require your approval again.",
+        "empty": "No standing permissions yet.",
+        "revoke": "Revoke",
+        "expires": "Expires {{date}}"
+      }
+    },
+    "triage": {
+      "summary": "Smart tuning",
+      "hint": "Quietly classifies what you're asking (writing, coding, math, …) to keep reply settings suited to it. Change a slider yourself anytime to override. Nothing here shows up in the chat itself."
+    },
+    "safetyDetection": {
+      "summary": "Crisis support banner",
+      "hint": "After each reply, quietly checks your message for signs of self-harm or a severe crisis, and if it finds any, shows a banner in the chat with ways to get help. Checked locally, on your Mac; turn it off here if you'd rather not see it."
+    },
+    "parentalControls": {
+      "summary": "Parental controls",
+      "loading": "Loading…",
+      "hint": "Set daily limits on when and how much OpenPal can be used for new messages. Past conversations always stay readable. Only sending something new is paused.",
+      "stateOn": "Parental controls are on.",
+      "stateOff": "Parental controls are off.",
+      "noLimits": "No limits are switched on yet.",
+      "limitSchedule": "Chatting allowed from {{start}} to {{end}}.",
+      "limitUsage_one": "Up to {{count}} minute of use a day.",
+      "limitUsage_other": "Up to {{count}} minutes of use a day.",
+      "limitMessage_one": "Up to {{count}} message a day.",
+      "limitMessage_other": "Up to {{count}} messages a day.",
+      "turnOn": "Turn on parental controls",
+      "changeSettings": "Change settings",
+      "enterPin": "Enter your PIN to change these settings",
+      "wrongPin": "That PIN isn't right. Try again.",
+      "saving": "Saving…",
+      "turnOff": "Turn off parental controls",
+      "needsLimit": "Switch on at least one limit above.",
+      "schedule": {
+        "label": "Only allow chatting at certain times",
+        "hint": "An end time earlier than the start covers the night: 20:00 to 07:00 allows evenings and early mornings, and blocks the day.",
+        "from": "From",
+        "to": "to",
+        "startAria": "Start of the allowed time",
+        "endAria": "End of the allowed time"
+      },
+      "usage": {
+        "label": "Limit time spent here each day",
+        "hint": "Once the day's time is used up, sending pauses until tomorrow.",
+        "minutesLabel": "Minutes a day"
+      },
+      "message": {
+        "label": "Limit messages sent each day",
+        "hint": "Once the day's messages are used up, sending pauses until tomorrow.",
+        "countLabel": "Messages a day"
+      },
+      "pin": {
+        "createLabel": "Choose a PIN",
+        "createHint": "You'll need this PIN to change or switch off parental controls later.",
+        "changeLabel": "Change PIN",
+        "changeHint": "Choosing a new PIN replaces your current one.",
+        "enterNew": "Choose a new PIN",
+        "confirmNew": "Confirm your new PIN",
+        "newPinSet": "New PIN set. Save to apply it.",
+        "mismatch": "Those two PINs don't match.",
+        "lockedFor": "Too many attempts. Try again in {{seconds}}s."
+      }
+    },
+    "customModels": {
+      "label": "Add your own models",
+      "hint": "Shows a way to add models beyond our picks, from a Hugging Face link or a .gguf file on your computer, at the bottom of the Models page. Models you've already added stay available either way."
+    },
+    "diagnostics": {
+      "summary": "Logs & diagnostics",
+      "upToDate": "You're up to date.",
+      "clearedLogs_one": "Cleared {{count}} old log file.",
+      "clearedLogs_other": "Cleared {{count}} old log files.",
+      "logLevel": {
+        "label": "Detail level",
+        "hint": "How much OpenPal writes to its log. More detail helps when something goes wrong and you want to share what happened. Takes effect the next time you open OpenPal.",
+        "error": "Errors only",
+        "warn": "Warnings",
+        "info": "Normal",
+        "debug": "Detailed",
+        "trace": "Everything"
+      },
+      "forceCpu": {
+        "label": "Run on CPU only",
+        "hint": "Skip the graphics card and run the model on your processor. Try this if the app crashes or stalls when a reply starts, since some GPU drivers are unreliable. It's usually slower, and takes effect the next time your model loads."
+      },
+      "diskOffload": {
+        "label": "Run huge models from disk",
+        "hint": "Let AI models too big to fit in memory run anyway, reading straight from your storage instead. It works for some models, but answers can take several minutes, so only turn this on if you don't mind the wait."
+      },
+      "autoUnloadDiskSlow": {
+        "label": "Also auto-unload disk-streamed models",
+        "hint": "Off by default: a model running from disk barely uses your graphics memory already, and reloading it can take several minutes, which is usually not worth it just to unload. Turn this on if you'd rather have the memory back."
+      },
+      "updates": {
+        "label": "OpenPal updates",
+        "hint": "OpenPal {{version}}. When on, OpenPal briefly contacts github.com after each launch to check for a newer version. No other data is sent. Off by default.",
+        "unavailableOnMobile": "Updates for this app come through the Play Store.",
+        "checking": "Checking…",
+        "checkNow": "Check for updates now"
+      },
+      "engineUpdates": {
+        "label": "AI engine updates",
+        "hint": "The AI engine (llama.cpp) ships more often than OpenPal itself, and updating it can add support for new models. When on, OpenPal briefly contacts github.com after each launch to check for a newer build. No other data is sent. Off by default.",
+        "checking": "Checking…",
+        "checkNow": "Check for engine updates now",
+        "install": "Update to {{tag}}",
+        "installing": "Installing…",
+        "installed": "Installed. Restart the AI to use it."
+      },
+      "dataDir": {
+        "label": "Where your data lives",
+        "hint": "The folder holding your chats, models, and settings.",
+        "portableHint": " This is a portable copy, so everything stays in this folder."
+      },
+      "exportData": {
+        "label": "Export your data",
+        "hint": "Save a .zip of everything stored on this device (chats, projects, and files the AI created) as plain files you can open without OpenPal.",
+        "button": "Export data…",
+        "exporting": "Exporting…",
+        "done": "Exported {{conversations}} chat(s), {{projects}} project(s), and {{artifacts}} file(s).",
+        "doneWithSkipped": "Exported {{conversations}} chat(s), {{projects}} project(s), and {{artifacts}} file(s), but {{skipped}} file(s) couldn't be included."
+      },
+      "importData": {
+        "label": "Import from another device",
+        "hint": "Choose a .zip exported from OpenPal on another device (or an earlier export on this one) to bring its chats, projects, and files here.",
+        "button": "Import data…",
+        "importing": "Importing…",
+        "done": "Imported {{conversations}} chat(s), {{projects}} project(s), and {{artifacts}} file(s).",
+        "doneWithSkipped": "Imported {{conversations}} chat(s), {{projects}} project(s), and {{artifacts}} file(s), but {{skipped}} file(s) couldn't be included."
+      },
+      "logs": {
+        "label": "Latest logs",
+        "hint": "The most recent lines OpenPal recorded. Anything sensitive is hidden automatically.",
+        "tabApp": "App",
+        "tabEngine": "AI engine",
+        "loading": "Loading…",
+        "empty": "No logs yet.",
+        "refresh": "Refresh",
+        "copied": "Copied!",
+        "copy": "Copy",
+        "exportLogs": "Export logs",
+        "exported": "Logs exported.",
+        "clear": "Clear old logs"
+      }
+    },
+    "sync": {
+      "summary": "Sync",
+      "create": {
+        "label": "Create a sync group",
+        "hint": "Start a new sync group on this device, then add your other devices to it.",
+        "labelPlaceholder": "e.g. My laptop",
+        "button": "Create group",
+        "creating": "Creating…",
+        "doneLabel": "Sync group created",
+        "saveWarning": "Save this somewhere safe. You'll need it to add another device, and it won't be shown again.",
+        "copy": "Copy",
+        "copied": "Copied!",
+        "done": "Done"
+      },
+      "join": {
+        "label": "Join an existing group",
+        "hint": "Already created a sync group on another device? Join it from here.",
+        "button": "Join a group…"
+      },
+      "devices": {
+        "label": "Devices in this group",
+        "thisDevice": "This device",
+        "remove": "Remove",
+        "removeConfirm": "Remove \"{{label}}\" from this sync group? It will lose access, and the shared key will be rotated for every other device.",
+        "removeButton": "Remove device",
+        "removing": "Removing…"
+      },
+      "addDevice": "Add a device…",
+      "dataSync": {
+        "label": "Sync conversations",
+        "hint": "Keep your conversations up to date across every device you've paired above.",
+        "relayUrl": {
+          "label": "Sync server (optional)",
+          "placeholder": "Leave blank to use the default server",
+          "hint": "Only change this if you're running your own sync server. Most people can leave it blank."
+        }
+      }
+    },
+    "experimental": {
+      "summary": "Experimental features",
+      "hint": "Unlocks features and plugins that are still being tested. They may change, break, or be removed.",
+      "enableLabel": "Enable experimental features",
+      "disableDialog": {
+        "title": "Turn off experimental features?",
+        "body": "These experimental features are on and will stop working: {{features}}. They'll come back as they were if you turn experimental features on again.",
+        "confirm": "Turn off"
+      }
+    }
+  },
+  "sidebar": {
+    "resizeHandle": "Resize sidebar",
+    "newChat": "New chat",
+    "conversationsAriaLabel": "Conversations",
+    "emptyState": "Your chats will appear here.",
+    "searchPlaceholder": "Search conversations",
+    "clearSearch": "Clear search",
+    "noSearchResults": "No matching conversations.",
+    "search": "Search conversations",
+    "searchView": {
+      "hint": "Search looks through conversation titles and every message.",
+      "recent": "Recent",
+      "conversations": "Conversations",
+      "resultCount_one": "{{count}} matching conversation",
+      "resultCount_other": "{{count}} matching conversations"
+    },
+    "selectConversations": "Select conversations",
+    "selectConversation": "Select \"{{title}}\"",
+    "selectAll": "Select all conversations",
+    "deselectAll": "Deselect all conversations",
+    "selectedCount_one": "{{count}} selected",
+    "selectedCount_other": "{{count}} selected",
+    "deleteSelected": "Delete selected conversations",
+    "deleteConfirm": {
+      "title": "Delete conversation?",
+      "message": "Delete \"{{title}}\"? This can't be undone.",
+      "messageMany_one": "Delete {{count}} conversation? This can't be undone.",
+      "messageMany_other": "Delete {{count}} conversations? This can't be undone.",
+      "confirmButton": "Delete"
+    },
+    "rowMenu": {
+      "ariaLabel": "More actions for \"{{title}}\"",
+      "addToProject": "Add to project",
+      "pin": "Pin",
+      "unpin": "Unpin",
+      "rename": "Rename",
+      "delete": "Delete"
+    },
+    "pinned": "Pinned",
+    "projects": "Projects",
+    "newProject": "New project",
+    "newProjectPlaceholder": "Project name",
+    "moveToProject": "Move to a project",
+    "noProject": "No project",
+    "expandProject": "Expand \"{{name}}\"",
+    "collapseProject": "Collapse \"{{name}}\"",
+    "renameProject": "Rename \"{{name}}\"",
+    "deleteProjectAriaLabel": "Delete \"{{name}}\"",
+    "deleteProjectConfirm": {
+      "title": "Delete \"{{name}}\"?",
+      "message_one": "This project has {{count}} conversation. Delete it along with the project, or keep it and just remove it from the project?",
+      "message_other": "This project has {{count}} conversations. Delete them along with the project, or keep them and just remove them from the project?",
+      "messageEmpty": "Delete \"{{name}}\"? This can't be undone.",
+      "keepConversations": "Keep conversations",
+      "deleteConversations": "Delete conversations too",
+      "confirmButton": "Delete"
+    },
+    "emptyProject": "No chats in this project yet.",
+    "more": "More",
+    "models": "Models",
+    "browse": "Browse",
+    "plugins": "Plugins",
+    "skills": "Skills",
+    "account": "Account",
+    "signedInAs": "Signed in as {{email}}",
+    "signIn": "Sign in",
+    "settings": "Settings",
+    "appVersion": "v{{version}}",
+    "engine": {
+      "ready": "Ready",
+      "warmingUp": "Warming up…",
+      "warmingUpPercent": "Warming up… {{percent}}%",
+      "warmingUpSlow": "Warming up… huge model, can take a few minutes",
+      "needsAttention": "Needs attention (click to retry)",
+      "asleep": "Asleep",
+      "noModelInstalled": "No model installed yet",
+      "remoteUnpaired": "Pair a desktop to chat",
+      "remoteUnreachable": "Can't reach {{name}} (click to check)",
+      "remotePairedIdle": "Paired, but no model is loaded on the desktop",
+      "waitForReply": "Wait for the reply to finish before unloading",
+      "unloadTitle": "Unload the model and stop llama.cpp",
+      "unload": "Unload",
+      "loadTitle": "Load the model and start llama.cpp",
+      "load": "Load"
+    }
+  },
+  "chatToolbar": {
+    "conversationSettings": "Conversation settings",
+    "stats": {
+      "messages_one": "message",
+      "messages_other": "messages",
+      "contextTokens": "context tokens"
+    },
+    "generation": {
+      "title": "Generation",
+      "resetToDefaults": "Reset to defaults",
+      "hint": "How your AI picks its next words for this chat. The defaults match llama.cpp’s own. Only change these if you know what they do.",
+      "cloudContextHint": " Context length isn't shown here because it's a fixed, shared setting on the cloud model.",
+      "autoSuggested": "Auto-suggested defaults for {{model}}. Feel free to adjust. Your changes are saved with this chat."
+    },
+    "contextLength": {
+      "label": "Context length",
+      "hint": "How much of this conversation your AI can hold in memory at once. Bigger uses more RAM. Changing this reloads the AI, which takes a moment, and if you shrink it, the AI may lose track of earlier parts of this chat.",
+      "tokensOption_one": "{{value}} token",
+      "tokensOption_other": "{{value}} tokens",
+      "restartHint": "Won’t apply until your model restarts.",
+      "restartButton": "Restart model to apply"
+    },
+    "cloudNoParamsHint": "This model hasn’t declared which generation settings it supports yet, so none are shown to avoid sending one it would reject.",
+    "sliders": {
+      "temperature": {
+        "label": "Creativity (temperature)",
+        "hint": "Left: focused and precise. Right: playful and imaginative.",
+        "left": "Focused",
+        "right": "Imaginative"
+      },
+      "topP": {
+        "label": "Nucleus sampling (Top P)",
+        "hint": "Only consider the smallest group of likely next words whose odds add up to this share. Lower narrows the choices; 1.0 turns it off.",
+        "left": "Narrow",
+        "right": "Broad"
+      },
+      "topK": {
+        "label": "Top K",
+        "hint": "Only consider this many of the most-likely next words. 0 turns it off.",
+        "left": "Off",
+        "right": "Loose"
+      },
+      "minP": {
+        "label": "Min P",
+        "hint": "Drop words much less likely than the top pick. 0 turns it off.",
+        "left": "Off",
+        "right": "Strict"
+      },
+      "repeatPenalty": {
+        "label": "Repeat penalty",
+        "hint": "Discourage repeating the same words. 1.0 turns it off.",
+        "left": "Off",
+        "right": "Strong"
+      },
+      "repeatLastN": {
+        "label": "Repeat penalty window",
+        "hint": "How many recent words the repeat penalty looks back over. 0 turns it off.",
+        "left": "Off",
+        "right": "Long memory"
+      },
+      "presencePenalty": {
+        "label": "Presence penalty",
+        "hint": "Push the model to bring up new topics instead of sticking to ones already mentioned.",
+        "left": "Off",
+        "right": "Strong"
+      },
+      "frequencyPenalty": {
+        "label": "Frequency penalty",
+        "hint": "Push the model away from words it's already used a lot in this reply.",
+        "left": "Off",
+        "right": "Strong"
+      }
+    },
+    "maxTokens": {
+      "label": "Max response length",
+      "hint": "Caps how many words (tokens) a reply can be. Longer replies use more memory and take longer.",
+      "noLimit": "No limit"
+    },
+    "seed": {
+      "label": "Seed",
+      "hint": "Fix this to get the same answer for the same question every time (useful for testing).",
+      "random": "Random"
+    },
+    "advanced": {
+      "summary": "Advanced"
+    }
+  },
+  "autoUnloadBanner": {
+    "unloadingIn": "Unloading your AI in {{seconds}}s to free up memory.",
+    "announce": "Your AI is about to unload to free up memory.",
+    "dismiss": "Dismiss (your AI will still unload)"
+  },
+  "signInDialog": {
+    "title": "Sign in",
+    "waitingHint": "Finish signing in in your browser, then come back here.",
+    "tryAgain": "Try again"
+  },
+  "pairingDialog": {
+    "compareHint": "Make sure this code matches on both screens before continuing.",
+    "confirm": "Confirm",
+    "reject": "Reject",
+    "tryAgain": "Try again",
+    "expired": "This request expired before it was confirmed. Please try again.",
+    "addDevice": {
+      "title": "Add a device",
+      "waitingHint": "On the new device, choose \"Join an existing group\", then come back here.",
+      "listening": "Waiting for a device to join…",
+      "incomingHint": "\"{{deviceLabel}}\" wants to join this sync group."
+    },
+    "joinGroup": {
+      "title": "Join a sync group",
+      "hint": "Enter the sync code from your other device, and a name for this one.",
+      "secretLabel": "Sync code",
+      "labelLabel": "This device's name",
+      "joinButton": "Join",
+      "connecting": "Connecting…",
+      "awaitingOtherDevice": "Waiting for the other device to confirm…",
+      "readyPrompt": "Codes match on both screens. Finish joining?",
+      "finishButton": "Finish joining"
+    }
+  },
+  "updateDialog": {
+    "title": "Update available",
+    "readyToInstall": "OpenPal {{version}} is ready to install.",
+    "progressOf": "{{received}} of {{total}}",
+    "progressAriaLabel": "Installing update",
+    "skip": "Skip this version",
+    "later": "Later",
+    "installing": "Installing…",
+    "tryAgain": "Try again",
+    "updateAndRestart": "Update & Restart"
+  },
+  "plugins": {
+    "title": "Plugins",
+    "subtitle": "Plugins extend what your assistant can do, like browsing Hugging Face models or reading replies aloud. Turn one on and it sets itself up; it all still runs on your Mac.",
+    "empty": "No plugins are installed yet.",
+    "disable": "Disable",
+    "enable": "Enable",
+    "versionByAuthor": "v{{version}} · by {{author}}",
+    "setupProgressAriaLabel": "Setting up {{name}}",
+    "retry": "Retry",
+    "experimental": "Experimental",
+    "service": {
+      "running": "Running",
+      "starting": "Starting…",
+      "stopped": "Stopped",
+      "failed": "Service failed"
+    },
+    "names": {
+      "smartModelRouter": "Smart Model Router"
+    }
+  },
+  "format": {
+    "timeAgo": {
+      "justNow": "just now",
+      "minAgo_one": "{{count}} min ago",
+      "minAgo_other": "{{count}} min ago",
+      "hourAgo_one": "an hour ago",
+      "hourAgo_other": "{{count}} hours ago",
+      "yesterday": "yesterday",
+      "daysAgo_one": "{{count}} day ago",
+      "daysAgo_other": "{{count}} days ago"
+    },
+    "recencyBucket": {
+      "today": "Today",
+      "thisWeek": "This week",
+      "thisMonth": "This month",
+      "older": "Older"
+    },
+    "eta": {
+      "almostDone": "almost done",
+      "underMinute": "under a minute left",
+      "aboutMinute": "about a minute left",
+      "minutesLeft_one": "about {{count}} minute left",
+      "minutesLeft_other": "about {{count}} minutes left",
+      "hoursLeft_one": "about an hour left",
+      "hoursLeft_other": "about {{count}} hours left"
+    },
+    "tokensPerSec": {
+      "fast_one": "about {{count}} tokens per second",
+      "fast_other": "about {{count}} tokens per second",
+      "medium_one": "about {{count}} tokens per second",
+      "medium_other": "about {{count}} tokens per second",
+      "veryLongWait": "so slow that even a short answer could take over an hour",
+      "longWait_one": "very slow (a short answer could take {{count}} minute or more)",
+      "longWait_other": "very slow (a short answer could take {{count}} minutes or more)",
+      "slow": "slow (expect to wait several minutes for each answer)"
+    },
+    "tokensPerSecCompact": {
+      "fast_one": "{{count}} tok/s",
+      "fast_other": "{{count}} tok/s",
+      "medium_one": "{{count}} tok/s",
+      "medium_other": "{{count}} tok/s",
+      "slow": "<1 tok/s"
+    },
+    "fitLabel": {
+      "perfect": "Perfect fit",
+      "good": "Good fit",
+      "tight": "A bit snug",
+      "diskSlow": "Runs slowly from disk",
+      "tooBig": "Too big for this Mac"
+    },
+    "roughFitLabel": {
+      "no": "Could not fit",
+      "yes": "Could fit"
+    },
+    "architecture": {
+      "moe": "MoE",
+      "dense": "Dense"
+    },
+    "paramsActive": "{{total}} ({{active}} active)"
+  },
+  "onboarding": {
+    "welcome": {
+      "headline1": "Your own AI.",
+      "headline2": "Private, free, and",
+      "headline3": "right here on your Mac.",
+      "perks": [
+        "No account needed to get started.",
+        "Everything stays on this Mac.",
+        "Your conversations stay yours."
+      ],
+      "note": "NB: Features like Web Search and Agent tools can interact with external services and may leak parts of your session data. You can disable these options in settings.",
+      "start": "Let's set things up"
+    },
+    "name": {
+      "title": "What should we call you?",
+      "sub": "We'll only use this to personalize your welcome.",
+      "label": "Your name",
+      "placeholder": "Enter your name",
+      "continue": "Continue"
+    },
+    "scan": {
+      "title": "First, let's see what your Mac can do.",
+      "chip": "Chip",
+      "memory": "Memory",
+      "graphics": "Graphics",
+      "graphicsReady": "Ready for AI",
+      "graphicsStandard": "Standard",
+      "freeSpace": "Free space",
+      "showMatch": "Show my match",
+      "loading": "Taking a look…"
+    },
+    "recommend": {
+      "madeForMac": "Made for your Mac",
+      "byPublisher": "by {{publisher}}",
+      "useModel": "Use {{name}}",
+      "download": "Download · {{size}}",
+      "hideAlternatives": "Hide other options",
+      "pickDifferent": "Pick a different one",
+      "recommendedTag": "Recommended",
+      "reassure": "You can switch models anytime later.",
+      "preparing": "Preparing your recommendation…"
+    },
+    "download": {
+      "failedTitle": "Hmm, that didn't finish.",
+      "tryAgain": "Try again",
+      "goBack": "Go back",
+      "bringingHome": "Bringing {{name}} home…",
+      "progressOf": "{{received}} of {{total}}",
+      "reassure": "Feel free to do something else. We'll keep going.",
+      "needsNudgeTitle": "It needs another nudge.",
+      "wakingTitle": "Waking it up…",
+      "loadingIntoMemory": "Loading {{name}} into memory. Just a moment."
+    },
+    "skipStep": "Skip this step",
+    "skipSetup": "Skip setup",
+    "skipConfirm": {
+      "title": "Skip setup?",
+      "noModel": "You can't chat until you pick a model, but you can do that anytime in Models.",
+      "downloading": "Your model download will stop. You can resume it anytime in Models, but you can't chat until a model is ready.",
+      "modelReady": "Your model is installed. All that's left is an optional PIN and the update check. You can find both in Settings later."
+    },
+    "ready": {
+      "allSet": "All set.",
+      "yourAi": "Your AI",
+      "awake": "{{name}} is awake and listening. It runs entirely on your Mac, even with the internet off.",
+      "almostThere": "Almost there.",
+      "noModel": "Pick a model in Models whenever you're ready, and you can start chatting. Once it's downloaded, it runs on your Mac, even with the internet off.",
+      "downloadStopped": "Your download was stopped. Resume it in Models whenever you're ready, and you can start chatting.",
+      "updateChoice": "Check github.com for new versions after each launch (off by default; change anytime in Settings)",
+      "sayHello": "Say hello",
+      "getStarted": "Get started"
+    }
+  },
+  "appLock": {
+    "gate": {
+      "pinTitle": "Enter your PIN",
+      "attemptsRemaining_one": "{{count}} attempt left before you can use your recovery code instead.",
+      "attemptsRemaining_other": "{{count}} attempts left before you can use your recovery code instead.",
+      "wrongPin": "That PIN isn't right.",
+      "lockedFor": "Try again in {{seconds}}s",
+      "recoveryTitle": "Use your recovery code instead",
+      "recoveryIntro": "Too many attempts. Enter the recovery code you saved earlier to get back in and turn the PIN off.",
+      "recoveryInputLabel": "Recovery code",
+      "recoveryInputPlaceholder": "ABCDE-FGHJK-MNPQR-STVWX-YZ",
+      "recoveryButton": "Unlock",
+      "recoveryConfirming": "Checking your code…",
+      "recoveryError": "Couldn't unlock: {{message}}",
+      "resetTitle": "Erase and start over",
+      "eraseLink": "Can't get back in at all? Erase everything and start over"
+    },
+    "reset": {
+      "warning": "This permanently deletes every conversation, project, setting, and skill. Downloaded models are kept. This cannot be undone.",
+      "instruction": "Type {{phrase}} to confirm",
+      "confirmButton": "Erase everything",
+      "working": "Working…"
+    },
+    "onboarding": {
+      "offerTitle": "Add a PIN?",
+      "offerBody": "You already saved a recovery code earlier. It'll get you back in if you ever forget this PIN. You can add one later in Settings.",
+      "setPinButton": "Set a PIN",
+      "createPinTitle": "Choose a PIN",
+      "confirmPinTitle": "Confirm your PIN",
+      "backButton": "Back",
+      "pinMismatch": "Those PINs don't match."
+    },
+    "settings": {
+      "summary": "App lock",
+      "hint": "Ask for a PIN whenever OpenPal starts.",
+      "stateOn": "On",
+      "stateOff": "Off",
+      "turnOn": "Turn on",
+      "changeSettings": "Change PIN",
+      "turnOff": "Turn off",
+      "saving": "Saving…",
+      "enterPin": "Enter your PIN",
+      "resetBanner": "Your PIN was turned off after you used your recovery code to get back in. Set a new one below, or leave it off.",
+      "pin": {
+        "wrongPin": "That PIN isn't right.",
+        "lockedFor": "Try again in {{seconds}}s",
+        "createLabel": "Set a PIN",
+        "changeLabel": "Change PIN",
+        "createHint": "Choose a PIN you'll remember. You can always get back in with your recovery code if you forget it.",
+        "changeHint": "Choose a new PIN, or leave things as they are and just save.",
+        "newPinSet": "New PIN set. Save to apply it.",
+        "enterNew": "Enter a new PIN",
+        "confirmNew": "Confirm your new PIN",
+        "mismatch": "Those PINs don't match."
+      },
+      "dangerZone": {
+        "summary": "Danger zone",
+        "eraseButton": "Erase all data and start over"
+      }
+    }
+  },
+  "discover": {
+    "title": "Browse Hugging Face",
+    "subtitle": "Search trending GGUF models on Hugging Face, right here. Open one, pick a file, and it downloads like any other model in your library.",
+    "searchPlaceholder": "Search models…",
+    "searchLabel": "Search models",
+    "sortLabel": "Sort by",
+    "sort": {
+      "trending": "Trending",
+      "downloads": "Most downloaded",
+      "likes": "Most liked",
+      "lastModified": "Recently updated"
+    },
+    "fitToggle": "Only show models that fit my Mac",
+    "looking": "Looking…",
+    "emptyResults": "No GGUF models matched. Try a different search.",
+    "emptyFitting": "None of these results are estimated to fit your Mac. Try loading more, a different search, or turn the checkbox off to see everything.",
+    "loadingMore": "Loading more…",
+    "gatedBadge": "Gated",
+    "fitEstimateHint": "estimate",
+    "backToBrowse": "← Back to Browse",
+    "byOwner": "by {{owner}}",
+    "gatedNotice": "This model requires accepting a license on huggingface.co, so OpenPal can’t download it yet.",
+    "downloadsCount": "⬇ {{count}} downloads",
+    "contextNote": "Hugging Face lists a {{count}}-token context window, but OpenPal runs models you add here at 8,192 tokens.",
+    "openOnHf": "Open on huggingface.co",
+    "loadingGeneric": "Loading…",
+    "modelCardSummary": "Model card",
+    "noModelCard": "No model card yet.",
+    "filesHeading": "Files",
+    "filesCount_one": "{{count}} file",
+    "filesCount_other": "{{count}} files",
+    "moeUncertain": "couldn’t verify MoE status (showing a conservative estimate)",
+    "longAnswerEstimate": "{{speed}} · a long answer would take about {{duration}}",
+    "addedBadge": "✓ Added",
+    "adding": "Adding…",
+    "addToLibrary": "Add to library",
+    "seeInLibrary": "See it in your model library →"
+  },
+  "library": {
+    "title": "Models",
+    "subtitle": "Every model lives and runs entirely on your Mac. Pick whichever suits you. Switching takes a few seconds.",
+    "showInFinder": "Show downloads in Finder",
+    "otherModelsHeading": "All models",
+    "availableRam": "Available memory: {{ram}}",
+    "list": {
+      "quantCount_one": "{{count}} quantization",
+      "quantCount_other": "{{count}} quantizations",
+      "quantsAriaLabel": "Show the {{count}} quantizations of {{name}}",
+      "curatedFlag": "OpenPal default",
+      "curatedFlagTitle": "One of OpenPal's pre-selected default models",
+      "searchPlaceholder": "Search models",
+      "searchAriaLabel": "Search models by name, author or quantization",
+      "filtersAriaLabel": "Filter models",
+      "filter": {
+        "all": "All",
+        "installed": "Installed",
+        "compatible": "Fits this Mac"
+      },
+      "sortLabel": "Sort by",
+      "sort": {
+        "recommended": "Recommended",
+        "name": "Name",
+        "size": "Size",
+        "speed": "Speed"
+      },
+      "count_one": "{{count}} model",
+      "count_other": "{{count}} models",
+      "emptyFiltered": "No models match your search.",
+      "resetFilters": "Clear search and filters",
+      "moreActionsAriaLabel": "More actions for {{name}}",
+      "fitInfo": {
+        "label": "What do the fit icons mean?",
+        "heading": "Will it run on this Mac?",
+        "perfect": "Fits with memory to spare. The lightning marks the fastest picks.",
+        "good": "Fits in your memory and runs well.",
+        "tight": "Fits, but only just. Your other apps will feel it.",
+        "diskSlow": "Doesn't fit in your memory. It can still be used, reading from your disk as it answers, but that is far slower.",
+        "tooBig": "Needs more memory than this Mac has."
+      },
+      "quantInfo": {
+        "label": "What is a quantization?",
+        "heading": "Quantizations",
+        "body": "The same model, compressed by different amounts, a bit like saving a photo at a smaller file size. A smaller one uses less memory and answers faster; a larger one keeps a little more of the model's quality.",
+        "naming": "The names are just labels for how hard it was compressed: Q4 is squeezed more than Q8. If you're unsure, pick the one that fits your Mac best."
+      }
+    },
+    "cloudModelsHeading": "Cloud models",
+    "byPublisher": "by {{publisher}}",
+    "inUse": "✓ In use",
+    "goToChat": "Go to chat",
+    "useThisModel": "Use this model",
+    "requiresPlan": "Requires the {{tier}} plan.",
+    "signInToUnlock": "Sign in to unlock",
+    "pickerEmpty": "None of our picks fit this Mac yet. Browse Hugging Face in Discover, or turn on “Add your own models” in Settings → AI model.",
+    "sliderAriaLabel": "Model: speed vs. intelligence",
+    "fastLightweight": "Fast & lightweight",
+    "smartHeavy": "Smart & heavy",
+    "diskSlowConfirm": {
+      "title": "{{name}} is bigger than your memory",
+      "base": "This model is too big for your memory, but it can still run straight from disk, just slowly.",
+      "checking": "Checking your disk's speed…",
+      "stillUnknown": "Answers may take several minutes.",
+      "blocked": "Your disk is too slow for this to be usable. This only works well on a fast internal drive.",
+      "speedEstimate": "Estimated speed on your disk: {{speed}}",
+      "fasterAlternative": "Want quick answers instead? {{name}} runs at full speed on this machine."
+    },
+    "deleteConfirm": {
+      "removeTitle": "Remove {{name}}?",
+      "discardTitle": "Discard this download?",
+      "remove": "Remove {{name}} from your library? You can always download it again later.",
+      "discard": "Discard the partial download of {{name}}? The bytes downloaded so far will be deleted."
+    },
+    "downloadAnyway": "Download anyway",
+    "recommendedFlag": "Our pick for your Mac",
+    "customFlag": "Added by you",
+    "modelMeta": "by {{publisher}} · {{params}} · {{size}}",
+    "defaultAtStartup": "Default at startup",
+    "defaultAtStartupTitle": "OpenPal opens with this model (set in Settings)",
+    "readsImages": "Reads images",
+    "readsImagesTitle": "Can read images you attach",
+    "speedEstimateLabel": "Estimated speed on your {{chip}}:",
+    "speedLongAnswer": "a long answer: about {{duration}}",
+    "downloadProgressOf": "{{received}} of {{total}}",
+    "downloadProgressAriaLabel": "Downloading {{name}}",
+    "waking": "Waking up…",
+    "wakingSlow": "Waking up… this huge model can take a few minutes.",
+    "fileMissing": "Its file has moved or was deleted.",
+    "removeFromLibrary": "Remove from library",
+    "removeFromLibraryAriaLabel": "Remove {{name}} from library",
+    "remove": "Remove",
+    "removeAriaLabel": "Remove {{name}}",
+    "resumeDownload": "Resume download",
+    "downloadSize": "Download · {{size}}",
+    "discard": "Discard",
+    "discardAriaLabel": "Discard {{name}}",
+    "cancelDownloadAriaLabel": "Cancel downloading {{name}}",
+    "addModel": {
+      "label": "Add your own model",
+      "hint": "Want something beyond our picks? Paste a Hugging Face link (or an id like “TheOrg/TheModel-GGUF”) to browse its files, or pick a .gguf file already on your Mac. Your own models may need more care, since our memory estimates for them are rough guesses.",
+      "placeholder": "huggingface.co/TheOrg/TheModel-GGUF",
+      "searching": "Looking…",
+      "findFiles": "Find files",
+      "fileCount_one": "{{count}} file",
+      "fileCount_other": "{{count}} files",
+      "added": "✓ Added",
+      "adding": "Adding…",
+      "add": "Add",
+      "waitingForPick": "Waiting for your pick…",
+      "chooseFile": "Choose a file on your Mac…"
+    }
+  },
+  "chatView": {
+    "sources": {
+      "label": "Sources"
+    },
+    "parentalLock": {
+      "schedule": "Chatting is paused for now. It's available again at {{time}}.",
+      "tomorrow": "That's it for today. Chatting starts fresh tomorrow.",
+      "placeholder": "Chatting is paused right now"
+    },
+    "thinking": {
+      "live": "Thinking…",
+      "done": "Thoughts"
+    },
+    "activity": {
+      "searching": "Searching the web for “{{query}}”",
+      "readingResults": "Reading results…",
+      "reading": "Reading {{host}}…",
+      "tool": "Using {{tool}}…",
+      "researching": "Researching…",
+      "workingItOut": "Working it out…",
+      "waitingApproval": "Waiting for your approval",
+      "waitingAnswer": "Waiting for your answer"
+    },
+    "liveRegion": {
+      "thinking": "Thinking…"
+    },
+    "toolActivity": {
+      "title": "Searched the web",
+      "searchesCount_one": "{{count}} search",
+      "searchesCount_other": "{{count}} searches",
+      "pagesReadCount_one": "{{count}} page read",
+      "pagesReadCount_other": "{{count}} pages read",
+      "searchedLabel": "Searched",
+      "searchedQuery": "“{{query}}”",
+      "readLabel": "Read"
+    },
+    "agentActivity": {
+      "title": "Agent tools",
+      "callCount_one": "{{count}} action",
+      "callCount_other": "{{count}} actions",
+      "helperLabel": "{{kind}} helper"
+    },
+    "toolConsent": {
+      "wantsTo": "{{tool}} wants to:",
+      "requestedBy": "Requested by the {{kind}} helper",
+      "resolvedPathPrefix": "Resolves to:",
+      "outsideWorkspace": "This is outside your agent workspace.",
+      "dangerFlags": {
+        "forkBombShape": "Looks like it could spawn processes out of control.",
+        "rawDeviceIo": "Looks like it reads or writes a raw disk device.",
+        "networkFetchPipeShell": "Looks like it downloads something and runs it immediately.",
+        "sudoOrPrivEsc": "Looks like it tries to run as another user or gain more access.",
+        "derivedFromRecentOutput": "This looks copied from something a tool just returned. Double-check it wasn't slipped in by a file or page it read."
+      },
+      "allowOnce": "Allow once",
+      "alwaysAllow": "Always allow",
+      "deny": "Deny",
+      "denyNoteLabel": "Tell it why (optional)",
+      "denyNotePlaceholder": "e.g. \"no need to read that file\"",
+      "autoApproved": "Auto-approved by a standing permission",
+      "denied": "Denied",
+      "rejected": "Blocked automatically",
+      "resultOk": "Done",
+      "resultFailed": "Failed",
+      "resultRunning": "Running…"
+    },
+    "askUser": {
+      "title": "A question from the assistant",
+      "stepLabel": "Asked",
+      "answerPlaceholder": "Type your answer…",
+      "send": "Send",
+      "skip": "Skip",
+      "skippedAnswer": "(No answer given)"
+    },
+    "copyButton": {
+      "copy": "Copy",
+      "copied": "Copied"
+    },
+    "speakButton": {
+      "readAloud": "Read aloud",
+      "stop": "Stop"
+    },
+    "attachment": {
+      "view": "View {{name}}",
+      "preview": "Preview {{name}}",
+      "remove": "Remove {{name}}",
+      "removeTitle": "Remove"
+    },
+    "docPreview": {
+      "ariaLabel": "Preview of {{name}}",
+      "closeAriaLabel": "Close preview",
+      "noText": "No readable text was found in this file."
+    },
+    "artifact": {
+      "open": "Open {{name}}"
+    },
+    "artifactPreview": {
+      "ariaLabel": "Preview of {{name}}",
+      "closeAriaLabel": "Close preview",
+      "download": "Download",
+      "downloadAriaLabel": "Download {{name}}",
+      "empty": "This file is empty."
+    },
+    "emptyState": {
+      "title": "What can I help with?",
+      "titleWithName": "Hi, {{name}}. What can I help with?",
+      "subtitle": "Ask anything. It all stays between you and your Mac."
+    },
+    "messageEdit": {
+      "textareaLabel": "Edit message",
+      "send": "Send"
+    },
+    "message": {
+      "edit": "Edit",
+      "fork": "Fork",
+      "retry": "Retry",
+      "youSaid": "You said:",
+      "assistantSaid": "Assistant said:"
+    },
+    "variantNav": {
+      "previous": "Previous version",
+      "next": "Next version",
+      "counter": "{{current}} of {{total}}"
+    },
+    "forkDialog": {
+      "title": "Fork this conversation?",
+      "message": "This creates a new, separate conversation containing the messages up to this point. The original conversation stays unchanged.",
+      "confirm": "Fork"
+    },
+    "forkOriginHint": "This conversation was forked from",
+    "forkOriginDeleted": "This conversation was forked from a deleted conversation",
+    "forkOriginBadge": {
+      "unknownSource": "Original conversation",
+      "ariaLabel": "Open \"{{title}}\""
+    },
+    "scrollToBottom": "Scroll to latest message",
+    "engineBanner": {
+      "tryAgain": "Try again",
+      "dismiss": "Dismiss"
+    },
+    "safetyBanner": {
+      "title": "It sounds like things might be really hard right now.",
+      "body": "You don't have to go through this alone. Free, confidential support is available any time, day or night.",
+      "hotline": "Visit findahelpline.com to find a verified crisis helpline for your country; most are free to call or text.",
+      "learnMore": "Find a helpline",
+      "learnMoreUrl": "https://findahelpline.com",
+      "dismiss": "Dismiss",
+      "dismissAriaLabel": "Dismiss crisis support message"
+    },
+    "modelPicker": {
+      "switchModel": "Switch model",
+      "current": "current"
+    },
+    "composer": {
+      "textareaLabel": "Message",
+      "placeholderWebSearch": "Ask me anything. I can search the web…",
+      "placeholderDefault": "Ask me anything…",
+      "startingSlow": "Warming up a huge model. The first answer can take a few minutes…",
+      "startingNormal": "Warming up, just a moment…",
+      "placeholderStopped": "Pick a model in Models to get started",
+      "hintStopped": "Pick a model to get started",
+      "imageTooLarge": "That image is too large to attach. Try one under 16 MB.",
+      "pastedImageName": "pasted image",
+      "visionOnlyPaste": "This model can't see images. Pick a vision model like Gemma to send pictures.",
+      "addMenuTitle": "Add files or turn on tools",
+      "addImagesOrFiles": "Add images or files",
+      "addFilesOnly": "Add files",
+      "webSearchOffCloud": "Web search isn't available while chatting with a cloud model",
+      "webSearchOffMobile": "Web search isn't available on mobile yet",
+      "webSearchOnForChat": "Web search is on for this chat",
+      "webSearchOffForChat": "Web search is off for this chat",
+      "webSearchOnLabel": "Web search: on",
+      "webSearchLabel": "Web search",
+      "agentToolsOffMobile": "Agent tools aren't available on mobile yet",
+      "agentToolsOffDisabled": "Turn on Agent tools in Settings to use them",
+      "agentToolsOnForChat": "Agent tools are on for this chat",
+      "agentToolsOffForChat": "Agent tools are off for this chat",
+      "agentToolsOnLabel": "Agent tools: on",
+      "agentToolsLabel": "Agent tools",
+      "micListening": "Listening (click to stop)",
+      "micTypeByTalking": "Type by talking",
+      "micTurnOnVoice": "Turn on Voice in Plugins to dictate",
+      "stop": "Stop",
+      "send": "Send",
+      "improve": {
+        "title": "Your AI rewrites what you typed so it's clearer. You can always undo.",
+        "offEmpty": "Type a message first",
+        "offSkillOnly": "Type a message after the /skill first",
+        "offNotReady": "Pick a model first",
+        "offStarting": "Warming up, try again in a moment",
+        "offBusy": "Wait for the current reply to finish",
+        "offTooLong": "This message is too long to improve. Send it as it is.",
+        "offDiskSlow": "Not available while a model runs from disk",
+        "offImproving": "Improving your message…",
+        "working": "Improving your message…",
+        "stopTitle": "Stop improving",
+        "done": "Improved by your AI.",
+        "undo": "Undo",
+        "undoLabel": "Undo: bring back what I typed",
+        "undone": "Back to what you typed.",
+        "noChange": "Your message is already clear.",
+        "noAnswer": "Your AI ran out of room while thinking. Try again, or turn off \"Show model thinking\" in Settings.",
+        "failed": "Couldn't improve it this time. Your message is unchanged.",
+        "stopped": "Stopped. Your message is unchanged."
+      }
+    }
+  },
+  "skillsView": {
+    "title": "Skills",
+    "descriptionBefore": "Skills are reusable instructions you write once. Save one, then type ",
+    "descriptionAfter": " in chat to use it. Whatever else you type gets added after the skill's instructions.",
+    "newSkill": "New skill",
+    "emptyState": "No skills yet. Create one to get started.",
+    "edit": "Edit",
+    "export": "Export",
+    "delete": "Delete",
+    "deleteConfirm": "Delete the \"{{name}}\" skill? This can't be undone.",
+    "editSkillTitle": "Edit skill",
+    "newSkillTitle": "New skill",
+    "triggeredByBefore": "Triggered by ",
+    "triggeredByAfter": " in chat.",
+    "nameLabel": "Name",
+    "namePlaceholder": "Summarize",
+    "descriptionLabel": "Description",
+    "descriptionPlaceholder": "Condense text into key bullet points",
+    "instructionsLabel": "Instructions",
+    "instructionsPlaceholder": "You are an expert summarizer. Read the user's message and…",
+    "saving": "Saving…",
+    "import": "Import",
+    "importTitle": "Import a skill",
+    "importSubtitle": "Add a skill from somewhere else: a file, a folder, or a zip archive.",
+    "importFileOption": "A file (.md)",
+    "importFileDesc": "A single Markdown file, imported as a new skill.",
+    "importFolderOption": "A folder",
+    "importFolderDesc": "A folder with a SKILL.md file, plus any supporting files.",
+    "importZipOption": "A .zip archive",
+    "importZipDesc": "A zipped skill folder from somewhere else.",
+    "importChoose": "Choose…",
+    "importing": "Importing…",
+    "fileCount_one": "{{count}} file",
+    "fileCount_other": "{{count}} files",
+    "supportingFilesNote_one": "This skill also includes a supporting file: {{files}}. To change it, use Export to save this skill as a .zip, edit the file, then Import it back.",
+    "supportingFilesNote_other": "This skill also includes {{count}} supporting files: {{files}}. To change them, use Export to save this skill as a .zip, edit the files, then Import it back."
+  },
+  "writingTools": {
+    "translateSubtitle": "Translate text right here, using the AI model that's already running on your Mac.",
+    "correctSubtitle": "Fix grammar and style right here, using the AI model that's already running on your Mac.",
+    "modeTranslate": "Translate",
+    "modeCorrect": "Correct",
+    "detectLanguage": "Detect language",
+    "sourceLangAriaLabel": "Translate from",
+    "targetLangAriaLabel": "Translate into",
+    "chooseLanguage": "Choose a language",
+    "sourceLabel": "Your text",
+    "sourcePlaceholder": "Paste or type your text here…",
+    "uploadDocument": "Upload a document",
+    "uploadedFile": "Loaded: {{name}}",
+    "unsupportedFileError": "That file doesn't have any text OpenPal can read.",
+    "resultLabel": "Result",
+    "resultPlaceholder": "Your result will appear here.",
+    "copy": "Copy",
+    "copied": "Copied",
+    "download": "Download",
+    "correctedSuffix": "corrected",
+    "chunkProgress": "Working on part {{current}} of {{total}}. Quality may vary slightly at section breaks.",
+    "acceptAllChanges": "Accept all",
+    "rejectAllChanges": "Reject all",
+    "acceptChange": "Apply this suggestion",
+    "rejectChange": "Revert to original",
+    "engineBusy": "Your AI is busy with another reply right now. This will run as soon as it's free.",
+    "stop": "Stop",
+    "runTranslate": "Translate",
+    "runCorrect": "Correct",
+    "localFirstNote": "Nothing you type here leaves your Mac."
+  },
+  "improveView": {
+    "title": "Improve a message",
+    "subtitle": "Rewrite a draft message before you even start a chat, using the same AI you already chat with.",
+    "sourceLabel": "Your message",
+    "sourcePlaceholder": "Paste or type a draft message here…",
+    "resultLabel": "Improved message",
+    "resultPlaceholder": "Your improved message will appear here.",
+    "run": "Improve",
+    "stop": "Stop",
+    "copy": "Copy",
+    "copied": "Copied",
+    "startChat": "Start a new chat with this",
+    "tooLong": "This message is too long to improve. Try something shorter.",
+    "engineBusy": "Your AI is busy with another reply right now. This will run as soon as it's free.",
+    "localNote": "This uses the same AI you're already chatting with, never a second model."
+  },
+  "markdown": {
+    "languageLabel": "Language: {{language}}",
+    "copyCode": "Copy code",
+    "copy": "Copy",
+    "copied": "Copied",
+    "codeScrollable": "Code, scrollable",
+    "tableScrollable": "Table, scrollable"
+  }
+}

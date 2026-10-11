@@ -1,0 +1,17 @@
+{
+  "name": "openpal",
+  "private": true,
+  "license": "MIT",
+  "description": "OpenPal — private AI that just works on your Mac. Repo-level scripts; the frontend lives in ui/.",
+  "scripts": {
+    "setup": "npm install && npm --prefix ui install",
+    "doctor": "cargo run -p openpal-bundler -- doctor",
+    "dev": "cd crates/app && tauri dev",
+    "dev:onboarding": "node scripts/dev-onboarding.mjs",
+    "build:app": "cd crates/app && tauri build",
+    "tauri": "tauri"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  }
+}

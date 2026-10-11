@@ -1,0 +1,1118 @@
+[
+  {
+    "id": "smollm2-135m",
+    "name": "SmolLM2 135M (test)",
+    "family": "SmolLM2",
+    "publisher": "Hugging Face",
+    "description": "A tiny model used only for automated tests.",
+    "strengths": [
+      "Tiny"
+    ],
+    "url": "https://huggingface.co/lmstudio-community/SmolLM2-135M-Instruct-GGUF/resolve/main/SmolLM2-135M-Instruct-Q8_0.gguf",
+    "fileName": "SmolLM2-135M-Instruct-Q8_0.gguf",
+    "sizeBytes": 144811072,
+    "quant": "Q8_0",
+    "paramsB": 0.135,
+    "moe": false,
+    "contextMax": 8192,
+    "qualityScore": 5,
+    "license": "Apache 2.0",
+    "extraArgs": [],
+    "hidden": true,
+    "sha256": "40f7094960b6ede829145d102ca79451b364b27d9d8694d4406e002024cff357"
+  },
+  {
+    "id": "llama-3.2-1b",
+    "name": "Llama 3.2 1B",
+    "family": "Llama",
+    "publisher": "Meta",
+    "description": "A featherweight assistant for quick questions and simple writing help, with instant answers even on older Macs.",
+    "strengths": [
+      "Very fast",
+      "Lightest on memory"
+    ],
+    "url": "https://huggingface.co/lmstudio-community/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.gguf",
+    "fileName": "Llama-3.2-1B-Instruct-Q4_K_M.gguf",
+    "sizeBytes": 807690688,
+    "quant": "Q4_K_M",
+    "paramsB": 1.24,
+    "moe": false,
+    "contextMax": 131072,
+    "qualityScore": 30,
+    "releaseDate": "2024-09-25",
+    "license": "Llama 3.2 Community License",
+    "extraArgs": [],
+    "hidden": false,
+    "sha256": "f7ede42862ceca07ad1c88a97b67520019c4ac7e5ced250d2e696fa62ab189af",
+    "taskDefaults": {
+      "general": {
+        "temperature": 0.6,
+        "topP": 0.9,
+        "topK": 40,
+        "minP": 0.05,
+        "repeatPenalty": 1.1,
+        "repeatLastN": 64,
+        "presencePenalty": 0,
+        "frequencyPenalty": 0,
+        "maxTokens": -1,
+        "seed": -1
+      }
+    },
+    "taskScores": {
+      "general": 28,
+      "coding": 15,
+      "writing": 22,
+      "mathScience": 15,
+      "agentic": 10
+    }
+  },
+  {
+    "id": "llama-3.2-3b",
+    "name": "Llama 3.2 3B",
+    "family": "Llama",
+    "publisher": "Meta",
+    "description": "Small and snappy, and surprisingly capable for everyday questions, summaries, and emails.",
+    "strengths": [
+      "Fast",
+      "Light on memory"
+    ],
+    "url": "https://huggingface.co/lmstudio-community/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf",
+    "fileName": "Llama-3.2-3B-Instruct-Q4_K_M.gguf",
+    "sizeBytes": 2019377440,
+    "quant": "Q4_K_M",
+    "paramsB": 3.21,
+    "moe": false,
+    "contextMax": 131072,
+    "qualityScore": 45,
+    "releaseDate": "2024-09-25",
+    "license": "Llama 3.2 Community License",
+    "extraArgs": [],
+    "hidden": false,
+    "sha256": "e4f1a04d927b09ec18eb2f233d85ecd760fc2d35cec97e37f8604d3632210d9a",
+    "taskDefaults": {
+      "general": {
+        "temperature": 0.6,
+        "topP": 0.9,
+        "topK": 40,
+        "minP": 0.05,
+        "repeatPenalty": 1.1,
+        "repeatLastN": 64,
+        "presencePenalty": 0,
+        "frequencyPenalty": 0,
+        "maxTokens": -1,
+        "seed": -1
+      }
+    },
+    "taskScores": {
+      "general": 33,
+      "coding": 20,
+      "writing": 30,
+      "mathScience": 20,
+      "agentic": 15
+    }
+  },
+  {
+    "id": "gemma-3-4b",
+    "name": "Gemma 3 4B",
+    "family": "Gemma",
+    "publisher": "Google",
+    "description": "Google's friendly small model: warm, natural conversation in over 100 languages.",
+    "strengths": [
+      "Natural writing",
+      "Many languages"
+    ],
+    "url": "https://huggingface.co/ggml-org/gemma-3-4b-it-GGUF/resolve/main/gemma-3-4b-it-Q4_K_M.gguf",
+    "fileName": "gemma-3-4b-it-Q4_K_M.gguf",
+    "sizeBytes": 2489757856,
+    "quant": "Q4_K_M",
+    "paramsB": 4.3,
+    "moe": false,
+    "contextMax": 131072,
+    "qualityScore": 55,
+    "releaseDate": "2025-03-12",
+    "license": "Gemma Terms of Use",
+    "extraArgs": [],
+    "hidden": false,
+    "sha256": "882e8d2db44dc554fb0ea5077cb7e4bc49e7342a1f0da57901c0802ea21a0863",
+    "vision": true,
+    "mmprojUrl": "https://huggingface.co/ggml-org/gemma-3-4b-it-GGUF/resolve/main/mmproj-model-f16.gguf",
+    "mmprojFileName": "gemma-3-4b-it-mmproj-f16.gguf",
+    "mmprojSizeBytes": 851251104,
+    "mmprojSha256": "8c0fb064b019a6972856aaae2c7e4792858af3ca4561be2dbf649123ba6c40cb",
+    "taskDefaults": {
+      "general": {
+        "temperature": 1.0,
+        "topP": 0.95,
+        "topK": 64,
+        "minP": 0.05,
+        "repeatPenalty": 1.1,
+        "repeatLastN": 64,
+        "presencePenalty": 0,
+        "frequencyPenalty": 0,
+        "maxTokens": -1,
+        "seed": -1
+      }
+    },
+    "taskScores": {
+      "general": 40,
+      "coding": 25,
+      "writing": 68,
+      "mathScience": 30,
+      "agentic": 25
+    }
+  },
+  {
+    "id": "qwen3-4b-instruct-2507",
+    "name": "Qwen3 4B",
+    "family": "Qwen",
+    "publisher": "Alibaba (Qwen team)",
+    "description": "The best small all-rounder: strong answers, writing, and coding help while staying quick and light.",
+    "strengths": [
+      "Great all-rounder",
+      "Strong for its size"
+    ],
+    "url": "https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF/resolve/main/Qwen3-4B-Instruct-2507-Q4_K_M.gguf",
+    "fileName": "Qwen3-4B-Instruct-2507-Q4_K_M.gguf",
+    "sizeBytes": 2497281120,
+    "quant": "Q4_K_M",
+    "paramsB": 4.0,
+    "moe": false,
+    "contextMax": 262144,
+    "qualityScore": 60,
+    "releaseDate": "2025-07",
+    "license": "Apache 2.0",
+    "extraArgs": [],
+    "hidden": false,
+    "sha256": "3605803b982cb64aead44f6c1b2ae36e3acdb41d8e46c8a94c6533bc4c67e597",
+    "taskDefaults": {
+      "general": {
+        "temperature": 0.7,
+        "topP": 0.8,
+        "topK": 20,
+        "minP": 0,
+        "repeatPenalty": 1.1,
+        "repeatLastN": 64,
+        "presencePenalty": 0,
+        "frequencyPenalty": 0,
+        "maxTokens": -1,
+        "seed": -1
+      }
+    },
+    "taskScores": {
+      "general": 52,
+      "coding": 55,
+      "writing": 50,
+      "mathScience": 55,
+      "agentic": 55
+    }
+  },
+  {
+    "id": "llama-3.1-8b",
+    "name": "Llama 3.1 8B",
+    "family": "Llama",
+    "publisher": "Meta",
+    "description": "A dependable mid-size classic: well-rounded answers with a huge community behind it.",
+    "strengths": [
+      "Well-rounded",
+      "Reliable"
+    ],
+    "url": "https://huggingface.co/lmstudio-community/Meta-Llama-3.1-8B-Instruct-GGUF/resolve/main/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
+    "fileName": "Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
+    "sizeBytes": 4920739168,
+    "quant": "Q4_K_M",
+    "paramsB": 8.03,
+    "moe": false,
+    "contextMax": 131072,
+    "qualityScore": 62,
+    "releaseDate": "2024-07-23",
+    "license": "Llama 3.1 Community License",
+    "extraArgs": [],
+    "hidden": false,
+    "sha256": "f2be3e1a239c12c9f3f01a962b11fb2807f8032fdb63b0a5502ea42ddef55e44",
+    "taskDefaults": {
+      "general": {
+        "temperature": 0.6,
+        "topP": 0.9,
+        "topK": 40,
+        "minP": 0.05,
+        "repeatPenalty": 1.1,
+        "repeatLastN": 64,
+        "presencePenalty": 0,
+        "frequencyPenalty": 0,
+        "maxTokens": -1,
+        "seed": -1
+      }
+    },
+    "taskScores": {
+      "general": 47,
+      "coding": 35,
+      "writing": 40,
+      "mathScience": 35,
+      "agentic": 30
+    }
+  },
+  {
+    "id": "qwen3-8b",
+    "name": "Qwen3 8B",
+    "family": "Qwen",
+    "publisher": "Alibaba (Qwen team)",
+    "description": "A noticeably smarter mid-size model, great for deeper questions, coding, and longer writing.",
+    "strengths": [
+      "Smart",
+      "Good at coding"
+    ],
+    "url": "https://huggingface.co/lmstudio-community/Qwen3-8B-GGUF/resolve/main/Qwen3-8B-Q4_K_M.gguf",
+    "fileName": "Qwen3-8B-Q4_K_M.gguf",
+    "sizeBytes": 5027783968,
+    "quant": "Q4_K_M",
+    "paramsB": 8.2,
+    "moe": false,
+    "contextMax": 32768,
+    "qualityScore": 70,
+    "releaseDate": "2025-04-29",
+    "license": "Apache 2.0",
+    "extraArgs": [],
+    "hidden": false,
+    "sha256": "a7676d257b10f3ce23aedba45e64ba61a5aa295f0009d87c5627f6c026a8f35f",
+    "taskDefaults": {
+      "general": {
+        "temperature": 0.6,
+        "topP": 0.95,
+        "topK": 20,
+        "minP": 0,
+        "repeatPenalty": 1.1,
+        "repeatLastN": 64,
+        "presencePenalty": 0,
+        "frequencyPenalty": 0,
+        "maxTokens": -1,
+        "seed": -1
+      }
+    },
+    "taskScores": {
+      "general": 58,
+      "coding": 70,
+      "writing": 55,
+      "mathScience": 65,
+      "agentic": 60
+    }
+  },
+  {
+    "id": "gemma-4-e2b",
+    "name": "Gemma 4 E2B",
+    "family": "Gemma",
+    "publisher": "Google",
+    "description": "Google's newest and lightest model: quick, natural conversation with image understanding, sized to stay comfortable on almost any Mac.",
+    "strengths": [
+      "Very fast",
+      "Newest generation"
+    ],
+    "url": "https://huggingface.co/ggml-org/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-Q4_0.gguf",
+    "fileName": "gemma-4-E2B-it-Q4_0.gguf",
+    "sizeBytes": 2841481184,
+    "quant": "Q4_0",
+    "paramsB": 4.6,
+    "moe": false,
+    "contextMax": 131072,
+    "qualityScore": 58,
+    "license": "Apache 2.0",
+    "extraArgs": [],
+    "hidden": false,
+    "sha256": "8e30dff3ac4c8434c49a7036fa15564bdbb6044e42bf04550bf1a096ad7e6a52",
+    "vision": true,
+    "mmprojUrl": "https://huggingface.co/ggml-org/gemma-4-E2B-it-GGUF/resolve/main/mmproj-gemma-4-E2B-it-BF16.gguf",
+    "mmprojFileName": "gemma-4-E2B-it-mmproj-bf16.gguf",
+    "mmprojSizeBytes": 986833664,
+    "mmprojSha256": "711e1e8f43fa0664adbac493129be1e6c25b81af4b4cdea97c7d798b25c0a3a4",
+    "curated": true,
+    "taskDefaults": {
+      "general": {
+        "temperature": 1.0,
+        "topP": 0.95,
+        "topK": 64,
+        "minP": 0.05,
+        "repeatPenalty": 1.1,
+        "repeatLastN": 64,
+        "presencePenalty": 0,
+        "frequencyPenalty": 0,
+        "maxTokens": -1,
+        "seed": -1
+      },
+      "coding": {
+        "temperature": 1.0,
+        "topP": 0.95,
+        "topK": 64,
+        "minP": 0.05,
+        "repeatPenalty": 1.1,
+        "repeatLastN": 64,
+        "presencePenalty": 0,
+        "frequencyPenalty": 0,
+        "maxTokens": -1,
+        "seed": -1
+      },
+      "writing": {
+        "temperature": 1.0,
+        "topP": 0.95,
+        "topK": 64,
+        "minP": 0.05,
+        "repeatPenalty": 1.1,
+        "repeatLastN": 64,
+        "presencePenalty": 0,
+        "frequencyPenalty": 0,
+        "maxTokens": -1,
+        "seed": -1
+      },
+      "mathScience": {
+        "temperature": 1.0,
+        "topP": 0.95,
+        "topK": 64,
+        "minP": 0.05,
+        "repeatPenalty": 1.1,
+        "repeatLastN": 64,
+        "presencePenalty": 0,
+        "frequencyPenalty": 0,
+        "maxTokens": -1,
+        "seed": -1
+      },
+      "agentic": {
+        "temperature": 1.0,
+        "topP": 0.95,
+        "topK": 64,
+        "minP": 0.05,
+        "repeatPenalty": 1.1,
+        "repeatLastN": 64,
+        "presencePenalty": 0,
+        "frequencyPenalty": 0,
+        "maxTokens": -1,
+        "seed": -1
+      }
+    },
+    "taskScores": {
+      "general": 43,
+      "coding": 30,
+      "writing": 55,
+      "mathScience": 30,
+      "agentic": 25
+    }
+  },
+  {
+    "id": "gemma-4-e4b",
+    "name": "Gemma 4 E4B",
+    "family": "Gemma",
+    "publisher": "Google",
+    "description": "The bigger sibling of E2B: noticeably sharper answers and the same newest-generation Gemma quality, including images, while still staying quick.",
+    "strengths": [
+      "Newest generation",
+      "Natural writing"
+    ],
+    "url": "https://huggingface.co/ggml-org/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-Q4_0.gguf",
+    "fileName": "gemma-4-E4B-it-Q4_0.gguf",
+    "sizeBytes": 4590807392,
+    "quant": "Q4_0",
+    "paramsB": 7.5,
+    "moe": false,
+    "contextMax": 131072,
+    "qualityScore": 68,
+    "license": "Apache 2.0",
+    "extraArgs": [],
+    "hidden": false,
+    "sha256": "a555b900214b477d8880e7832e0b8925e139b0159640036b09fe472b6f2097f2",
+    "vision": true,
+    "mmprojUrl": "https://huggingface.co/ggml-org/gemma-4-E4B-it-GGUF/resolve/main/mmproj-gemma-4-E4B-it-BF16.gguf",
+    "mmprojFileName": "gemma-4-E4B-it-mmproj-bf16.gguf",
+    "mmprojSizeBytes": 991552256,
+    "mmprojSha256": "f77995e4b6a569ab8f0d1bfdb7e8da4a0fa5b9e6f309b9bf3bdb76164d75e29f",
+    "curated": true,
+    "taskDefaults": {
+      "general": {
+        "temperature": 1.0,
+        "topP": 0.95,
+        "topK": 64,
+        "minP": 0.05,
+        "repeatPenalty": 1.1,
+        "repeatLastN": 64,
+        "presencePenalty": 0,
+        "frequencyPenalty": 0,
+        "maxTokens": -1,
+        "seed": -1
+      },
+      "coding": {
+        "temperature": 1.0,
+        "topP": 0.95,
+        "topK": 64,
+        "minP": 0.05,
+        "repeatPenalty": 1.1,
+        "repeatLastN": 64,
+        "presencePenalty": 0,
+        "frequencyPenalty": 0,
+        "maxTokens": -1,
+        "seed": -1
+      },
+      "writing": {
+        "temperature": 1.0,
+        "topP": 0.95,
+        "topK": 64,
+        "minP": 0.05,
+        "repeatPenalty": 1.1,
+        "repeatLastN": 64,
+        "presencePenalty": 0,
+        "frequencyPenalty": 0,
+        "maxTokens": -1,
+        "seed": -1
+      },
+      "mathScience": {
+        "temperature": 1.0,
+        "topP": 0.95,
+        "topK": 64,
+        "minP": 0.05,
+        "repeatPenalty": 1.1,
+        "repeatLastN": 64,
+        "presencePenalty": 0,
+        "frequencyPenalty": 0,
+        "maxTokens": -1,
+        "seed": -1
+      },
+      "agentic": {
+        "temperature": 1.0,
+        "topP": 0.95,
+        "topK": 64,
+        "minP": 0.05,
+        "repeatPenalty": 1.1,
+        "repeatLastN": 64,
+        "presencePenalty": 0,
+        "frequencyPenalty": 0,
+        "maxTokens": -1,
+        "seed": -1
+      }
+    },
+    "taskScores": {
+      "general": 49,
+      "coding": 35,
+      "writing": 65,
+      "mathScience": 35,
+      "agentic": 30
+    }
+  },
+  {
+    "id": "gemma-4-12b",
+    "name": "Gemma 4 12B",
+    "family": "Gemma",
+    "publisher": "Google",
+    "description": "Google's newest open model: excellent quality writing and reasoning for Macs with plenty of memory.",
+    "strengths": [
+      "Newest generation",
+      "Excellent writing"
+    ],
+    "url": "https://huggingface.co/ggml-org/gemma-4-12B-it-GGUF/resolve/main/gemma-4-12B-it-Q4_K_M.gguf",
+    "fileName": "gemma-4-12B-it-Q4_K_M.gguf",
+    "sizeBytes": 7381382048,
+    "quant": "Q4_K_M",
+    "paramsB": 12.0,
+    "moe": false,
+    "contextMax": 131072,
+    "qualityScore": 78,
+    "license": "Apache 2.0",
+    "extraArgs": [],
+    "hidden": false,
+    "sha256": "1278394b693672ac2799eadc9a83fd98259a6a88a40acfb1dcaa6c6fc895a606",
+    "vision": true,
+    "mmprojUrl": "https://huggingface.co/ggml-org/gemma-4-12B-it-GGUF/resolve/main/mmproj-gemma-4-12B-it-bf16.gguf",
+    "mmprojFileName": "gemma-4-12B-it-mmproj-bf16.gguf",
+    "mmprojSizeBytes": 175115584,
+    "mmprojSha256": "675ad6e68101ca9413ec806855c452362f0213f2dfc5800996b086fdb8119842",
+    "taskDefaults": {
+      "general": {
+        "temperature": 1.0,
+        "topP": 0.95,
+        "topK": 64,
+        "minP": 0.05,
+        "repeatPenalty": 1.1,
+        "repeatLastN": 64,
+        "presencePenalty": 0,
+        "frequencyPenalty": 0,
+        "maxTokens": -1,
+        "seed": -1
+      },
+      "coding": {
+        "temperature": 1.0,
+        "topP": 0.95,
+        "topK": 64,
+        "minP": 0.05,
+        "repeatPenalty": 1.1,
+        "repeatLastN": 64,
+        "presencePenalty": 0,
+        "frequencyPenalty": 0,
+        "maxTokens": -1,
+        "seed": -1
+      },
+      "writing": {
+        "temperature": 1.0,
+        "topP": 0.95,
+        "topK": 64,
+        "minP": 0.05,
+        "repeatPenalty": 1.1,
+        "repeatLastN": 64,
+        "presencePenalty": 0,
+        "frequencyPenalty": 0,
+        "maxTokens": -1,
+        "seed": -1
+      },
+      "mathScience": {
+        "temperature": 1.0,
+        "topP": 0.95,
+        "topK": 64,
+        "minP": 0.05,
+        "repeatPenalty": 1.1,
+        "repeatLastN": 64,
+        "presencePenalty": 0,
+        "frequencyPenalty": 0,
+        "maxTokens": -1,
+        "seed": -1
+      },
+      "agentic": {
+        "temperature": 1.0,
+        "topP": 0.95,
+        "topK": 64,
+        "minP": 0.05,
+        "repeatPenalty": 1.1,
+        "repeatLastN": 64,
+        "presencePenalty": 0,
+        "frequencyPenalty": 0,
+        "maxTokens": -1,
+        "seed": -1
+      }
+    },
+    "taskScores": {
+      "general": 58,
+      "coding": 40,
+      "writing": 74,
+      "mathScience": 50,
+      "agentic": 40
+    }
+  },
+  {
+    "id": "qwen3-14b",
+    "name": "Qwen3 14B",
+    "family": "Qwen",
+    "publisher": "Alibaba (Qwen team)",
+    "description": "A serious step up in depth and nuance that handles complex questions and bigger projects with ease.",
+    "strengths": [
+      "Deep answers",
+      "Strong coding"
+    ],
+    "url": "https://huggingface.co/lmstudio-community/Qwen3-14B-GGUF/resolve/main/Qwen3-14B-Q4_K_M.gguf",
+    "fileName": "Qwen3-14B-Q4_K_M.gguf",
+    "sizeBytes": 9001753376,
+    "quant": "Q4_K_M",
+    "paramsB": 14.8,
+    "moe": false,
+    "contextMax": 32768,
+    "qualityScore": 76,
+    "releaseDate": "2025-04-29",
+    "license": "Apache 2.0",
+    "extraArgs": [],
+    "hidden": false,
+    "sha256": "712c0791d5124d3dd6d1e4968de1201207afeae49c6e10fbeb9c58fe00c58555",
+    "taskDefaults": {
+      "general": {
+        "temperature": 0.6,
+        "topP": 0.95,
+        "topK": 20,
+        "minP": 0,
+        "repeatPenalty": 1.1,
+        "repeatLastN": 64,
+        "presencePenalty": 0,
+        "frequencyPenalty": 0,
+        "maxTokens": -1,
+        "seed": -1
+      }
+    },
+    "taskScores": {
+      "general": 65,
+      "coding": 78,
+      "writing": 60,
+      "mathScience": 70,
+      "agentic": 65
+    }
+  },
+  {
+    "id": "gpt-oss-20b",
+    "name": "GPT-OSS 20B",
+    "family": "GPT-OSS",
+    "publisher": "OpenAI",
+    "description": "OpenAI's open model: top-tier answers that arrive fast, thanks to its clever, efficient design.",
+    "strengths": [
+      "Top quality",
+      "Surprisingly fast"
+    ],
+    "url": "https://huggingface.co/unsloth/gpt-oss-20b-GGUF/resolve/main/gpt-oss-20b-Q4_K_M.gguf",
+    "fileName": "gpt-oss-20b-Q4_K_M.gguf",
+    "sizeBytes": 11624759488,
+    "quant": "Q4_K_M",
+    "paramsB": 20.9,
+    "moe": true,
+    "activeParamsB": 3.6,
+    "contextMax": 131072,
+    "qualityScore": 80,
+    "releaseDate": "2025-08-05",
+    "license": "Apache 2.0",
+    "extraArgs": [],
+    "hidden": false,
+    "sha256": "c27536640e410032865dc68781d80a08b98f8db5e93575919af8ccc0568aeb4f",
+    "curated": true,
+    "taskDefaults": {
+      "general": {
+        "temperature": 1.0,
+        "topP": 1.0,
+        "topK": 40,
+        "minP": 0.05,
+        "repeatPenalty": 1.1,
+        "repeatLastN": 64,
+        "presencePenalty": 0,
+        "frequencyPenalty": 0,
+        "maxTokens": -1,
+        "seed": -1
+      }
+    },
+    "taskScores": {
+      "general": 71,
+      "coding": 75,
+      "writing": 60,
+      "mathScience": 78,
+      "agentic": 85
+    }
+  },
+  {
+    "id": "qwen3.6-27b",
+    "name": "Qwen 3.6 27B",
+    "family": "Qwen",
+    "publisher": "Alibaba (Qwen team)",
+    "description": "Alibaba's latest flagship-class model: deep, nuanced answers from a model dense enough to make the most of every parameter, now with image understanding too.",
+    "strengths": [
+      "Newest generation",
+      "Deep reasoning"
+    ],
+    "url": "https://huggingface.co/unsloth/Qwen3.6-27B-MTP-GGUF/resolve/main/Qwen3.6-27B-Q4_K_M.gguf",
+    "fileName": "Qwen3.6-27B-Q4_K_M.gguf",
+    "sizeBytes": 17106773120,
+    "quant": "Q4_K_M",
+    "paramsB": 27.3,
+    "moe": false,
+    "contextMax": 262144,
+    "qualityScore": 86,
+    "license": "Apache 2.0",
+    "extraArgs": [],
+    "hidden": false,
+    "sha256": "a7cbd3ecc0e3f9b333edee61ae66bc87ed713c5d49587a8355814722ed329e0f",
+    "vision": true,
+    "mmprojUrl": "https://huggingface.co/unsloth/Qwen3.6-27B-MTP-GGUF/resolve/main/mmproj-BF16.gguf",
+    "mmprojFileName": "Qwen3.6-27B-mmproj-bf16.gguf",
+    "mmprojSizeBytes": 931146304,
+    "mmprojSha256": "05353347512982ee62317b9d8c89372bc815f4b4043580e7ef3ad411ec1a1cd3",
+    "curated": true,
+    "taskDefaults": {
+      "general": {
+        "temperature": 0.7,
+        "topP": 0.8,
+        "topK": 20,
+        "minP": 0,
+        "repeatPenalty": 1.0,
+        "repeatLastN": 64,
+        "presencePenalty": 1.5,
+        "frequencyPenalty": 0,
+        "maxTokens": -1,
+        "seed": -1
+      },
+      "coding": {
+        "temperature": 0.7,
+        "topP": 0.8,
+        "topK": 20,
+        "minP": 0,
+        "repeatPenalty": 1.0,
+        "repeatLastN": 64,
+        "presencePenalty": 1.5,
+        "frequencyPenalty": 0,
+        "maxTokens": -1,
+        "seed": -1
+      },
+      "writing": {
+        "temperature": 0.7,
+        "topP": 0.8,
+        "topK": 20,
+        "minP": 0,
+        "repeatPenalty": 1.0,
+        "repeatLastN": 64,
+        "presencePenalty": 1.5,
+        "frequencyPenalty": 0,
+        "maxTokens": -1,
+        "seed": -1
+      },
+      "mathScience": {
+        "temperature": 0.7,
+        "topP": 0.8,
+        "topK": 20,
+        "minP": 0,
+        "repeatPenalty": 1.0,
+        "repeatLastN": 64,
+        "presencePenalty": 1.5,
+        "frequencyPenalty": 0,
+        "maxTokens": -1,
+        "seed": -1
+      },
+      "agentic": {
+        "temperature": 0.7,
+        "topP": 0.8,
+        "topK": 20,
+        "minP": 0,
+        "repeatPenalty": 1.0,
+        "repeatLastN": 64,
+        "presencePenalty": 1.5,
+        "frequencyPenalty": 0,
+        "maxTokens": -1,
+        "seed": -1
+      }
+    },
+    "taskDefaultsThinking": {
+      "general": {
+        "temperature": 1.0,
+        "topP": 0.95,
+        "topK": 20,
+        "minP": 0,
+        "repeatPenalty": 1.0,
+        "repeatLastN": 64,
+        "presencePenalty": 0.0,
+        "frequencyPenalty": 0,
+        "maxTokens": -1,
+        "seed": -1
+      },
+      "coding": {
+        "temperature": 0.6,
+        "topP": 0.95,
+        "topK": 20,
+        "minP": 0,
+        "repeatPenalty": 1.0,
+        "repeatLastN": 64,
+        "presencePenalty": 0.0,
+        "frequencyPenalty": 0,
+        "maxTokens": -1,
+        "seed": -1
+      }
+    },
+    "taskScores": {
+      "general": 76,
+      "coding": 72,
+      "writing": 70,
+      "mathScience": 80,
+      "agentic": 72
+    }
+  },
+  {
+    "id": "qwen3-30b-a3b-instruct-2507",
+    "name": "Qwen3 30B",
+    "family": "Qwen",
+    "publisher": "Alibaba (Qwen team)",
+    "description": "Remarkably smart yet quick. Its efficient design answers like a big model at small-model speed.",
+    "strengths": [
+      "Excellent quality",
+      "Surprisingly fast"
+    ],
+    "url": "https://huggingface.co/unsloth/Qwen3-30B-A3B-Instruct-2507-GGUF/resolve/main/Qwen3-30B-A3B-Instruct-2507-Q4_K_M.gguf",
+    "fileName": "Qwen3-30B-A3B-Instruct-2507-Q4_K_M.gguf",
+    "sizeBytes": 18556686752,
+    "quant": "Q4_K_M",
+    "paramsB": 30.5,
+    "moe": true,
+    "activeParamsB": 3.3,
+    "contextMax": 262144,
+    "qualityScore": 85,
+    "releaseDate": "2025-07",
+    "license": "Apache 2.0",
+    "extraArgs": [],
+    "hidden": false,
+    "sha256": "6c997b8af17debdfb01d890214400ccbab00db6acc0ba8da5de1cc906c4774d0",
+    "taskDefaults": {
+      "general": {
+        "temperature": 0.7,
+        "topP": 0.8,
+        "topK": 20,
+        "minP": 0,
+        "repeatPenalty": 1.1,
+        "repeatLastN": 64,
+        "presencePenalty": 0,
+        "frequencyPenalty": 0,
+        "maxTokens": -1,
+        "seed": -1
+      }
+    },
+    "taskScores": {
+      "general": 72,
+      "coding": 75,
+      "writing": 67,
+      "mathScience": 75,
+      "agentic": 70
+    }
+  },
+  {
+    "id": "qwen3.5-35b-a3b",
+    "name": "Qwen3.5 35B",
+    "family": "Qwen",
+    "publisher": "Alibaba (Qwen team)",
+    "description": "The newest generation of Qwen's efficient big model: top-tier answers that stay quick thanks to its expert-based design.",
+    "strengths": [
+      "Excellent quality",
+      "Surprisingly fast"
+    ],
+    "url": "https://huggingface.co/unsloth/Qwen3.5-35B-A3B-GGUF/resolve/main/Qwen3.5-35B-A3B-UD-IQ3_XXS.gguf",
+    "fileName": "Qwen3.5-35B-A3B-UD-IQ3_XXS.gguf",
+    "sizeBytes": 13080066688,
+    "quant": "UD-IQ3_XXS",
+    "paramsB": 36.0,
+    "moe": true,
+    "activeParamsB": 3.0,
+    "contextMax": 262144,
+    "qualityScore": 87,
+    "license": "Apache 2.0",
+    "extraArgs": [],
+    "hidden": false,
+    "sha256": "9f7f59280fcac9373f9122de0ed7a19e014fc14120a68b343ea46ac5f5dd96cd",
+    "taskDefaults": {
+      "general": {
+        "temperature": 0.7,
+        "topP": 0.8,
+        "topK": 20,
+        "minP": 0,
+        "repeatPenalty": 1.0,
+        "repeatLastN": 64,
+        "presencePenalty": 1.5,
+        "frequencyPenalty": 0,
+        "maxTokens": -1,
+        "seed": -1
+      },
+      "mathScience": {
+        "temperature": 1.0,
+        "topP": 0.95,
+        "topK": 20,
+        "minP": 0,
+        "repeatPenalty": 1.0,
+        "repeatLastN": 64,
+        "presencePenalty": 1.5,
+        "frequencyPenalty": 0,
+        "maxTokens": -1,
+        "seed": -1
+      }
+    },
+    "taskDefaultsThinking": {
+      "general": {
+        "temperature": 1.0,
+        "topP": 0.95,
+        "topK": 20,
+        "minP": 0,
+        "repeatPenalty": 1.0,
+        "repeatLastN": 64,
+        "presencePenalty": 1.5,
+        "frequencyPenalty": 0,
+        "maxTokens": -1,
+        "seed": -1
+      },
+      "coding": {
+        "temperature": 0.6,
+        "topP": 0.95,
+        "topK": 20,
+        "minP": 0,
+        "repeatPenalty": 1.0,
+        "repeatLastN": 64,
+        "presencePenalty": 0.0,
+        "frequencyPenalty": 0,
+        "maxTokens": -1,
+        "seed": -1
+      }
+    },
+    "taskScores": {
+      "general": 75,
+      "coding": 78,
+      "writing": 69,
+      "mathScience": 78,
+      "agentic": 72
+    }
+  },
+  {
+    "id": "glm-4.7-flash",
+    "name": "GLM-4.7 Flash",
+    "family": "GLM-4.7",
+    "publisher": "Zhipu AI (Z.ai)",
+    "description": "A sharp, fast coding and agentic specialist that punches well above its size on real-world dev tasks.",
+    "strengths": [
+      "Great at coding",
+      "Surprisingly fast"
+    ],
+    "url": "https://huggingface.co/unsloth/GLM-4.7-Flash-GGUF/resolve/main/GLM-4.7-Flash-Q4_K_M.gguf",
+    "fileName": "GLM-4.7-Flash-Q4_K_M.gguf",
+    "sizeBytes": 18312339808,
+    "quant": "Q4_K_M",
+    "paramsB": 31.2,
+    "moe": true,
+    "activeParamsB": 3.6,
+    "contextMax": 202752,
+    "qualityScore": 82,
+    "license": "MIT",
+    "extraArgs": [],
+    "hidden": false,
+    "sha256": "29837ed2c0fc5f51981adf8ac8083fcf80743c598381f13e9f06cbad0498b174",
+    "taskDefaults": {
+      "general": {
+        "temperature": 0.6,
+        "topP": 0.95,
+        "topK": 40,
+        "minP": 0.05,
+        "repeatPenalty": 1.1,
+        "repeatLastN": 64,
+        "presencePenalty": 0,
+        "frequencyPenalty": 0,
+        "maxTokens": -1,
+        "seed": -1
+      }
+    },
+    "taskScores": {
+      "general": 57,
+      "coding": 90,
+      "writing": 40,
+      "mathScience": 68,
+      "agentic": 92
+    }
+  },
+  {
+    "id": "qwen3-32b",
+    "name": "Qwen3 32B",
+    "family": "Qwen",
+    "publisher": "Alibaba (Qwen team)",
+    "description": "A heavyweight thinker for Macs with lots of memory: thorough, nuanced answers worth the wait.",
+    "strengths": [
+      "Very thorough",
+      "Nuanced"
+    ],
+    "url": "https://huggingface.co/lmstudio-community/Qwen3-32B-GGUF/resolve/main/Qwen3-32B-Q4_K_M.gguf",
+    "fileName": "Qwen3-32B-Q4_K_M.gguf",
+    "sizeBytes": 19762149440,
+    "quant": "Q4_K_M",
+    "paramsB": 32.8,
+    "moe": false,
+    "contextMax": 32768,
+    "qualityScore": 84,
+    "releaseDate": "2025-04-29",
+    "license": "Apache 2.0",
+    "extraArgs": [],
+    "hidden": false,
+    "sha256": "511678e89daafd24763ad2eb72173f8095feca910fc1599cb361064c51e920bf",
+    "taskDefaults": {
+      "general": {
+        "temperature": 0.6,
+        "topP": 0.95,
+        "topK": 20,
+        "minP": 0,
+        "repeatPenalty": 1.1,
+        "repeatLastN": 64,
+        "presencePenalty": 0,
+        "frequencyPenalty": 0,
+        "maxTokens": -1,
+        "seed": -1
+      }
+    },
+    "taskScores": {
+      "general": 71,
+      "coding": 68,
+      "writing": 62,
+      "mathScience": 80,
+      "agentic": 68
+    }
+  },
+  {
+    "id": "llama-3.3-70b",
+    "name": "Llama 3.3 70B",
+    "family": "Llama",
+    "publisher": "Meta",
+    "description": "Meta's flagship open model, for high-memory Macs that want the very best answers and don't mind waiting.",
+    "strengths": [
+      "Best quality",
+      "Flagship class"
+    ],
+    "url": "https://huggingface.co/lmstudio-community/Llama-3.3-70B-Instruct-GGUF/resolve/main/Llama-3.3-70B-Instruct-Q4_K_M.gguf",
+    "fileName": "Llama-3.3-70B-Instruct-Q4_K_M.gguf",
+    "sizeBytes": 42520398528,
+    "quant": "Q4_K_M",
+    "paramsB": 70.6,
+    "moe": false,
+    "contextMax": 131072,
+    "qualityScore": 90,
+    "releaseDate": "2024-12-06",
+    "license": "Llama 3.3 Community License",
+    "extraArgs": [],
+    "hidden": false,
+    "sha256": "26d297468d625586bffbff964842478fd36470b7545c70a24e0765768695ca19",
+    "taskDefaults": {
+      "general": {
+        "temperature": 0.6,
+        "topP": 0.9,
+        "topK": 40,
+        "minP": 0.05,
+        "repeatPenalty": 1.1,
+        "repeatLastN": 64,
+        "presencePenalty": 0,
+        "frequencyPenalty": 0,
+        "maxTokens": -1,
+        "seed": -1
+      }
+    },
+    "taskScores": {
+      "general": 75,
+      "coding": 60,
+      "writing": 69,
+      "mathScience": 72,
+      "agentic": 55
+    }
+  },
+  {
+    "id": "glm-4.5-air",
+    "name": "GLM-4.5 Air",
+    "family": "GLM-4.5",
+    "publisher": "Zhipu AI (Z.ai)",
+    "description": "One of the biggest, most capable open models around: deep, thoughtful answers with a strong coding and agentic streak.",
+    "strengths": [
+      "Flagship class",
+      "Deep reasoning"
+    ],
+    "url": "https://huggingface.co/unsloth/GLM-4.5-Air-GGUF/resolve/main/GLM-4.5-Air-UD-IQ2_XXS.gguf",
+    "fileName": "GLM-4.5-Air-UD-IQ2_XXS.gguf",
+    "sizeBytes": 42682240064,
+    "quant": "UD-IQ2_XXS",
+    "paramsB": 106.0,
+    "moe": true,
+    "activeParamsB": 12.0,
+    "contextMax": 131072,
+    "qualityScore": 91,
+    "releaseDate": "2025-07",
+    "license": "MIT",
+    "extraArgs": [],
+    "hidden": false,
+    "sha256": "63158240af293e1b34eb2c4ed3a0256dce3a3324f55fbe141698c47fd4b4a7a8",
+    "taskDefaults": {
+      "general": {
+        "temperature": 0.6,
+        "topP": 0.95,
+        "topK": 40,
+        "minP": 0.05,
+        "repeatPenalty": 1.1,
+        "repeatLastN": 64,
+        "presencePenalty": 0,
+        "frequencyPenalty": 0,
+        "maxTokens": -1,
+        "seed": -1
+      }
+    },
+    "taskScores": {
+      "general": 77,
+      "coding": 85,
+      "writing": 68,
+      "mathScience": 80,
+      "agentic": 88
+    }
+  }
+]

@@ -1,0 +1,19 @@
+{
+  "summary": "Jumelage à distance",
+  "hint": "Ce téléphone n'exécute pas le modèle d'IA lui-même. Jumelez-le à un ordinateur exécutant OpenPal et discutez via cet ordinateur.",
+  "connectedLabel": "Connecté",
+  "connected": "Jumelé avec {{name}} ({{addr}}:{{port}}).",
+  "forget": "Oublier ce jumelage",
+  "discovered": {
+    "label": "Trouvé sur ce réseau"
+  },
+  "manual": {
+    "label": "Ou saisissez-le manuellement",
+    "hint": "Sur l'ordinateur, activez Réglages → Appareils → Accès à distance, puis appuyez sur « Ajouter un appareil » pour obtenir une adresse, un port et un code.",
+    "addrPlaceholder": "Adresse (ex. 192.168.1.20)",
+    "portPlaceholder": "Port",
+    "codePlaceholder": "Code"
+  },
+  "pair": "Jumeler",
+  "pairingInProgress": "Jumelage…"
+}

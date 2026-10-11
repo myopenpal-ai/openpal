@@ -1,0 +1,25 @@
+# OpenPal Voice plugin — runtime dependencies installed into the plugin venv
+# during setup (PLUGINS.md §3). Deliberately small:
+#
+#   * faster-whisper  — speech-to-text (VTT). CTranslate2 under the hood; ships
+#     prebuilt wheels for macOS arm64/x64, Linux and Windows, so `pip install`
+#     works without a compiler. Pulls ctranslate2 + av (PyAV) + tokenizers +
+#     huggingface-hub.
+#
+# av (PyAV) is pinned ALONGSIDE faster-whisper and must come from a WHEEL — never
+# a source build. faster-whisper's only hard native need that lacks a universal
+# wheel is av, and PyAV from source links the *system* FFmpeg via clang. On
+# Python 3.14 the old `av<13` range faster-whisper 1.0.3 required has no cp314
+# wheel, so pip fell back to source and failed: Homebrew FFmpeg 8 removed
+# `AVStream.side_data`/`nb_side_data`, which PyAV 12 still references
+# ("no member named 'nb_side_data'"). faster-whisper 1.2.1 lifts the cap, so
+# av 17.x — which ships a cp314 wheel WITH FFmpeg bundled (no system FFmpeg, no
+# compiler) — resolves. Keep both pinned to this verified, wheels-only pair.
+#
+# Text-to-speech (TTV) does NOT use a pip package: the `piper-tts` wheel depends
+# on `piper-phonemize`, which has no macOS arm64 wheel and fails to build there.
+# Instead setup_plugin.py downloads the official prebuilt Piper *binary* (the
+# same "vendored executable" approach OpenPal uses for llama-server) and a voice
+# model, and service.py runs Piper as a subprocess. So there is no TTS pip dep.
+faster-whisper==1.2.1
+av==17.1.0

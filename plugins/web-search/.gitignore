@@ -1,0 +1,16 @@
+# The plugin directory is treated read-only by the framework; all mutable state
+# (venv, downloaded SearXNG source, generated settings, logs) lives in the
+# plugin DATA dir (<app-data>/plugin-data/web-search/), not here. These entries
+# just keep stray local dev artifacts out of git.
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.coverage
+*.log
+
+# Local scratch dirs used when manually verifying setup/service.
+scratch/
+searxng-src/
+settings.yml

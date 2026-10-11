@@ -1,0 +1,220 @@
+/* Skills screen — save/edit reusable `/<slug>` chat instructions. Mirrors the
+   Plugins layout. */
+
+.skills-view {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.skills-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding-top: 16px;
+  min-height: 0;
+}
+
+.skills-col {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 12px 36px 48px;
+}
+
+.skills-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 26px;
+}
+
+.skills-head h1 {
+  font-family: var(--font-display);
+  font-size: 30px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.skills-head p {
+  color: var(--ink-soft);
+  max-width: 540px;
+  margin-top: 6px;
+}
+
+.skills-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.skills-empty {
+  border: 1px dashed var(--line);
+  border-radius: var(--radius-l);
+  padding: 40px 24px;
+  text-align: center;
+  color: var(--ink-soft);
+  background: var(--paper-raised);
+}
+
+.skill-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
+}
+
+.skill-card {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  background: var(--paper-raised);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-l);
+  padding: 20px 20px 16px;
+  box-shadow: var(--shadow-card);
+}
+
+.skill-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.skill-card-head h2 {
+  font-family: var(--font-display);
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.skill-card-badges {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.skill-trigger {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-radius: var(--radius-s);
+  padding: 3px 8px;
+  white-space: nowrap;
+}
+
+/* Folder skill: SKILL.md plus supporting files — neutral tokens so it never
+   reads as the same kind of chip as the accent-colored trigger above. */
+.skill-file-badge {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink-soft);
+  background: var(--paper-sunken);
+  border-radius: var(--radius-s);
+  padding: 3px 8px;
+  white-space: nowrap;
+}
+
+.skill-desc {
+  font-size: 14px;
+  color: var(--ink-soft);
+  line-height: 1.5;
+}
+
+.skill-card-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.skill-delete-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.skill-delete-confirm-text {
+  font-size: 12.5px;
+  color: var(--ink-soft);
+  line-height: 1.5;
+}
+
+/* ------------------------------ Editor form ----------------------------- */
+
+.skill-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-soft);
+  margin-top: 16px;
+}
+
+.skill-field input,
+.skill-field textarea {
+  font-weight: 400;
+  width: 100%;
+}
+
+.skill-body {
+  min-height: 200px;
+  resize: vertical;
+  font-family: inherit;
+  line-height: 1.5;
+}
+
+/* Folder skill's supporting files are edited on disk, not in this form —
+   this note replaces any field for them. */
+.skill-files-note {
+  font-size: 12.5px;
+  color: var(--ink-soft);
+  line-height: 1.5;
+  background: var(--paper-sunken);
+  border-radius: var(--radius-s);
+  padding: 10px 12px;
+  margin-top: 10px;
+}
+
+/* -------------------------------- Import -------------------------------- */
+
+.skill-import-options {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.skill-import-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-m);
+  padding: 14px 16px;
+  background: var(--paper-raised);
+}
+
+.skill-import-option-text h3 {
+  font-family: var(--font-display);
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.skill-import-option-text p {
+  font-size: 13px;
+  color: var(--ink-soft);
+  line-height: 1.4;
+  margin-top: 2px;
+}
+
+.skill-import-error {
+  font-size: 12.5px;
+  color: var(--danger);
+  line-height: 1.4;
+  margin-top: 6px;
+}

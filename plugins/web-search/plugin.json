@@ -1,0 +1,14 @@
+{
+  "id": "web-search",
+  "name": "Web Search",
+  "description": "Let your assistant search the web and cite its sources. Runs its own local SearXNG instance for you automatically (no Docker, no setup), which forwards each search to public engines like DuckDuckGo, Bing, Brave, Wikipedia, and Startpage. Nothing is sent anywhere unless you enable this.",
+  "version": "0.1.0",
+  "author": "OpenPal",
+  "capabilities": ["search"],
+  "experimental": true,
+  "python": {
+    "setup": "setup_plugin.py",
+    "service": "service.py",
+    "serviceHealthPath": "/healthz"
+  }
+}

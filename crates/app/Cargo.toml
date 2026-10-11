@@ -1,0 +1,81 @@
+[package]
+name = "openpal-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "OpenPal desktop GUI (Tauri). Thin command layer over openpal-core."
+
+[lib]
+name = "openpal_app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-clipboard-manager = "2"
+tauri-plugin-updater = "2"
+openpal-core = { path = "../core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+reqwest = { workspace = true }
+regex = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
+# `OsRng` for `confirm_recovery_code`'s fresh salt — same version openpal-core
+# already pins for its own crypto module.
+rand = "0.8"
+# `state.rs`'s `AppState.app_db: Arc<Mutex<Connection>>` needs the
+# `Connection` type name directly. Deliberately featureless: `openpal-core`'s
+# `crates/core/Cargo.toml` is the only place the SQLCipher feature split
+# lives (Apple vs. vendored-OpenSSL) — Cargo unifies features per target
+# across the workspace, so this crate already inherits whichever variant
+# resolves there. A second features list here, even one meant to mirror it,
+# is how vendored OpenSSL could silently land on macOS too.
+rusqlite = "0.40.1"
+# `lib.rs`'s startup crypto-provider install: `openpal-core`'s own `reqwest`
+# (0.12) falls back to `ring` per-client if no process default is installed,
+# but `tauri-plugin-updater`'s `reqwest` (0.13, pulled in transitively) has no
+# such fallback and panics outright on its first `Client::build()` — fatal on
+# Android (an unwind across the JNI boundary aborts the process), silently
+# swallowed on desktop (unwinds inside a tokio task). Same version/features as
+# `crates/core/Cargo.toml`'s `rustls` so the workspace stays on one crypto
+# backend (`ring`, not `aws-lc-rs` — see that file's comments for why).
+rustls = { version = "0.23", default-features = false, features = ["ring", "tls12", "std"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+# `lib.rs`'s crash handler: a blocking native "OpenPal couldn't start" dialog
+# for a `setup()` panic or error. Already resolved transitively via
+# `tauri-plugin-dialog`, promoted to a direct dependency because that plugin's
+# own dialog APIs need the event loop already pumping — not true yet this
+# early in `setup()` — while `rfd` talks to the native dialog API (NSAlert /
+# MessageBoxW / GTK) directly, independent of any event loop. Same feature
+# set `tauri-plugin-dialog` itself already pins (`common-controls-v6` for a
+# modern Windows dialog, `gtk3` for its synchronous, non-async Linux
+# backend) rather than rfd's defaults, which pull in an entire async
+# XDG-portal/zbus stack (`ashpd`, `async-io`, `polling`, …) this synchronous
+# use has no need for. Desktop-only: rfd has no Android/iOS backend at all
+# (`FileSaveDialogImpl`/`MessageDialogImpl` are unimplemented for those
+# targets, a hard compile error, not just a runtime no-op) — see
+# `fatal_startup_error`'s mobile arm in lib.rs.
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+rfd = { version = "0.16", default-features = false, features = ["common-controls-v6", "gtk3"] }
+# Native audio I/O for the Voice plugin (the webview can't open the mic or reach
+# the loopback service — see src/audio.rs). cpal = microphone capture, rodio =
+# playback, hound = WAV encode. rodio decodes WAV (Piper's output, used for
+# read-aloud) and MP3 (the remote voice-preview samples); rodio's `mp3` feature
+# is pure-Rust symphonia, so it adds no system libs to the signed bundle.
+# Desktop-only: Voice is dropped from mobile v1 (docs/design/MOBILE.md), and cpal's
+# Android backend links Google's Oboe C++ library (oboe-sys) — real, extra
+# native-toolchain surface for a feature mobile doesn't ship yet. See
+# audio_mobile.rs (the mobile stand-in, wired up in lib.rs).
+cpal = "0.15"
+rodio = { version = "0.17", default-features = false, features = ["wav", "mp3"] }
+hound = "3.5"

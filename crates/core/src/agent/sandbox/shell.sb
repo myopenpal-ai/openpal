@@ -1,0 +1,78 @@
+(version 1)
+(deny default)
+
+(allow process-fork)
+(allow signal (target self))
+(allow sysctl-read)
+(allow file-read-metadata)
+
+; Broad read is required for dyld to boot ANY dynamic executable on current
+; macOS: the shared cache and its supporting files live under a Cryptexes
+; mount (`/System/Volumes/Preboot/Cryptexes/OS/...`) whose exact layout is a
+; macOS-version-specific implementation detail, and dyld aborts the process
+; outright (verified via crash-report inspection: dyld4::CacheFinder /
+; ignition_halt / abort_with_reason) if any read it needs along the way is
+; denied — no fixed allowlist of "just the paths we think dyld needs" has
+; proven both correct and stable across macOS point releases. So instead of
+; trying to enumerate dyld's read set, read is allowed broadly and then
+; narrowed back down for the paths that actually matter for confinement: the
+; user's home directory (every user's, not just the caller's) and mounted
+; volumes are explicitly denied below, and Seatbelt's most-specific-rule-wins
+; resolution means the later, more specific `(subpath (param "WORKSPACE"))`/
+; `(subpath (param "SCRATCH"))` allow further below still wins even when the
+; configured workspace sits inside the denied home directory (verified
+; empirically: a sibling file in $HOME stays denied, a file inside the
+; configured workspace under $HOME is still readable). Write access is NOT
+; broadened by this — `file-write*` stays a positive allowlist scoped to
+; WORKSPACE/SCRATCH only, which is the control that actually matters for
+; tamper/persistence; broad read is a real, accepted narrowing of read
+; confinement specifically to keep the sandbox bootable on this OS, not a
+; general retreat from the "deny by default" posture.
+(allow file-read*)
+(deny file-read*
+    (subpath "/Users")
+    (subpath "/Volumes")
+    (subpath "/private/var/root"))
+
+; Homebrew's bin/ dirs are symlink farms into opt/ and Cellar/, and macOS
+; resolves symlinks BEFORE the sandbox's exec check runs — under a bin/-only
+; allowlist, essentially every Homebrew-installed tool (git, python3, node,
+; ...) silently fails to exec. This is a deliberate, documented trade-off: it
+; widens *exec* into the Cellar/opt trees (read is already broad above), not
+; just bin/. It does NOT widen network or write access, which remain denied
+; regardless. The exec allowlist's breadth is a residual risk to re-audit
+; periodically as new tools land in these directories, not a solved
+; problem — its safety rests on the combination of `deny network*` +
+; `deny mach-lookup` below applying to every binary in scope, not a
+; positive per-binary review.
+(allow process-exec
+    (subpath "/bin")
+    (subpath "/usr/bin")
+    (subpath "/usr/local/bin")
+    (subpath "/usr/local/opt")
+    (subpath "/usr/local/Cellar")
+    (subpath "/opt/homebrew/bin")
+    (subpath "/opt/homebrew/opt")
+    (subpath "/opt/homebrew/Cellar"))
+
+(allow file-read* file-write*
+    (subpath (param "WORKSPACE"))
+    (subpath (param "SCRATCH")))
+
+; Without this, a script the agent wrote into its own workspace (e.g. a
+; `chmod +x`'d helper) can never be run directly -- `./foo.sh` fails with
+; "bad interpreter: Operation not permitted" even though the interpreter
+; itself (/bin/bash, matched above under /bin) is exec-allowed; the denial
+; hits the *script's own* path, which lives under WORKSPACE, not under any
+; of the exec-allowed system dirs. Verified empirically: adding this turns
+; that failure into a normal exit 0. Scoped to WORKSPACE/SCRATCH only, so it
+; doesn't widen exec beyond the same fs confinement already enforced above.
+(allow process-exec
+    (subpath (param "WORKSPACE"))
+    (subpath (param "SCRATCH")))
+
+(deny network*)
+(deny mach-lookup)
+(deny appleevent-send)
+(deny iokit-open)
+(deny process-exec (literal "/usr/bin/osascript"))

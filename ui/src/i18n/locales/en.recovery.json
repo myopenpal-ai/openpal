@@ -1,0 +1,21 @@
+{
+  "title": "Save your recovery code",
+  "intro": "OpenPal keeps everything you store here encrypted, using a key that's kept safe in this device's own keychain. If that key is ever lost (a fresh install of your operating system, a swapped drive), this recovery code is the only way back into your data.",
+  "warning": "OpenPal cannot recover it for you. Write it down or save it somewhere you trust, separate from this device.",
+  "codeLabel": "Your recovery code",
+  "generating": "Generating your code…",
+  "retryGenerate": "Try again",
+  "copy": "Copy",
+  "copied": "Copied!",
+  "checkboxLabel": "I've saved this code somewhere safe",
+  "continueButton": "Continue",
+  "confirming": "Confirming…",
+  "confirmError": "Couldn't confirm your code: {{message}}",
+  "unlockTitle": "Enter your recovery code",
+  "unlockIntro": "OpenPal couldn't reach the key this device's keychain normally uses to unlock your data. It may have been reset, or the keychain entry may be gone. This is where the recovery code you saved earlier comes back in.",
+  "unlockInputLabel": "Recovery code",
+  "unlockInputPlaceholder": "ABCDE-FGHJK-MNPQR-STVWX-YZ",
+  "unlockButton": "Unlock",
+  "unlockConfirming": "Checking your code…",
+  "unlockError": "Couldn't unlock: {{message}}"
+}

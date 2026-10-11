@@ -1,0 +1,13 @@
+# `cargo tauri dev` ad-hoc-signs each rebuild of the debug binary with a
+# content-derived signature on macOS, which changes every rebuild — so the
+# OS keychain's "Always Allow" grant on the app's keychain entry
+# (`crates/core/src/crypto/keychain.rs`) never persists, and the OS prompts
+# for the user's login password/Touch ID on every single dev launch. This
+# runner re-signs the just-built binary before running it — with the local
+# "OpenPal Dev Code Signing" certificate when available (a stable anchor
+# that survives rebuilds; see `scripts/dev-codesign-setup.sh`), or ad-hoc
+# with a fixed identifier as a fallback (which still changes signature
+# every rebuild — ad-hoc has no certificate to anchor to — so it won't
+# stop the repeat prompt on its own). See `scripts/dev-codesign-runner.sh`.
+[target.'cfg(target_os = "macos")']
+runner = ["scripts/dev-codesign-runner.sh"]

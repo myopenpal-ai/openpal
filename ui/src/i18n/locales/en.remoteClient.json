@@ -1,0 +1,19 @@
+{
+  "summary": "Remote pairing",
+  "hint": "This phone doesn't run the AI model itself. Pair it with a desktop running OpenPal and chat through that computer instead.",
+  "connectedLabel": "Connected",
+  "connected": "Paired with {{name}} ({{addr}}:{{port}}).",
+  "forget": "Forget this pairing",
+  "discovered": {
+    "label": "Found on this network"
+  },
+  "manual": {
+    "label": "Or enter it manually",
+    "hint": "On the desktop, turn on Settings → Devices → Remote access, then press \"Add a device\" to get an address, port, and code.",
+    "addrPlaceholder": "Address (e.g. 192.168.1.20)",
+    "portPlaceholder": "Port",
+    "codePlaceholder": "Code"
+  },
+  "pair": "Pair",
+  "pairingInProgress": "Pairing…"
+}

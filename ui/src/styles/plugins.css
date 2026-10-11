@@ -1,0 +1,221 @@
+/* Plugins screen — extend the assistant. Mirrors the Library layout. */
+
+.plugins {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.plugins-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding-top: 16px;
+  min-height: 0;
+}
+
+.plugins-col {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 12px 36px 48px;
+}
+
+.plugins-head {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  margin-bottom: 26px;
+}
+
+.plugins-head h1 {
+  font-family: var(--font-display);
+  font-size: 30px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.plugins-head p {
+  color: var(--ink-soft);
+  max-width: 540px;
+}
+
+.plugins-empty {
+  border: 1px dashed var(--line);
+  border-radius: var(--radius-l);
+  padding: 40px 24px;
+  text-align: center;
+  color: var(--ink-soft);
+  background: var(--paper-raised);
+}
+
+.plugin-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 16px;
+}
+
+.plugin-card {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  background: var(--paper-raised);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-l);
+  padding: 22px 22px 18px;
+  box-shadow: var(--shadow-card);
+}
+
+.plugin-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.plugin-card-head h2 {
+  font-family: var(--font-display);
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.plugin-meta {
+  font-size: 12.5px;
+  color: var(--ink-soft);
+}
+
+.plugin-desc {
+  font-size: 14px;
+  color: var(--ink-soft);
+  line-height: 1.5;
+}
+
+.plugin-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+/* ------------------------------ Toggle --------------------------------- */
+
+.plugin-switch {
+  position: relative;
+  flex: none;
+  cursor: pointer;
+  line-height: 0;
+}
+
+.plugin-switch input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.plugin-switch-track {
+  display: inline-block;
+  width: 42px;
+  height: 24px;
+  border-radius: 999px;
+  background: var(--paper-sunken);
+  border: 1px solid var(--line);
+  transition: background 0.18s ease, border-color 0.18s ease;
+}
+
+.plugin-switch-thumb {
+  display: block;
+  width: 18px;
+  height: 18px;
+  margin: 2px;
+  border-radius: 999px;
+  background: var(--paper-raised);
+  box-shadow: 0 1px 2px rgba(var(--shadow-rgb), 0.25);
+  transition: transform 0.18s ease;
+}
+
+.plugin-switch input:checked + .plugin-switch-track {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.plugin-switch input:checked + .plugin-switch-track .plugin-switch-thumb {
+  transform: translateX(18px);
+  background: var(--accent-ink);
+}
+
+.plugin-switch input:disabled + .plugin-switch-track {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.plugin-switch input:focus-visible + .plugin-switch-track {
+  box-shadow: 0 0 0 3px var(--focus-ring);
+}
+
+/* ------------------------------ Setup ---------------------------------- */
+
+.plugin-setup {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin-top: 4px;
+}
+
+.plugin-progress {
+  height: 7px;
+  border-radius: 999px;
+  background: var(--paper-sunken);
+  overflow: hidden;
+}
+
+.plugin-progress-bar {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 999px;
+  transition: width 0.3s ease;
+}
+
+/* No fraction yet: a sliding indeterminate sweep. */
+.plugin-progress.is-indeterminate .plugin-progress-bar {
+  width: 38%;
+  transition: none;
+  animation: plugin-indeterminate 1.2s ease-in-out infinite;
+}
+
+@keyframes plugin-indeterminate {
+  0% { margin-left: -40%; }
+  100% { margin-left: 100%; }
+}
+
+.plugin-setup-msg {
+  font-size: 12.5px;
+  color: var(--ink-soft);
+}
+
+/* ------------------------------ Failure -------------------------------- */
+
+.plugin-failure {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.plugin-error {
+  font-size: 13px;
+  color: var(--danger);
+  background: var(--danger-soft);
+  border-radius: var(--radius-s);
+  padding: 8px 12px;
+  width: 100%;
+}
+
+/* Puzzle-piece glyph in the sidebar nav action. */
+.sidebar-action-icon {
+  width: 14px;
+  height: 14px;
+  margin-right: 5px;
+  vertical-align: -2px;
+}

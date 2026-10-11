@@ -1,0 +1,238 @@
+/* Browse (Hugging Face hub browser) — mirrors the Library/Plugins layout. */
+
+.discover {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.discover-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding-top: 16px;
+  min-height: 0;
+}
+
+.discover-col {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 12px 36px 48px;
+}
+
+.discover-head {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  margin-bottom: 22px;
+}
+
+.discover-head h1 {
+  font-family: var(--font-display);
+  font-size: 30px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.discover-head p {
+  color: var(--ink-soft);
+  max-width: 540px;
+}
+
+.discover-controls {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 20px;
+}
+
+.discover-controls input[type="text"] {
+  flex: 1;
+}
+
+.discover-fit-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+
+.discover-fit-toggle input[type="checkbox"] {
+  margin: 0;
+}
+
+.discover-status {
+  color: var(--ink-soft);
+  font-size: 13.5px;
+  padding: 6px 2px;
+}
+
+.discover-empty {
+  border: 1px dashed var(--line);
+  border-radius: var(--radius-l);
+  padding: 40px 24px;
+  text-align: center;
+  color: var(--ink-soft);
+  background: var(--paper-raised);
+}
+
+.discover-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 14px;
+}
+
+.discover-card {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  background: var(--paper-raised);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-l);
+  padding: 18px 18px 16px;
+  box-shadow: var(--shadow-card);
+  cursor: pointer;
+  transition: border-color 0.15s ease;
+}
+
+.discover-card:hover,
+.discover-card:focus-visible {
+  border-color: var(--accent-line);
+}
+
+.discover-card:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--focus-ring);
+}
+
+.discover-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+}
+
+.discover-card-head h2 {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: var(--font-display);
+  font-size: 16.5px;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.discover-card-owner {
+  font-size: 12.5px;
+  color: var(--ink-soft);
+}
+
+.discover-card-fit {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+/* The grid's fit hint is a rough Q4-sized guess, not the precise per-quant
+ * verdict the model page's picker shows — say so, quietly. */
+.discover-card-fit-hint {
+  font-size: 11px;
+  color: var(--ink-soft);
+  font-style: italic;
+}
+
+.discover-card-stats {
+  display: flex;
+  gap: 14px;
+  font-size: 12.5px;
+  color: var(--ink-soft);
+}
+
+.discover-card-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.discover-sentinel {
+  height: 1px;
+}
+
+/* ------------------------------ Model page ------------------------------ */
+
+.model-page {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+.model-page-back {
+  align-self: flex-start;
+}
+
+.model-page-head {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.model-page-head h1 {
+  font-family: var(--font-display);
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.model-page-gated {
+  font-size: 13px;
+  color: var(--warn);
+  background: var(--warn-soft);
+  border-radius: var(--radius-s);
+  padding: 8px 12px;
+}
+
+.model-page-note {
+  font-size: 12.5px;
+  color: var(--ink-soft);
+}
+
+.model-page-readme {
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-l);
+  padding: 14px 18px;
+  background: var(--paper-raised);
+}
+
+.model-page-readme summary {
+  cursor: pointer;
+  font-weight: 700;
+  font-size: 14.5px;
+  color: var(--ink-soft);
+  user-select: none;
+}
+
+.model-page-readme[open] summary {
+  margin-bottom: 12px;
+  color: var(--ink);
+}
+
+.model-page-files h2 {
+  font-family: var(--font-display);
+  font-size: 18px;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+
+/* The fit badge is a third line stacked under name/meta in the shared
+ * .settings-hf-file-info column (reused from the Models page's "Add your
+ * own model"); give it a little breathing room from the meta line above it. */
+.model-page-files .settings-hf-file-info .badge {
+  margin-top: 4px;
+  align-self: flex-start;
+}

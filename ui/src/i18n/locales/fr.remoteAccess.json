@@ -1,0 +1,28 @@
+{
+  "summary": "Accès à distance",
+  "hint": "Autorisez un autre appareil de votre réseau (ou une future application mobile OpenPal) à utiliser cet ordinateur comme source d'inférence. Désactivé par défaut.",
+  "enableLabel": "Autoriser d'autres appareils à utiliser cet ordinateur",
+  "starting": "Démarrage…",
+  "pairing": {
+    "label": "Associer un appareil",
+    "hint": "Scannez ce code sur l'autre appareil, ou saisissez-le manuellement.",
+    "addDevice": "Associer un appareil",
+    "qrAlt": "Code QR d'association",
+    "manualCode": "Code : {{code}}",
+    "waiting": "En attente de l'autre appareil…",
+    "paired": "Associé : {{name}}",
+    "expired": "Ce code d'association a expiré. Réessayez."
+  },
+  "devices": {
+    "label": "Appareils associés",
+    "renameHint": "Cliquez pour renommer",
+    "revoke": "Retirer"
+  },
+  "wol": {
+    "label": "Réveil sur réseau local (Wake-on-LAN)",
+    "enabled": "Activé sur ce Mac. Un autre appareil du même réseau peut le réveiller.",
+    "disabled": "Désactivé. Un Mac endormi ne se réveillera pas pour une demande d'association tant que vous n'activez pas cette option dans Réglages Système.",
+    "mac": "Adresse MAC : {{mac}}"
+  },
+  "offLan": "Pour accéder à cet ordinateur depuis l'extérieur de votre réseau domestique, connectez les deux appareils à votre propre VPN (comme Tailscale ou WireGuard) ou configurez votre routeur en ce sens, puis associez-les ainsi connectés. OpenPal n'exploite pas de service relais."
+}

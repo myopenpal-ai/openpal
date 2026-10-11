@@ -1,0 +1,21 @@
+{
+  "title": "Enregistrez votre code de récupération",
+  "intro": "OpenPal chiffre tout ce que vous stockez ici, à l'aide d'une clé conservée en sécurité dans le trousseau de cet appareil. Si cette clé venait à être perdue (une réinstallation du système, un disque remplacé), ce code de récupération est le seul moyen de retrouver vos données.",
+  "warning": "OpenPal ne peut pas le récupérer à votre place. Notez-le ou enregistrez-le quelque part de sûr, séparé de cet appareil.",
+  "codeLabel": "Votre code de récupération",
+  "generating": "Génération de votre code…",
+  "retryGenerate": "Réessayer",
+  "copy": "Copier",
+  "copied": "Copié !",
+  "checkboxLabel": "J'ai enregistré ce code en lieu sûr",
+  "continueButton": "Continuer",
+  "confirming": "Confirmation…",
+  "confirmError": "Impossible de confirmer votre code : {{message}}",
+  "unlockTitle": "Saisissez votre code de récupération",
+  "unlockIntro": "OpenPal n'a pas pu accéder à la clé que le trousseau de cet appareil utilise normalement pour déverrouiller vos données. Il a peut-être été réinitialisé, ou son entrée a disparu. C'est ici que le code de récupération que vous avez enregistré entre en jeu.",
+  "unlockInputLabel": "Code de récupération",
+  "unlockInputPlaceholder": "ABCDE-FGHJK-MNPQR-STVWX-YZ",
+  "unlockButton": "Déverrouiller",
+  "unlockConfirming": "Vérification de votre code…",
+  "unlockError": "Impossible de déverrouiller : {{message}}"
+}

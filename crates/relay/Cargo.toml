@@ -1,0 +1,25 @@
+[package]
+name = "openpal-relay"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Store-and-forward sync relay skeleton (Phase 1, docs/design/MULTI_DEVICE_SYNC.md): opaque-blob mailbox over HTTP. No crypto, no auth — plumbing only."
+
+[dependencies]
+openpal-sync-protocol = { path = "../sync-protocol" }
+axum = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+base64 = { workspace = true }
+# Plain (non-SQLCipher) rusqlite: the relay only ever stores its own
+# opaque-blob mailbox table (never the app's encrypted `app.sqlite`), so it
+# does not need the SQLCipher build `crates/core` links. `bundled` vendors
+# SQLite itself so the relay has no system-library dependency.
+rusqlite = { version = "0.40", features = ["bundled"] }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"

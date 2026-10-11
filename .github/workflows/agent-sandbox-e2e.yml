@@ -1,0 +1,39 @@
+# Real macOS Seatbelt (sandbox-exec) enforcement tests for agent mode
+# (crates/core/src/agent/sandbox/macos.rs). ci.yml's rust job runs on
+# ubuntu-latest, where this module doesn't even compile (cfg(target_os =
+# "macos")) — its tests are silently absent there, so without this workflow
+# they would never actually run in CI. Path-filtered to what it exercises,
+# same pattern as engine-e2e.yml.
+name: agent-sandbox-e2e
+
+on:
+  pull_request:
+    paths:
+      - "crates/core/src/agent/**"
+      - ".github/workflows/agent-sandbox-e2e.yml"
+  push:
+    branches: [main]
+    paths:
+      - "crates/core/src/agent/**"
+
+concurrency:
+  group: agent-sandbox-e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  agent-sandbox-e2e:
+    runs-on: macos-14
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: agent-sandbox-e2e
+
+      # openpal-core has no GUI deps (Tauri-free), so unlike ci.yml/
+      # engine-e2e.yml's Linux jobs, no webkit/GTK packages are needed here.
+      - name: Run the real Seatbelt sandbox tests
+        run: cargo test -p openpal-core --lib agent::sandbox -- --nocapture

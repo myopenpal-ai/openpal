@@ -1,0 +1,9 @@
+{
+  "id": "hf-browser",
+  "name": "Model Browser",
+  "description": "Browse and search Hugging Face for GGUF models right inside OpenPal, with trending models, search, and \"will it fit my machine\" badges before you download. Turn this on if the curated picks in Models aren't enough.",
+  "version": "0.1.0",
+  "author": "OpenPal",
+  "capabilities": ["model-browser"],
+  "experimental": true
+}

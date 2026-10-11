@@ -1,0 +1,18 @@
+# The plugin directory is treated read-only by the framework; all mutable state
+# (venv, downloaded Piper binary + voices, the whisper model, logs) lives in the
+# plugin DATA dir (<app-data>/plugin-data/speech/), not here. These entries just
+# keep stray local dev artifacts out of git.
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.coverage
+*.log
+
+# Local scratch dirs used when manually verifying setup/service.
+scratch/
+piper/
+voices/
+whisper/
+*.wav

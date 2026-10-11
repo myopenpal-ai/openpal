@@ -1,0 +1,10 @@
+[package]
+name = "openpal-sync-protocol"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Wire envelope shared between OpenPal clients and the sync relay. Phase 1: pure plumbing, no crypto."
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
