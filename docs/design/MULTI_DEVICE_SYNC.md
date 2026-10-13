@@ -414,7 +414,7 @@ future mobile feature would pay.
   loop, or relay traffic may exist unless a user has explicitly enabled
   sync in Settings → Advanced — same bar `PluginManager`'s disabled-by-default
   services are held to. A stray connection that opens on app boot "just in
-  case" is exactly the always-on background complexity CLAUDE.md's
+  case" is exactly the always-on background complexity AGENTS.md's
   mono-model philosophy warns against, even though this feature isn't about
   models.
 - **The webview boundary is not optional.** `ui/`'s CSP allows only the

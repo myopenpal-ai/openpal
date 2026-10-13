@@ -115,7 +115,7 @@ from the pinned version's defaults.
 
 Chunk relevance scoring is BM25 (`crates/core/src/agent/builtin/rerank.rs`),
 not a cross-encoder — OpenPal loads one model and uses it for everything
-("mono-model first"; see root `CLAUDE.md`), so a second neural model just for
+("mono-model first"; see root `AGENTS.md`), so a second neural model just for
 reranking is deliberately out of scope here. `fetch_url` reranks only when
 called with a `query` argument and the page is long enough to need excerpting.
 

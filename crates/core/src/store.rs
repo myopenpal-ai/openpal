@@ -29,7 +29,7 @@
 //!   still rejected early, and the observable `NotFound`-on-garbage-id
 //!   contract stays stable for any caller that depends on it.
 //! - [`search`] is a plain case-insensitive scan of title + message content —
-//!   no embeddings/second model, consistent with CLAUDE.md's mono-model-first
+//!   no embeddings/second model, consistent with AGENTS.md's mono-model-first
 //!   rule (see `agent::builtin::rerank`'s doc comment for the same call made
 //!   for web-page reranking).
 

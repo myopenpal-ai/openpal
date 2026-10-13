@@ -41,7 +41,7 @@ labels=(
   "area/plugins|006b75|Plugin system: manifest contract, discovery, Python venv, sidecar lifecycle, Add-ons UI, Voice plugin."
   "area/app|006b75|Tauri app layer: IPC command surface, AppState and lifecycle, logging, settings, sign-in, in-app updates."
   "area/build|006b75|Bundler, Tauri packaging and signing, the portable SKU, Android bring-up, CI workflows."
-  "area/docs|006b75|README, ARCHITECTURE, CONTRIBUTING, docs/*, plugin contract prose, CLAUDE.md."
+  "area/docs|006b75|README, ARCHITECTURE, CONTRIBUTING, docs/*, plugin contract prose, AGENTS.md."
   "area/i18n-a11y|006b75|Translations (en/fr and the split bundles) and accessibility: focus, contrast, keyboard nav, screen readers."
 
   # -- priority: decided at filing, changed freely afterwards. ---------------

@@ -184,7 +184,7 @@ fork is how the engine is hosted:
   decoding gap as a named, release-blocking item, not a punch-list afterthought:
   shipping without it means agent tool-calling silently degrades on mobile only,
   which is exactly the kind of platform-specific default-path complexity the
-  beginner-first/mono-model-first rules in `CLAUDE.md` exist to prevent.
+  beginner-first/mono-model-first rules in `AGENTS.md` exist to prevent.
 
 This split is a genuine, irreducible "two places to edit" cost — every new
 `llama-server` flag the catalog starts relying on needs a matching

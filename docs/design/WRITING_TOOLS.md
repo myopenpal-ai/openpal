@@ -34,7 +34,7 @@ screens and not a chat-composer toggle.
 1. **Placement: opt-in capability-flag plugin**, not an always-visible core
    nav item. Mirrors `hf-browser` exactly — invisible to beginners until they
    open Add-ons, zero default-path complexity added, consistent with
-   CLAUDE.md's "gate advanced capability behind Settings → Advanced or the
+   AGENTS.md's "gate advanced capability behind Settings → Advanced or the
    plugin system."
 2. **UI shape: a dedicated tool screen**, not a chat-composer mode toggle
    (rejected the web-search-globe pattern). Translation and correction are

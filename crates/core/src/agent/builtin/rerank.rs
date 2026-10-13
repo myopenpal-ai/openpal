@@ -5,7 +5,7 @@
 //! The Python sidecar this replaces used a cross-encoder (`bge-reranker-v2-m3`
 //! via FlagEmbedding, or `sentence_transformers.CrossEncoder` as a fallback)
 //! — a second neural model loaded alongside the chat model. That's exactly
-//! what CLAUDE.md's "mono-model first" rule rules out on the default path:
+//! what AGENTS.md's "mono-model first" rule rules out on the default path:
 //! OpenPal loads one model and uses it for everything, not a second
 //! specialized model even where that second model would score better.
 //!
