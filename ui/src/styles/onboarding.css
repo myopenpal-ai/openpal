@@ -171,6 +171,25 @@
   margin-top: 4px;
 }
 
+/* Appearance step: the theme cards (components/ThemePicker, laid out by
+   theme-picker.css) and the way on, in one block so they enter together under
+   a single short delay. The gap is the scene's own rhythm (.ob-scene). */
+.ob-appearance {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 26px;
+  width: 100%;
+}
+
+/* The same column as .ob-name-actions: the main button, then the quiet skips. */
+.ob-appearance-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
 /* "Skip this step" and "Skip setup": the two quiet ways out of a scene. */
 .ob-skips {
   display: flex;

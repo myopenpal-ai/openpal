@@ -1,21 +1,21 @@
 /* ---------------------------------------------------------------------------
    OpenPal — "Hearth" design system.
-   Warm paper & ink base, with a security-toned accent pair (blue for
+   Neutral paper & ink base, with a security-toned accent pair (blue for
    privacy, green for trust) instead of one flat color. Glass surfaces and
    an ambient glow give it depth without losing the domestic warmth.
 --------------------------------------------------------------------------- */
 
 :root {
-  --paper: #faf6ef;
+  --paper: #f7f7f8;
   --paper-raised: #ffffff;
-  --paper-sunken: #f1ebdf;
-  --ink: #241d15;
-  --ink-rgb: 36, 29, 21;
-  --ink-soft: #6d6356;
+  --paper-sunken: #ececef;
+  --ink: #1a1c20;
+  --ink-rgb: 26, 28, 32;
+  --ink-soft: #5b6068;
   /* Icon/decorative use only — clears 3:1 (non-text) but not 4.5:1, so real
      body text must use --ink-soft instead. See docs/design/ACCESSIBILITY_AUDIT.md
      pattern 1. */
-  --ink-faint: #91836f;
+  --ink-faint: #80858e;
   --line: rgba(var(--ink-rgb), 0.12);
   --line-soft: rgba(var(--ink-rgb), 0.07);
   --ink-hover: rgba(var(--ink-rgb), 0.05);
@@ -45,32 +45,32 @@
     radial-gradient(30% 26% at 66% 20%, color-mix(in srgb, var(--accent-2) 45%, transparent) 0%, transparent 72%),
     radial-gradient(26% 24% at 34% 38%, color-mix(in srgb, var(--accent-3) 34%, transparent) 0%, transparent 75%);
 
-  --ok: #51794b;
-  --ok-rgb: 81, 121, 75;
+  --ok: #1f7a45;
+  --ok-rgb: 31, 122, 69;
   --ok-soft: rgba(var(--ok-rgb), 0.13);
-  --warn: #99701f;
-  --warn-rgb: 153, 112, 31;
+  --warn: #8a5a00;
+  --warn-rgb: 138, 90, 0;
   --warn-soft: rgba(var(--warn-rgb), 0.13);
-  --danger: #ad3a2c;
-  --danger-rgb: 173, 58, 44;
+  --danger: #b3261e;
+  --danger-rgb: 179, 38, 30;
   --danger-soft: rgba(var(--danger-rgb), 0.1);
   /* Badge-scoped text colors: darker than --ok/--warn so badge text clears
      4.5:1 on its soft/sunken backgrounds, without changing --ok/--warn
      everywhere else (buttons, banners) they're used. */
-  --badge-ok-ink: #4c7247;
-  --badge-warn-ink: #87631b;
+  --badge-ok-ink: #1b6e3e;
+  --badge-warn-ink: #7d5200;
 
   --radius-s: 9px;
   --radius-m: 14px;
   --radius-l: 22px;
-  --shadow-rgb: 39, 33, 24;
+  --shadow-rgb: 16, 24, 40;
   --shadow-card: 0 1px 2px rgba(var(--shadow-rgb), 0.06), 0 14px 36px rgba(var(--shadow-rgb), 0.1);
   --shadow-pop: 0 2px 6px rgba(var(--shadow-rgb), 0.12), 0 28px 70px rgba(var(--shadow-rgb), 0.2);
   --shadow-glow: 0 16px 40px -14px rgba(var(--accent-rgb), 0.35);
 
   /* Theme-invariant dark overlays (modal backdrop, image lightbox) — pinned,
      never overridden below, so they stay dark chrome regardless of theme. */
-  --scrim-rgb: 20, 15, 10;
+  --scrim-rgb: 16, 18, 22;
   --scrim: rgba(var(--scrim-rgb), 0.35);
   --scrim-strong: rgba(var(--scrim-rgb), 0.82);
   --scrim-ink-rgb: 255, 255, 255;
@@ -82,7 +82,7 @@
   /* Hover scrim over an image thumbnail. Deliberately NOT derived from
      --ink-rgb: it must stay dark regardless of theme (it darkens a photo so
      the zoom icon reads), unlike --ink-rgb which flips per theme. */
-  --ink-scrim: rgba(39, 33, 24, 0.45);
+  --ink-scrim: rgba(16, 18, 22, 0.45);
 
   --font-display: "Bricolage Grotesque Variable", "Avenir Next", -apple-system, sans-serif;
   --font-body: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
@@ -105,8 +105,21 @@
    desktop window won't reach it — see docs/design/MOBILE.md's responsive-layout
    pass for the full reasoning. */
 
+/* Who picks the palette. Settings → Appearance (and the onboarding step) write
+   the user's choice to <html> as data-theme="light" or "dark"; "System" writes
+   nothing. With no attribute the OS decides through the media query, exactly as
+   it did before the setting existed, live and with no script. A pinned theme
+   also pins color-scheme, so native controls (select arrows, checkboxes,
+   placeholders, default focus rings) follow it instead of the OS.
+
+   The dark tokens are therefore written twice, once per way of getting to dark,
+   and must stay identical (contrast.test.ts fails if they drift). A new palette
+   token goes in the base block above AND in both dark copies; one that must not
+   change with the theme (the scrim family) stays in the base block only. Never
+   add another prefers-color-scheme rule anywhere in the stylesheets: it would
+   keep following the OS and ignore a pinned theme. */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --paper: #100e0c;
     --paper-raised: #1f1b16;
     --paper-sunken: #1a1610;
@@ -148,6 +161,54 @@
     --shadow-pop: 0 2px 6px rgba(var(--shadow-rgb), 0.45), 0 28px 70px rgba(var(--shadow-rgb), 0.55);
     --shadow-glow: 0 20px 50px -14px rgba(var(--accent-rgb), 0.45);
   }
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --paper: #100e0c;
+  --paper-raised: #1f1b16;
+  --paper-sunken: #1a1610;
+  --ink: #ede4d8;
+  --ink-rgb: 236, 228, 216;
+  --ink-soft: #a99d8d;
+  --ink-faint: #786d5e;
+  --line: rgba(var(--ink-rgb), 0.13);
+  --line-soft: rgba(var(--ink-rgb), 0.07);
+  --ink-hover: rgba(var(--ink-rgb), 0.06);
+  --glass-bg: rgba(31, 27, 22, 0.62);
+  --glass-border: rgba(var(--ink-rgb), 0.09);
+
+  --accent: #2e86fa;
+  --accent-hover: #569dfb;
+  --accent-ink: #071233;
+  --accent-rgb: 46, 134, 250;
+  --accent-soft: rgba(var(--accent-rgb), 0.15);
+  --accent-line: rgba(var(--accent-rgb), 0.4);
+  --accent-2: #38bdf8;
+  --accent-3: #34d399;
+
+  --ok: #84ab7d;
+  --ok-rgb: 132, 171, 125;
+  --ok-soft: rgba(var(--ok-rgb), 0.14);
+  --warn: #c79a45;
+  --warn-rgb: 199, 154, 69;
+  --warn-soft: rgba(var(--warn-rgb), 0.14);
+  --danger: #d4604f;
+  --danger-rgb: 212, 96, 79;
+  --danger-soft: rgba(var(--danger-rgb), 0.14);
+  /* --ok/--warn already clear 4.5:1 on their badge backgrounds in dark
+     mode — no separate badge-scoped darkening needed here. */
+  --badge-ok-ink: var(--ok);
+  --badge-warn-ink: var(--warn);
+
+  --shadow-rgb: 0, 0, 0;
+  --shadow-card: 0 1px 2px rgba(var(--shadow-rgb), 0.35), 0 14px 36px rgba(var(--shadow-rgb), 0.4);
+  --shadow-pop: 0 2px 6px rgba(var(--shadow-rgb), 0.45), 0 28px 70px rgba(var(--shadow-rgb), 0.55);
+  --shadow-glow: 0 20px 50px -14px rgba(var(--accent-rgb), 0.45);
 }
 
 * {

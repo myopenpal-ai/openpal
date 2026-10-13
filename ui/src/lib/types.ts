@@ -1053,11 +1053,21 @@ export interface Settings {
    * `store.ts`. Turning it off never rewrites a feature's own choice, so
    * turning it back on restores each one as it was. */
   experimentalFeatures: boolean;
+  /** The app's colour theme (Settings → General, and the onboarding step):
+   * "system" follows the OS's light or dark setting and is the default,
+   * "light" and "dark" pin one whatever the OS says. A `String` on the Rust
+   * side, like `language`, so code that reads this must treat a missing or
+   * unrecognised value as "system" — `normalizeTheme` in `lib/theme.ts` does. */
+  theme: "system" | "light" | "dark";
 }
 
 /** The Settings UI's language picker, and every other file that needs to name
  * this type — single source of truth is `Settings["language"]` itself. */
 export type Language = Settings["language"];
+
+/** The theme picker's choices — single source of truth is `Settings["theme"]`
+ * itself, same as `Language`. */
+export type Theme = Settings["theme"];
 
 /** Build/runtime info: whether this is the no-install Portable build, where
  * its data lives, and the running app's own version. From `get_app_info`. */

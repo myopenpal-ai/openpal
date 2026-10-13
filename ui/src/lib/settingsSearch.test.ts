@@ -92,6 +92,25 @@ describe("searchSettings", () => {
       await i18next.changeLanguage("en");
     }
   });
+
+  it("finds the Theme setting by name, and its Appearance group", () => {
+    expect(labels("theme")).toEqual(["Theme"]);
+    expect(labels("appearance")).toEqual(["Appearance"]);
+    // The hint says "mode" so that the usual way of asking for it finds it too.
+    expect(labels("dark mode")).toEqual(["Theme"]);
+  });
+
+  it("finds them in French too, with or without the accents", async () => {
+    await i18next.changeLanguage("fr");
+    try {
+      expect(labels("thème")).toEqual(["Thème"]);
+      expect(labels("theme")).toEqual(["Thème"]);
+      expect(labels("apparence")).toEqual(["Apparence"]);
+      expect(labels("mode sombre")).toEqual(["Thème"]);
+    } finally {
+      await i18next.changeLanguage("en");
+    }
+  });
 });
 
 describe("SETTINGS_SEARCH_ENTRIES", () => {

@@ -1809,6 +1809,16 @@ pub struct Settings {
     /// rewrites a feature's own choice, so turning it back on restores each
     /// one as it was.
     pub experimental_features: bool,
+    /// The app's colour theme, chosen in Settings → General and in the
+    /// onboarding step: "system" (the default) follows the OS's light or dark
+    /// setting, "light" and "dark" pin one whatever the OS says. Validity is
+    /// owned by the UI, same pattern as `language`, and the frontend treats
+    /// anything it doesn't recognise as "system". That is also why this is a
+    /// `String` rather than an enum: `settings::load` falls back to
+    /// `Settings::default()` for the whole row on any parse error, so a value
+    /// this build doesn't know (a newer build's, a hand edit) must not be able
+    /// to fail the load and reset every other setting.
+    pub theme: String,
 }
 
 impl Default for Settings {
@@ -1846,6 +1856,7 @@ impl Default for Settings {
             favorite_model_ids: Vec::new(),
             custom_models_enabled: false,
             experimental_features: false,
+            theme: "system".to_string(),
             system_prompt: "You are a friendly, helpful AI assistant running privately on the \
                             user's own computer. Be clear and warm. When the user seems new to a \
                             topic, explain it simply and avoid jargon. Keep answers concise unless \
@@ -2193,6 +2204,14 @@ mod tests {
         assert_eq!(s.selected_cloud_model_id, None);
     }
 
+    /// A fresh install must look exactly as OpenPal does today, which is
+    /// "follow the OS": the default theme is "system", never a pinned light
+    /// or dark palette.
+    #[test]
+    fn settings_default_follows_the_system_theme() {
+        assert_eq!(Settings::default().theme, "system");
+    }
+
     /// A settings.json saved before `chatBackend` existed must still load,
     /// defaulting to `Local` (struct-level `#[serde(default)]`) — an app that
     /// never signed in should never silently end up in cloud mode.
@@ -2304,6 +2323,59 @@ mod tests {
         let settings: Settings =
             serde_json::from_str(json).expect("old settings.json must still parse");
         assert!(settings.favorite_model_ids.is_empty());
+    }
+
+    /// A settings.json saved before `theme` existed must still load,
+    /// defaulting to "system" (struct-level `#[serde(default)]`) — an
+    /// existing install must look exactly as it did before the upgrade. The
+    /// `onboardingCompleted` check is what makes this more than a restatement
+    /// of the default: a blob that failed to parse would come back as
+    /// `Settings::default()`, whose theme is also "system".
+    #[test]
+    fn settings_deserializes_missing_theme_as_system() {
+        let json = r#"{
+            "onboardingCompleted": true,
+            "selectedModelId": null,
+            "systemPrompt": "hi",
+            "showThinking": true,
+            "forceCpu": false,
+            "logLevel": "info",
+            "voiceSpeed": 1.0,
+            "voiceExpressiveness": 1.0,
+            "voiceSentencePause": 0.2,
+            "voiceId": "en_US-amy-medium"
+        }"#;
+        let settings: Settings =
+            serde_json::from_str(json).expect("old settings.json must still parse");
+        assert_eq!(settings.theme, "system");
+        assert!(settings.onboarding_completed);
+    }
+
+    /// `theme` reaches the frontend, and is stored in the settings row, under
+    /// exactly this key. `ui/src/lib/types.ts` mirrors `Settings` by hand with
+    /// no parity test, so pin the wire name and the camelCase convention
+    /// around it here: a rename, or a changed `rename_all`, would otherwise
+    /// make the UI read `undefined` and quietly fall back to "system".
+    #[test]
+    fn settings_serializes_theme_under_the_theme_key() {
+        let settings = Settings {
+            theme: "dark".to_string(),
+            ..Settings::default()
+        };
+        let value = serde_json::to_value(&settings).unwrap();
+        assert_eq!(value["theme"], "dark");
+
+        let object = value.as_object().expect("Settings serializes as an object");
+        for key in object.keys() {
+            assert!(
+                key.starts_with(|c: char| c.is_ascii_lowercase())
+                    && key.chars().all(|c| c.is_ascii_alphanumeric()),
+                "Settings key {key:?} is not camelCase"
+            );
+        }
+        // The loop alone would also accept all-lowercase keys
+        // ("onboardingcompleted"), so pin one known multi-word key too.
+        assert!(object.contains_key("onboardingCompleted"));
     }
 
     /// A conversation.json saved before per-conversation `sampling`/

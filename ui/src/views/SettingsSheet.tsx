@@ -4,8 +4,10 @@ import QRCode from "qrcode";
 import ConfirmDialog from "../components/ConfirmDialog";
 import FactoryResetConfirm from "../components/FactoryResetConfirm";
 import PinPad from "../components/PinPad";
+import ThemePicker from "../components/ThemePicker";
 import { api } from "../lib/api";
 import { usePluginDisplayName } from "../lib/pluginName";
+import { normalizeTheme, THEMES } from "../lib/theme";
 import type {
   AppLockStatusView,
   DeviceSummary,
@@ -125,7 +127,7 @@ function SettingsGroup({ title, children }: { title: string; children: ReactNode
   );
 }
 
-/** General: who's signed in, the app's language, and updates. */
+/** General: who's signed in, the app's appearance and language, and updates. */
 function GeneralSettings() {
   const settings = useStore((s) => s.settings);
   const saveSettings = useStore((s) => s.saveSettings);
@@ -134,6 +136,8 @@ function GeneralSettings() {
   return (
     <>
       <AccountSection />
+
+      <AppearanceSection />
 
       <div className="settings-field">
         <span className="settings-label">{t("settingsSheet.language.label")}</span>
@@ -545,6 +549,50 @@ function AccountSection() {
         </button>
       </div>
     </div>
+  );
+}
+
+/**
+ * Theme: light, dark, or follow the device. Like Language it applies at once,
+ * with no draft and no Save, so it isn't one of the `Drafts` saved when
+ * Settings closes. The pick goes through the store's `setTheme`, which
+ * re-themes the whole app before it persists anything.
+ */
+function AppearanceSection() {
+  const { t } = useTranslation();
+  const setTheme = useStore((s) => s.setTheme);
+  // Older settings files (saved before this existed) have no value, which
+  // reads as System, the same as on a fresh install.
+  const theme = normalizeTheme(useStore((s) => s.settings?.theme));
+  const labelId = useId();
+  const hintId = useId();
+
+  return (
+    <SettingsGroup title={t("settingsSheet.appearance.title")}>
+      {/* The visible label names the group and the hint describes it, so a
+          screen reader says both before it reads the options. The options'
+          own names aren't `settings-label`s: settingsSearch.test.ts would
+          want each one listed as a setting of its own. */}
+      <div className="settings-field">
+        <span id={labelId} className="settings-label">
+          {t("settingsSheet.appearance.theme.label")}
+        </span>
+        <span id={hintId} className="settings-hint">
+          {t("settingsSheet.appearance.theme.hint")}
+        </span>
+        <ThemePicker
+          variant="segmented"
+          value={theme}
+          onChange={(next) => void setTheme(next)}
+          labelledBy={labelId}
+          describedBy={hintId}
+          options={THEMES.map((value) => ({
+            value,
+            label: t(`settingsSheet.appearance.theme.${value}`),
+          }))}
+        />
+      </div>
+    </SettingsGroup>
   );
 }
 

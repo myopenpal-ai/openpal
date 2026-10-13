@@ -24,7 +24,7 @@
     "sections": {
       "general": {
         "label": "Général",
-        "subtitle": "Votre compte, la langue de l'application et les mises à jour."
+        "subtitle": "Votre compte, l'apparence, la langue de l'application et les mises à jour."
       },
       "chat": {
         "label": "Discussion",
@@ -67,6 +67,16 @@
     },
     "language": {
       "label": "Langue"
+    },
+    "appearance": {
+      "title": "Apparence",
+      "theme": {
+        "label": "Thème",
+        "hint": "L'option Système suit le mode clair ou sombre de votre appareil.",
+        "system": "Système",
+        "light": "Clair",
+        "dark": "Sombre"
+      }
     },
     "toggle": {
       "on": "Activé",
@@ -660,6 +670,15 @@
       "sub": "Ce nom sert uniquement à personnaliser votre accueil.",
       "label": "Votre nom",
       "placeholder": "Saisissez votre nom",
+      "continue": "Continuer"
+    },
+    "appearance": {
+      "title": "Quelle apparence souhaitez-vous pour OpenPal ?",
+      "sub": "Choisissez un thème. Vous pourrez le modifier à tout moment dans les Réglages.",
+      "system": "Système",
+      "systemHint": "Suit votre appareil",
+      "light": "Clair",
+      "dark": "Sombre",
       "continue": "Continuer"
     },
     "scan": {

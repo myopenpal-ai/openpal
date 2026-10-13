@@ -32,6 +32,12 @@ const hasVoice = ({ plugins }: SettingsSearchContext) => plugins.some((p) => p.i
  */
 export const SETTINGS_SEARCH_ENTRIES = [
   { section: "general", label: "settingsSheet.account.label", when: (c) => c.signedIn },
+  { section: "general", label: "settingsSheet.appearance.title" },
+  {
+    section: "general",
+    label: "settingsSheet.appearance.theme.label",
+    hint: "settingsSheet.appearance.theme.hint",
+  },
   { section: "general", label: "settingsSheet.language.label" },
   { section: "general", label: "settingsSheet.updates.title" },
   { section: "general", label: "settingsSheet.diagnostics.updates.label" },

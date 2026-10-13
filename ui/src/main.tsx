@@ -7,6 +7,7 @@ import "./styles/global.css";
 import "./styles/onboarding.css";
 import "./styles/chat.css";
 import "./styles/library.css";
+import "./styles/theme-picker.css";
 import "./styles/plugins.css";
 import "./styles/discover.css";
 import "./styles/skills.css";

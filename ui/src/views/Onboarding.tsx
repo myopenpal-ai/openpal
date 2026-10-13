@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import ConfirmDialog from "../components/ConfirmDialog";
 import PinPad from "../components/PinPad";
 import ProgressRing from "../components/ProgressRing";
+import ThemePicker from "../components/ThemePicker";
 import { api } from "../lib/api";
 import {
   formatBytes,
@@ -12,10 +13,19 @@ import {
   ramLabel,
   totalModelSizeBytes,
 } from "../lib/format";
+import { normalizeTheme } from "../lib/theme";
 import type { ModelInfo } from "../lib/types";
 import { useStore } from "../state/store";
 
-type Scene = "welcome" | "name" | "scan" | "recommend" | "download" | "security" | "ready";
+type Scene =
+  | "welcome"
+  | "name"
+  | "appearance"
+  | "scan"
+  | "recommend"
+  | "download"
+  | "security"
+  | "ready";
 
 /** A trailing-edge throttle for a polite live-region announcement: updates
  * right away if `intervalMs` has already elapsed since the last flush,
@@ -102,6 +112,17 @@ export default function Onboarding() {
   const [autoCheckUpdates, setAutoCheckUpdates] = useState(false);
   const [nameDraft, setNameDraft] = useState(savedUserName);
   const [savingName, setSavingName] = useState(false);
+
+  // "appearance" scene. The checked option is read straight from the store, never
+  // kept here: a theme saved before quitting mid-onboarding is the one shown
+  // checked on the way back, and a pick that couldn't be saved is taken back on
+  // screen along with the store. A missing or unrecognised stored value reads as
+  // System, which is also what is checked when nothing has been picked.
+  const theme = useStore((s) => normalizeTheme(s.settings?.theme));
+  const setTheme = useStore((s) => s.setTheme);
+  // The group is named by the scene's heading and described by the line under it.
+  const appearanceTitleId = useId();
+  const appearanceSubId = useId();
 
   // "security" scene: an optional, skippable offer to set an app-lock PIN.
   // `RecoverySetup` always runs before `Onboarding` (see App.tsx's gate
@@ -191,8 +212,14 @@ export default function Onboarding() {
     setSavingName(true);
     await saveSettings({ userName: name?.trim() || null });
     setSavingName(false);
-    setScene("scan");
+    setScene("appearance");
   };
+
+  // The appearance step has nothing to save on the way out: a pick persisted
+  // itself the moment it was made (`setTheme`), and Continue or Skip with nothing
+  // picked leaves the theme as it was. So neither button writes or waits on
+  // anything, and both are live from the first frame.
+  const continueFromAppearance = () => setScene("scan");
 
   // Skip just the model setup (scan → recommend → download) and carry on to the
   // optional steps. A download in flight is stopped (its partial file is kept,
@@ -308,6 +335,48 @@ export default function Onboarding() {
               />
             </div>
           </form>
+        </section>
+      )}
+
+      {scene === "appearance" && (
+        <section className="ob-scene" key="appearance" ref={sceneRef} tabIndex={-1}>
+          <p className="ob-brand ob-appear">OpenPal</p>
+          <h1
+            id={appearanceTitleId}
+            className="ob-title ob-appear"
+            tabIndex={-1}
+            style={{ animationDelay: "0.1s" }}
+          >
+            {t("onboarding.appearance.title")}
+          </h1>
+          <p id={appearanceSubId} className="ob-sub ob-appear" style={{ animationDelay: "0.2s" }}>
+            {t("onboarding.appearance.sub")}
+          </p>
+          {/* One block, one delay: the options and the way on enter together. */}
+          <div className="ob-appearance ob-appear" style={{ animationDelay: "0.3s" }}>
+            <ThemePicker
+              variant="cards"
+              value={theme}
+              onChange={(next) => void setTheme(next)}
+              labelledBy={appearanceTitleId}
+              describedBy={appearanceSubId}
+              options={[
+                {
+                  value: "system",
+                  label: t("onboarding.appearance.system"),
+                  hint: t("onboarding.appearance.systemHint"),
+                },
+                { value: "light", label: t("onboarding.appearance.light") },
+                { value: "dark", label: t("onboarding.appearance.dark") },
+              ]}
+            />
+            <div className="ob-appearance-actions">
+              <button className="btn btn-big" onClick={continueFromAppearance}>
+                {t("onboarding.appearance.continue")}
+              </button>
+              <SkipButtons onSkipStep={continueFromAppearance} onSkipSetup={askToSkipSetup} />
+            </div>
+          </div>
         </section>
       )}
 

@@ -105,7 +105,7 @@ test("every Settings category shows its own settings, and only those", async ({ 
   const text = (t: string) => dialog.getByText(t, { exact: true });
 
   const expected: [string, Locator[]][] = [
-    ["General", [text("Language"), ...groups(["Updates"])]],
+    ["General", [text("Theme"), text("Language"), ...groups(["Appearance", "Updates"])]],
     ["Chat", [dialog.getByRole("textbox", { name: /Personality/ }), text("Smart tuning")]],
     ["AI model", [text("Smart model loading"), text("Add your own models"), ...groups(["Performance"])]],
     ["Privacy & safety", [text("Crisis support banner"), ...groups(["App lock", "Parental controls"])]],
@@ -151,6 +151,53 @@ test("the nav's search finds a setting and opens its category right on it", asyn
   await search.press("Escape");
   await expect(search).toHaveValue("");
   await expect(dialog).toBeVisible();
+});
+
+test("the nav's search finds the Theme setting and opens General right on its options", async ({
+  page,
+}) => {
+  await openApp(page);
+  await openFromMoreMenu(page, "Skills");
+  const dialog = page.getByRole("dialog");
+  const nav = dialog.getByRole("navigation", { name: "More" });
+  const search = nav.getByRole("textbox", { name: "Search settings" });
+
+  await search.fill("theme");
+  await nav.getByRole("button", { name: "Theme General" }).click();
+
+  await expect(page.getByRole("dialog", { name: "Settings" })).toBeVisible();
+  await expect(dialog.getByRole("heading", { level: 1, name: "General" })).toBeVisible();
+  const field = dialog.locator(".settings-field", { hasText: "Theme" });
+  await expect(field).toHaveClass(/settings-search-hit/);
+  await expect(field).toBeInViewport();
+  // Focus lands among the options, so the keyboard can pick one at once.
+  await expect(field.getByRole("radiogroup", { name: "Theme" }).locator(":focus")).toHaveCount(1);
+  await expect(search).toHaveValue("");
+  await expect(nav.getByRole("button", { name: "General" })).toHaveAttribute(
+    "aria-current",
+    "page",
+  );
+});
+
+test("searching for Theme with Dark saved lands focus on Dark, the option the arrow keys continue from", async ({
+  page,
+}) => {
+  const base = freshInstallResponses();
+  await openApp(page, {
+    get_settings: {
+      ...(base.get_settings as Record<string, unknown>),
+      onboardingCompleted: true,
+      userName: "Ada",
+      theme: "dark",
+    },
+  });
+  await openFromMoreMenu(page, "Skills");
+  const dialog = page.getByRole("dialog");
+  const nav = dialog.getByRole("navigation", { name: "More" });
+  await nav.getByRole("textbox", { name: "Search settings" }).fill("theme");
+  await nav.getByRole("button", { name: "Theme General" }).click();
+
+  await expect(dialog.getByRole("radio", { name: "Dark", exact: true })).toBeFocused();
 });
 
 test("at phone width the search sits above the pages and its results fit", async ({ page }) => {

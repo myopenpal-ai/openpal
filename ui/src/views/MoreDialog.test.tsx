@@ -17,12 +17,22 @@ vi.mock("./SettingsSheet", () => ({
     <>
       <h1>Settings page: {section}</h1>
       {section === "general" && (
-        <div className="settings-field" data-testid="language-field">
-          <span className="settings-label">Language</span>
-          <select aria-label="Language">
-            <option>English</option>
-          </select>
-        </div>
+        <>
+          <div className="settings-field" data-testid="theme-field">
+            <span className="settings-label">Theme</span>
+            <div role="radiogroup" aria-label="Theme">
+              <input type="radio" name="theme" aria-label="System" />
+              <input type="radio" name="theme" aria-label="Light" />
+              <input type="radio" name="theme" aria-label="Dark" />
+            </div>
+          </div>
+          <div className="settings-field" data-testid="language-field">
+            <span className="settings-label">Language</span>
+            <select aria-label="Language">
+              <option>English</option>
+            </select>
+          </div>
+        </>
       )}
     </>
   ),
@@ -224,6 +234,23 @@ describe("MoreDialog", () => {
     expect(field).toHaveClass("settings-search-hit");
     expect(field.scrollIntoView).toHaveBeenCalled();
     expect(screen.getByRole("combobox", { name: "Language" })).toHaveFocus();
+  });
+
+  it("finds the Theme setting, and opens General on its options", async () => {
+    const user = userEvent.setup();
+    render(<Harness />);
+    await user.click(screen.getByRole("button", { name: "open skills" }));
+
+    await user.type(searchField(), "theme");
+    expect(screen.getByRole("status")).toHaveTextContent("1 result");
+    await user.click(screen.getByRole("button", { name: "Theme General" }));
+
+    expect(screen.getByRole("heading", { name: "Settings page: general" })).toBeInTheDocument();
+    const field = screen.getByTestId("theme-field");
+    expect(field).toHaveClass("settings-search-hit");
+    expect(field.scrollIntoView).toHaveBeenCalled();
+    // Focus lands on the field's first control, as it does for any setting.
+    expect(screen.getByRole("radio", { name: "System" })).toHaveFocus();
   });
 
   it("says when nothing matches, and Escape clears the search before it closes", async () => {

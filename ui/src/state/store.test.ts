@@ -89,6 +89,13 @@ vi.mock("../lib/api", () => ({
     cancelDownload,
     getModels,
     getSettings,
+    // What finishBootAfterUnlock reads or fires on top of the above; only the
+    // "theme" block at the end of this file runs it.
+    getEngineStatus: vi.fn().mockResolvedValue({ type: "stopped" }),
+    getAppInfo: vi.fn().mockResolvedValue({}),
+    getAccount: vi.fn().mockResolvedValue(null),
+    backfillCustomModelMetadata: vi.fn().mockResolvedValue(0),
+    getSystemReport: vi.fn().mockResolvedValue(null),
   },
 }));
 
@@ -1380,5 +1387,313 @@ describe("cancelDownload", () => {
     settleFirst();
     await vi.waitFor(() => expect(downloadModel).toHaveBeenCalledTimes(2));
     expect(useStore.getState().downloads["m1"]).toBeDefined();
+  });
+});
+
+describe("theme", () => {
+  const html = document.documentElement;
+  const pinned = () => html.getAttribute("data-theme");
+
+  // The store as it was before any test ran: finishBootAfterUnlock fills in a
+  // good part of it, and every test here starts from this instead.
+  const pristine = useStore.getState();
+
+  // A saved settings row cut down to a few fields: what matters is that setTheme
+  // carries every one of them along when it writes.
+  const saved = {
+    onboardingCompleted: true,
+    language: "en",
+    userName: "Ada",
+    autoCheckUpdates: false,
+  };
+  // The theme is typed `unknown` because an older or newer build, or a
+  // hand-edited file, can leave something the union doesn't allow in the row.
+  const settingsWith = (theme: unknown) => ({ ...saved, theme }) as Settings;
+  // Rows saved before the setting existed (and the e2e fixture) have no theme.
+  const settingsWithoutTheme = () => ({ ...saved }) as Settings;
+
+  // Counts the writes to <html data-theme> since it was last read. An observer
+  // delivers its records at the next microtask, so those already delivered are
+  // tallied by its callback and the rest are taken here.
+  let domWrites: MutationObserver;
+  let delivered = 0;
+  const writes = () => {
+    const count = delivered + domWrites.takeRecords().length;
+    delivered = 0;
+    return count;
+  };
+
+  beforeEach(() => {
+    updateSettings.mockReset().mockResolvedValue(undefined);
+    useStore.setState(pristine, true);
+    html.removeAttribute("data-theme");
+    delivered = 0;
+    domWrites = new MutationObserver((records) => {
+      delivered += records.length;
+    });
+    domWrites.observe(html, { attributes: true, attributeFilter: ["data-theme"] });
+  });
+
+  afterEach(() => {
+    domWrites.disconnect();
+    updateSettings.mockReset().mockResolvedValue(undefined);
+    getSettings.mockReset().mockResolvedValue({});
+    useStore.setState(pristine, true);
+    html.removeAttribute("data-theme");
+  });
+
+  describe("settings.theme on <html>", () => {
+    it("pins light and dark, and drops the attribute for system", () => {
+      useStore.setState({ settings: settingsWith("dark") });
+      expect(pinned()).toBe("dark");
+
+      useStore.setState({ settings: settingsWith("light") });
+      expect(pinned()).toBe("light");
+
+      useStore.setState({ settings: settingsWith("system") });
+      expect(pinned()).toBeNull();
+    });
+
+    it("reads a missing or unrecognised theme as system", () => {
+      useStore.setState({ settings: settingsWith("dark") });
+      useStore.setState({ settings: settingsWithoutTheme() });
+      expect(pinned()).toBeNull();
+
+      useStore.setState({ settings: settingsWith("dark") });
+      useStore.setState({ settings: settingsWith("sepia") });
+      expect(pinned()).toBeNull();
+    });
+
+    it("drops the attribute when settings go away", () => {
+      useStore.setState({ settings: settingsWith("dark") });
+      useStore.setState({ settings: null });
+      expect(pinned()).toBeNull();
+    });
+
+    it("makes no DOM write for updates that leave the theme alone", () => {
+      useStore.setState({ settings: settingsWith("dark") });
+      writes(); // the pin itself
+
+      useStore.setState({ notice: "something happened" });
+      useStore.setState({ settings: { ...settingsWith("dark"), userName: "Grace" } });
+
+      expect(writes()).toBe(0);
+      expect(pinned()).toBe("dark");
+    });
+
+    it("makes no DOM write when one unrecognised theme replaces another", () => {
+      useStore.setState({ settings: settingsWith("sepia") });
+      useStore.setState({ settings: settingsWith("mauve") });
+      useStore.setState({ settings: settingsWith("system") });
+
+      expect(writes()).toBe(0);
+    });
+  });
+
+  describe("finishBootAfterUnlock", () => {
+    beforeEach(() => {
+      // Boot schedules a 5 s account refresh; it must never get the chance to fire.
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    /** What <html> says at the moment `booted` flips to true: the store update
+     * that lets App.tsx leave the bare titlebar for onboarding or the shell, so
+     * the first frame it paints. `undefined` if booted never flipped. */
+    async function themeAtFirstFrame(stored: Settings) {
+      getSettings.mockResolvedValue(stored);
+      let seen: string | null | undefined;
+      const stop = useStore.subscribe((state, prev) => {
+        if (state.booted && !prev.booted) seen = pinned();
+      });
+      try {
+        await useStore.getState().finishBootAfterUnlock();
+      } finally {
+        stop();
+      }
+      return seen;
+    }
+
+    it.each<[what: string, stored: Settings, expected: string | null]>([
+      ["a saved dark theme", settingsWith("dark"), "dark"],
+      ["a saved light theme", settingsWith("light"), "light"],
+      ["a saved system theme", settingsWith("system"), null],
+      ["a row saved before the setting existed", settingsWithoutTheme(), null],
+      ["a theme this build doesn't know", settingsWith("sepia"), null],
+    ])("has <html> right for %s by the time booted flips", async (_what, stored, expected) => {
+      expect(await themeAtFirstFrame(stored)).toBe(expected);
+    });
+
+    it("writes the saved theme once, with nothing in between", async () => {
+      await themeAtFirstFrame(settingsWith("dark"));
+
+      expect(writes()).toBe(1);
+    });
+  });
+
+  describe("setTheme", () => {
+    // An updateSettings call the test settles by hand, the way cancelDownload's
+    // tests hold a download.
+    function heldWrite() {
+      let settle: () => void = () => {};
+      let fail: (reason: unknown) => void = () => {};
+      updateSettings.mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve, reject) => {
+            settle = resolve;
+            fail = reject;
+          }),
+      );
+      return { settle: () => settle(), fail: (reason: unknown) => fail(reason) };
+    }
+
+    it("is optimistic: the store and <html> change while the write is still pending", async () => {
+      useStore.setState({ settings: settingsWith("system") });
+      const write = heldWrite();
+
+      const pick = useStore.getState().setTheme("dark");
+
+      expect(useStore.getState().settings?.theme).toBe("dark");
+      expect(pinned()).toBe("dark");
+      expect(updateSettings).toHaveBeenCalledTimes(1);
+
+      write.settle();
+      await pick;
+      expect(useStore.getState().settings?.theme).toBe("dark");
+      expect(pinned()).toBe("dark");
+    });
+
+    it("persists the full settings object with the new theme", async () => {
+      const stored = settingsWith("system");
+      useStore.setState({ settings: stored });
+
+      await useStore.getState().setTheme("light");
+
+      expect(updateSettings).toHaveBeenCalledTimes(1);
+      expect(updateSettings).toHaveBeenCalledWith({ ...stored, theme: "light" });
+    });
+
+    it.each<[what: string, stored: Settings, pick: Settings["theme"]]>([
+      ["dark over a saved dark", settingsWith("dark"), "dark"],
+      ["system over a saved system", settingsWith("system"), "system"],
+      ["system over a row saved before the setting existed", settingsWithoutTheme(), "system"],
+    ])("writes nothing for %s", async (_what, stored, pick) => {
+      useStore.setState({ settings: stored });
+      writes(); // the pin from seeding the store
+
+      await useStore.getState().setTheme(pick);
+
+      expect(updateSettings).not.toHaveBeenCalled();
+      expect(useStore.getState().settings).toBe(stored);
+      expect(writes()).toBe(0);
+    });
+
+    it("writes nothing for system over a theme this build doesn't know", async () => {
+      // An unrecognised value already acts as system, so there is nothing to
+      // write, and nothing to repair either.
+      const stored = settingsWith("sepia");
+      useStore.setState({ settings: stored });
+
+      await useStore.getState().setTheme("system");
+
+      expect(updateSettings).not.toHaveBeenCalled();
+      expect(useStore.getState().settings).toBe(stored);
+      expect(pinned()).toBeNull();
+    });
+
+    it("does nothing before settings have loaded", async () => {
+      await useStore.getState().setTheme("dark");
+
+      expect(updateSettings).not.toHaveBeenCalled();
+      expect(useStore.getState().settings).toBeNull();
+      expect(pinned()).toBeNull();
+    });
+
+    it("puts the previous theme back, and sets a notice, when the write fails", async () => {
+      useStore.setState({ settings: settingsWith("light") });
+      updateSettings.mockRejectedValueOnce(new Error("disk full"));
+
+      const pick = useStore.getState().setTheme("dark");
+      expect(pinned()).toBe("dark"); // applied at once, before the failure is known
+      await pick;
+
+      expect(useStore.getState().settings).toEqual(settingsWith("light"));
+      expect(pinned()).toBe("light");
+      expect(useStore.getState().notice).toBe("Error: disk full");
+    });
+
+    it("rolls a failed pick back to the pick before it, not past it", async () => {
+      useStore.setState({ settings: settingsWith("system") });
+      await useStore.getState().setTheme("dark");
+      updateSettings.mockRejectedValueOnce(new Error("disk full"));
+
+      await useStore.getState().setTheme("light");
+
+      expect(useStore.getState().settings?.theme).toBe("dark");
+      expect(pinned()).toBe("dark");
+    });
+
+    it("does not roll an older failed pick back over a newer one", async () => {
+      useStore.setState({ settings: settingsWith("system") });
+      const first = heldWrite();
+      const second = heldWrite();
+
+      const olderPick = useStore.getState().setTheme("dark");
+      const newerPick = useStore.getState().setTheme("light");
+      first.fail(new Error("disk full"));
+      await olderPick;
+
+      expect(useStore.getState().settings?.theme).toBe("light");
+      expect(pinned()).toBe("light");
+
+      second.settle();
+      await newerPick;
+      expect(useStore.getState().settings?.theme).toBe("light");
+      expect(pinned()).toBe("light");
+    });
+
+    it("doesn't flicker when two writes settle out of order", async () => {
+      useStore.setState({ settings: settingsWith("system") });
+      const first = heldWrite();
+      const second = heldWrite();
+      const shown: Array<string | null> = [];
+      const stop = useStore.subscribe((state, prev) => {
+        if (state.settings?.theme !== prev.settings?.theme) shown.push(pinned());
+      });
+
+      const olderPick = useStore.getState().setTheme("dark");
+      const newerPick = useStore.getState().setTheme("light");
+      second.settle();
+      await newerPick;
+      first.settle();
+      await olderPick;
+      stop();
+
+      // Each pick shows once, as it is made; neither write's reply re-themes.
+      expect(shown).toEqual(["dark", "light"]);
+      expect(updateSettings.mock.calls.map(([sent]) => sent.theme)).toEqual(["dark", "light"]);
+    });
+
+    it("gives a later saveSettings a base that already carries the theme", async () => {
+      useStore.setState({ settings: settingsWith("system") });
+      const write = heldWrite();
+      const pick = useStore.getState().setTheme("dark");
+
+      // The pick's write is still in flight when Settings closes and saves its
+      // drafts: that save must not write the old theme back.
+      await useStore.getState().saveSettings({ userName: "Grace" });
+
+      expect(updateSettings).toHaveBeenLastCalledWith({
+        ...settingsWith("dark"),
+        userName: "Grace",
+      });
+      write.settle();
+      await pick;
+      expect(useStore.getState().settings).toEqual({ ...settingsWith("dark"), userName: "Grace" });
+      expect(pinned()).toBe("dark");
+    });
   });
 });

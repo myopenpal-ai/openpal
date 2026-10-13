@@ -153,6 +153,12 @@ const click = (name: string | RegExp) =>
 
 const skipStep = () => click("Skip this step");
 
+/** An option of the appearance step, by its name. */
+const radio = (name: string) => screen.getByRole("radio", { name });
+
+/** Picks an option of the appearance step by clicking its radio. */
+const pick = (name: string) => userEvent.click(radio(name));
+
 /** The "Skip setup?" confirmation that skipping the whole setup goes through. */
 const skipDialog = () => screen.getByRole("alertdialog", { name: "Skip setup?" });
 const noDialog = () => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
@@ -167,15 +173,32 @@ async function confirmSkip() {
 const completedSaves = () =>
   updateSettings.mock.calls.filter(([s]) => s?.onboardingCompleted === true);
 
+/** The `theme` of every settings write that carries one, in the order they were
+ * sent. The seeded settings have none, so a write only shows up here if the
+ * appearance step put a theme in it. */
+const themesWritten = () =>
+  updateSettings.mock.calls.flatMap(([s]) => (s?.theme === undefined ? [] : [s.theme]));
+
 // Drivers, each starting from a fresh render on the welcome scene.
+// The scan title holds a non-breaking space, which `getByRole`'s `name` doesn't
+// normalize the way Playwright's does — hence the regex.
 const SCAN_HEADING = /^First, let's see what your Mac can\sdo\.$/;
+const APPEARANCE_HEADING = "How should OpenPal look?";
 async function toName() {
   await click("Let's set things up");
   await screen.findByRole("heading", { name: "What should we call you?" });
 }
-async function toScan() {
+async function toAppearance() {
   await toName();
   await skipStep(); // the name step's own skip
+  // Waiting here matters: the name step's skip is async (it awaits its save), so a
+  // click made before the new scene is up would land on the name step's still-mounted,
+  // disabled button and silently do nothing.
+  await screen.findByRole("heading", { name: APPEARANCE_HEADING });
+}
+async function toScan() {
+  await toAppearance();
+  await skipStep(); // the appearance step's skip: nothing picked, nothing saved
   await screen.findByRole("heading", { name: SCAN_HEADING });
 }
 async function toRecommend() {
@@ -213,6 +236,8 @@ const FINAL_DOWNLOAD_STOPPED =
 
 beforeEach(() => {
   installMockDefaults();
+  // A pick pins the theme on <html>, and jsdom keeps the document between tests.
+  document.documentElement.removeAttribute("data-theme");
   seedNoDownload();
 });
 
@@ -230,10 +255,8 @@ describe("Onboarding: the two skip buttons", () => {
 
     await skipStep();
 
-    // The title holds a non-breaking space, which `getByRole`'s `name` doesn't
-    // normalize the way Playwright's does — hence the regex.
     expect(
-      await screen.findByRole("heading", { name: SCAN_HEADING }),
+      await screen.findByRole("heading", { name: APPEARANCE_HEADING }),
     ).toBeInTheDocument();
     noDialog();
     expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({ userName: null }));
@@ -242,6 +265,7 @@ describe("Onboarding: the two skip buttons", () => {
 
   it.each([
     ["name", toName],
+    ["appearance", toAppearance],
     ["scan", toScan],
     ["recommend", toRecommend],
   ])("the %s screen's Skip setup asks first", async (_scene, drive) => {
@@ -383,7 +407,11 @@ describe("Onboarding: the two skip buttons", () => {
     expect(screen.getByRole("button", { name: "Skip setup" })).toBeDisabled();
 
     finishSave();
-    expect(await screen.findByRole("heading", { name: SCAN_HEADING })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: APPEARANCE_HEADING })).toBeInTheDocument();
+    // The name step's saving state doesn't follow the user to the next screen.
+    expect(screen.getByRole("button", { name: "Continue" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Skip this step" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Skip setup" })).toBeEnabled();
   });
 
   it("a half-typed name is discarded by Skip this step and never saved by Skip setup", async () => {
@@ -399,7 +427,8 @@ describe("Onboarding: the two skip buttons", () => {
 
     await skipStep();
 
-    expect(await screen.findByRole("heading", { name: SCAN_HEADING })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: APPEARANCE_HEADING })).toBeInTheDocument();
+    // Landing on the next screen saves nothing of its own.
     expect(updateSettings).toHaveBeenCalledTimes(1);
     expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({ userName: null }));
   });
@@ -478,6 +507,300 @@ describe("Onboarding: the two skip buttons", () => {
     await waitFor(() => expect(useStore.getState().downloads).toEqual({}));
 
     expect(downloadModel).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("Onboarding: the appearance step", () => {
+  const html = document.documentElement;
+
+  /** The saved settings with whatever `theme` the backend handed over (including
+   * none at all, or one this version has never heard of). */
+  function seedTheme(theme: unknown) {
+    useStore.setState({
+      settings: { ...useStore.getState().settings, theme } as unknown as Settings,
+    });
+  }
+
+  it("is where the name step's Continue lands, once the name is saved", async () => {
+    render(<Onboarding />);
+    await toName();
+    await userEvent.type(screen.getByLabelText("Your name"), "Ada");
+
+    await click("Continue");
+
+    expect(await screen.findByRole("heading", { name: APPEARANCE_HEADING })).toBeInTheDocument();
+    expect(updateSettings).toHaveBeenCalledTimes(1);
+    expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({ userName: "Ada" }));
+  });
+
+  it("offers System, Light and Dark, in that order, under a labelled and described group", async () => {
+    render(<Onboarding />);
+    await toAppearance();
+
+    const group = screen.getByRole("radiogroup", { name: APPEARANCE_HEADING });
+    expect(group).toHaveAccessibleDescription(
+      "Pick a theme. You can change it anytime in Settings.",
+    );
+    const radios = within(group).getAllByRole("radio");
+    expect(radios).toHaveLength(3);
+    expect(radios[0]).toHaveAccessibleName("System");
+    expect(radios[1]).toHaveAccessibleName("Light");
+    expect(radios[2]).toHaveAccessibleName("Dark");
+  });
+
+  it("gives System's hint as its description, not as part of its name", async () => {
+    render(<Onboarding />);
+    await toAppearance();
+
+    expect(radio("System")).toHaveAccessibleDescription("Matches your device");
+    expect(radio("Light")).not.toHaveAccessibleDescription();
+    expect(radio("Dark")).not.toHaveAccessibleDescription();
+  });
+
+  it("takes focus to the heading on arrival, not to an option", async () => {
+    render(<Onboarding />);
+    await toAppearance();
+
+    // The scene-change effect runs just after the heading is in the DOM.
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { name: APPEARANCE_HEADING })).toHaveFocus(),
+    );
+  });
+
+  it("can be continued from the first frame, and arriving saves nothing", async () => {
+    render(<Onboarding />);
+    await toAppearance();
+
+    expect(screen.getByRole("button", { name: "Continue" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Skip this step" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Skip setup" })).toBeEnabled();
+    // The one write so far is the name step's own skip; no theme went with it.
+    expect(updateSettings).toHaveBeenCalledTimes(1);
+    expect(themesWritten()).toEqual([]);
+  });
+
+  it.each([
+    ["no theme saved yet", undefined],
+    ["System saved", "system"],
+    ["a theme this version doesn't know", "sepia"],
+  ])("checks System when there is %s", async (_case, saved) => {
+    seedTheme(saved);
+    render(<Onboarding />);
+    await toAppearance();
+
+    expect(radio("System")).toBeChecked();
+    expect(radio("Light")).not.toBeChecked();
+    expect(radio("Dark")).not.toBeChecked();
+  });
+
+  it.each([
+    ["Light", "light"],
+    ["Dark", "dark"],
+  ])(
+    "checks %s when that is the saved theme, as after quitting part-way through and coming back",
+    async (name, saved) => {
+      seedTheme(saved);
+      render(<Onboarding />);
+      await toAppearance();
+
+      expect(radio(name)).toBeChecked();
+      expect(radio("System")).not.toBeChecked();
+    },
+  );
+
+  it("re-themes at once on a pick and saves it there and then, with no Save step", async () => {
+    render(<Onboarding />);
+    await toAppearance();
+    const heading = screen.getByRole("heading", { name: APPEARANCE_HEADING });
+
+    await pick("Dark");
+
+    expect(radio("Dark")).toBeChecked();
+    expect(radio("System")).not.toBeChecked();
+    expect(useStore.getState().settings?.theme).toBe("dark");
+    expect(html).toHaveAttribute("data-theme", "dark");
+    expect(updateSettings).toHaveBeenLastCalledWith(expect.objectContaining({ theme: "dark" }));
+    // A pick doesn't leave the step, remount it, or take focus off the option.
+    expect(screen.getByRole("heading", { name: APPEARANCE_HEADING })).toBe(heading);
+    expect(radio("Dark")).toHaveFocus();
+    noDialog();
+    expect(useStore.getState().settings?.onboardingCompleted).not.toBe(true);
+  });
+
+  it("hands the theme back to the device when System is picked again", async () => {
+    render(<Onboarding />);
+    await toAppearance();
+    await pick("Light");
+    expect(html).toHaveAttribute("data-theme", "light");
+
+    await pick("System");
+
+    expect(radio("System")).toBeChecked();
+    // No attribute at all: the palette then follows the OS by CSS alone, live.
+    expect(html).not.toHaveAttribute("data-theme");
+    expect(themesWritten()).toEqual(["light", "system"]);
+  });
+
+  it("ends on the last of several quick picks, whichever save finishes first", async () => {
+    render(<Onboarding />);
+    await toAppearance();
+    const finishes: Array<() => void> = [];
+    updateSettings.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          finishes.push(resolve);
+        }),
+    );
+
+    await pick("Light");
+    await pick("Dark");
+
+    // Both saves are still out, and the screen already shows the last pick.
+    expect(radio("Dark")).toBeChecked();
+    expect(html).toHaveAttribute("data-theme", "dark");
+    // They come back in the opposite order: nothing may flip back to Light.
+    await act(async () => {
+      finishes[1]();
+      finishes[0]();
+    });
+
+    expect(radio("Dark")).toBeChecked();
+    expect(useStore.getState().settings?.theme).toBe("dark");
+    expect(html).toHaveAttribute("data-theme", "dark");
+    expect(themesWritten()).toEqual(["light", "dark"]);
+  });
+
+  it("takes a pick back on screen when it can't be saved", async () => {
+    render(<Onboarding />);
+    await toAppearance();
+    updateSettings.mockRejectedValueOnce(new Error("disk full"));
+
+    await pick("Dark");
+
+    // The options follow the store, which drops a pick that never reached the disk.
+    await waitFor(() => expect(radio("System")).toBeChecked());
+    expect(html).not.toHaveAttribute("data-theme");
+    expect(useStore.getState().notice).toContain("disk full");
+  });
+
+  it.each(["Continue", "Skip this step"])(
+    "%s moves on at once, while the pick is still saving",
+    async (button) => {
+      render(<Onboarding />);
+      await toAppearance();
+      let finishSave: () => void = () => {};
+      updateSettings.mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            finishSave = resolve;
+          }),
+      );
+      await pick("Dark");
+
+      await click(button);
+
+      expect(await screen.findByRole("heading", { name: SCAN_HEADING })).toBeInTheDocument();
+      await act(async () => {
+        finishSave();
+      });
+      // The pick outlives the step it was made in.
+      expect(useStore.getState().settings?.theme).toBe("dark");
+      expect(html).toHaveAttribute("data-theme", "dark");
+      expect(themesWritten()).toEqual(["dark"]);
+    },
+  );
+
+  it.each(["Continue", "Skip this step"])(
+    "%s with nothing picked moves on and writes no theme",
+    async (button) => {
+      render(<Onboarding />);
+      await toAppearance();
+
+      await click(button);
+
+      expect(await screen.findByRole("heading", { name: SCAN_HEADING })).toBeInTheDocument();
+      noDialog();
+      // Still just the name step's own skip: leaving here adds no write of its own.
+      expect(updateSettings).toHaveBeenCalledTimes(1);
+      expect(themesWritten()).toEqual([]);
+      expect(html).not.toHaveAttribute("data-theme");
+      expect(useStore.getState().settings?.onboardingCompleted).not.toBe(true);
+    },
+  );
+
+  it("states what leaving costs on Skip setup, and Cancel returns with the pick intact", async () => {
+    render(<Onboarding />);
+    await toAppearance();
+    await pick("Dark");
+
+    await openSkipSetup();
+
+    expect(within(skipDialog()).getByText(MSG_NO_MODEL)).toBeInTheDocument();
+    expect(completedSaves()).toHaveLength(0);
+    await userEvent.click(within(skipDialog()).getByRole("button", { name: "Cancel" }));
+
+    noDialog();
+    expect(screen.getByRole("heading", { name: APPEARANCE_HEADING })).toBeInTheDocument();
+    expect(radio("Dark")).toBeChecked();
+    expect(html).toHaveAttribute("data-theme", "dark");
+  });
+
+  it("keeps the pick when Skip setup is confirmed", async () => {
+    // A backend that remembers what it is sent, as the real one does: the static
+    // default would hand `completeOnboarding` a settings object that never saw the pick.
+    let saved: Record<string, unknown> = { onboardingCompleted: false };
+    updateSettings.mockImplementation(async (settings) => {
+      saved = settings;
+    });
+    getSettings.mockImplementation(async () => saved);
+    render(<Onboarding />);
+    await toAppearance();
+    await pick("Dark");
+
+    await openSkipSetup();
+    await confirmSkip();
+
+    await waitFor(() => expect(completedSaves()).toHaveLength(1));
+    expect(completedSaves()[0][0]).toEqual(expect.objectContaining({ theme: "dark" }));
+    expect(useStore.getState().settings?.theme).toBe("dark");
+    expect(html).toHaveAttribute("data-theme", "dark");
+  });
+
+  it("leaves the theme on System when Skip setup is confirmed with nothing picked", async () => {
+    render(<Onboarding />);
+    await toAppearance();
+
+    await openSkipSetup();
+    await confirmSkip();
+
+    await waitFor(() => expect(completedSaves()).toHaveLength(1));
+    expect(themesWritten()).toEqual([]);
+    expect(html).not.toHaveAttribute("data-theme");
+  });
+
+  it("works from the keyboard alone: one Tab stop on the checked option, and the arrows pick", async () => {
+    render(<Onboarding />);
+    await toAppearance();
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { name: APPEARANCE_HEADING })).toHaveFocus(),
+    );
+
+    await userEvent.tab();
+    expect(radio("System")).toHaveFocus();
+
+    await userEvent.keyboard("{ArrowRight}");
+    expect(radio("Light")).toBeChecked();
+    expect(radio("Light")).toHaveFocus();
+    expect(html).toHaveAttribute("data-theme", "light");
+
+    await userEvent.keyboard("{ArrowRight}");
+    expect(radio("Dark")).toBeChecked();
+    expect(html).toHaveAttribute("data-theme", "dark");
+    expect(themesWritten()).toEqual(["light", "dark"]);
+
+    // The group is a single Tab stop, so the next one is the button below it.
+    await userEvent.tab();
+    expect(screen.getByRole("button", { name: "Continue" })).toHaveFocus();
   });
 });
 

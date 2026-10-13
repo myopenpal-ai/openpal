@@ -28,6 +28,7 @@ export function freshInstallResponses(overrides: Record<string, unknown> = {}) {
       chatBackend: "local",
       selectedCloudModelId: null,
       defaultModelId: null,
+      theme: "system",
     },
     get_engine_status: { type: "stopped" },
     list_conversations: [],

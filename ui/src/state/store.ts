@@ -1,6 +1,7 @@
 import { create, type StateCreator } from "zustand";
 import i18n from "../i18n";
 import { api } from "../lib/api";
+import { applyTheme, normalizeTheme } from "../lib/theme";
 import {
   branchAnchorKey,
   type BranchPoint,
@@ -34,6 +35,7 @@ import {
   type SetupState,
   type Skill,
   type SystemReport,
+  type Theme,
   type ToolCallDecision,
 } from "../lib/types";
 
@@ -544,6 +546,14 @@ interface Store {
    * the engine stops producing it on its next load. Never restarts a running
    * model, so an in-flight reply is safe. */
   setShowThinking: (on: boolean) => Promise<void>;
+  /** Choose the app's theme (Settings → General, the onboarding step). Unlike
+   * `saveSettings` it is optimistic: the new theme is in the store — and, via
+   * the subscriber at the bottom of this file, on `<html>` — before anything
+   * is persisted, so the pick shows in the click's own frame and a control
+   * driven by `settings.theme` never snaps back while the write is in flight.
+   * It also never assigns a snapshot after the write, so two quick picks can't
+   * flicker back to the first when the replies arrive out of order. */
+  setTheme: (theme: Theme) => Promise<void>;
 
   /** Check for a newer version. `manual` (the Settings "Check for updates
    * now" button) always shows the dialog and surfaces a failure; a silent
@@ -1215,6 +1225,10 @@ function hostOf(url: string): string {
  * mount effect, and a second boot would auto-start the engine twice.
  */
 let bootStarted = false;
+
+/** Which `setTheme` call is the latest, so a failed write only rolls back the
+ * pick that is still the one on screen. */
+let themeWriteSeq = 0;
 
 /**
  * Model ids whose download was requested again while the previous one was
@@ -2496,6 +2510,28 @@ export const useStore = create<Store>()((set, get) => ({
     await get().saveSettings({ showThinking: on });
   },
 
+  setTheme: async (theme) => {
+    const before = get().settings;
+    // The controls only exist once settings have loaded. Re-picking the theme
+    // already in force (a missing or unrecognised stored value counts as
+    // System) has nothing to change or write.
+    if (!before || normalizeTheme(before.theme) === theme) return;
+    const mine = ++themeWriteSeq;
+    // Optimistic on purpose: the subscriber below applies it inside this `set`,
+    // and every later `saveSettings` merges onto a base that already carries it
+    // — Settings' draft save on close can't write the old theme back.
+    set({ settings: { ...before, theme } });
+    try {
+      await api.updateSettings({ ...(get().settings ?? before), theme });
+    } catch (err: unknown) {
+      if (mine === themeWriteSeq) {
+        const now = get().settings;
+        if (now) set({ settings: { ...now, theme: before.theme } });
+      }
+      set({ notice: String(err) });
+    }
+  },
+
   checkForUpdate: async (manual = false) => {
     if (get().updateStatus === "checking" || get().updateStatus === "downloading") return;
     set({ updateStatus: "checking", updateError: null });
@@ -2779,3 +2815,15 @@ export const useStore = create<Store>()((set, get) => ({
     await api.syncPairCancel();
   },
 }));
+
+// Mirrors `settings.theme` onto <html data-theme> in the same tick as every
+// `set()` that changes it — boot (all three entry points), the theme pickers,
+// a post-download re-read of the settings — so no path can paint a frame in the
+// wrong theme and nothing relies on a React effect running before paint.
+// Zustand calls listeners synchronously inside `set()`, before React can render
+// (React only schedules its own re-render from there), and doesn't catch a
+// throwing one — hence `applyTheme` being total. The comparison keeps this to
+// one cheap check on the many updates that don't touch the theme.
+useStore.subscribe((state, prev) => {
+  if (state.settings?.theme !== prev.settings?.theme) applyTheme(state.settings?.theme);
+});

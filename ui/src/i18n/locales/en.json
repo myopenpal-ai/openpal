@@ -24,7 +24,7 @@
     "sections": {
       "general": {
         "label": "General",
-        "subtitle": "Your account, the app's language, and updates."
+        "subtitle": "Your account, the app's appearance, language, and updates."
       },
       "chat": {
         "label": "Chat",
@@ -67,6 +67,16 @@
     },
     "language": {
       "label": "Language"
+    },
+    "appearance": {
+      "title": "Appearance",
+      "theme": {
+        "label": "Theme",
+        "hint": "System follows your device's light or dark mode.",
+        "system": "System",
+        "light": "Light",
+        "dark": "Dark"
+      }
     },
     "toggle": {
       "on": "On",
@@ -660,6 +670,15 @@
       "sub": "We'll only use this to personalize your welcome.",
       "label": "Your name",
       "placeholder": "Enter your name",
+      "continue": "Continue"
+    },
+    "appearance": {
+      "title": "How should OpenPal look?",
+      "sub": "Pick a theme. You can change it anytime in Settings.",
+      "system": "System",
+      "systemHint": "Matches your device",
+      "light": "Light",
+      "dark": "Dark",
       "continue": "Continue"
     },
     "scan": {

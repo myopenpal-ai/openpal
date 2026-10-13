@@ -89,9 +89,13 @@ function revealSetting(page: HTMLElement, texts: string[]): boolean {
     .forEach((el) => el.classList.remove("settings-search-hit"));
   void setting.offsetWidth;
   setting.classList.add("settings-search-hit");
-  const control = setting.querySelector<HTMLElement>(
-    "input:not([disabled]), select:not([disabled]), textarea:not([disabled]), button:not([disabled])",
-  );
+  // A radio group has one Tab stop, the checked option: land there, not on
+  // the first radio, or the arrow keys would start from the wrong place.
+  const control =
+    setting.querySelector<HTMLElement>("input[type=radio]:checked:not([disabled])") ??
+    setting.querySelector<HTMLElement>(
+      "input:not([disabled]), select:not([disabled]), textarea:not([disabled]), button:not([disabled])",
+    );
   if (control) {
     control.focus({ preventScroll: true });
   } else {

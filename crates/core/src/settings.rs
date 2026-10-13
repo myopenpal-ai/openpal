@@ -135,4 +135,68 @@ mod tests {
         assert_eq!(s.selected_model_id.as_deref(), Some("qwen3-4b"));
         assert_eq!(s.default_model_id, None);
     }
+
+    #[test]
+    fn theme_defaults_to_system_for_a_settings_row_predating_it() {
+        // An existing install's row from before the theme setting shipped has
+        // no `theme` key. It must load as "system", so the app looks exactly
+        // as it did before the upgrade. The other keys must come through too:
+        // a row that failed to parse would also read "system" (the whole-row
+        // default), so the theme alone can't tell the two apart.
+        let conn = test_conn();
+        write_raw(&conn, r#"{"onboardingCompleted": true, "userName": "Ada"}"#);
+
+        let s = load(&conn);
+        assert_eq!(s.theme, "system");
+        assert!(s.onboarding_completed);
+        assert_eq!(s.user_name.as_deref(), Some("Ada"));
+    }
+
+    #[test]
+    fn a_saved_theme_survives_a_reload() {
+        // The Rust tier of "the choice survives quitting and relaunching": a
+        // relaunch is `app_db::open` on the same file followed by `load` (see
+        // `finish_unlock` in the app crate), so this reopens the database
+        // rather than reading back through the connection that wrote it. The
+        // other fields are non-default so a row that came back as all
+        // defaults can't pass for one that came back whole.
+        let conn = test_conn();
+        let db_path = conn.path().expect("test_conn opens a file").to_owned();
+        let chosen = Settings {
+            onboarding_completed: true,
+            user_name: Some("Ada".into()),
+            language: "fr".into(),
+            theme: "dark".into(),
+            ..Settings::default()
+        };
+        save(&conn, &chosen).unwrap();
+        drop(conn);
+
+        let (reopened, _, _) = crate::app_db::open(std::path::Path::new(&db_path), None).unwrap();
+        let s = load(&reopened);
+        assert_eq!(s.theme, "dark");
+        assert!(s.onboarding_completed);
+        assert_eq!(s.user_name.as_deref(), Some("Ada"));
+        assert_eq!(s.language, "fr");
+    }
+
+    #[test]
+    fn an_unrecognised_theme_does_not_reset_the_rest_of_the_row() {
+        // `load` resets the WHOLE row to defaults on any parse error, so a
+        // theme this build doesn't know (a newer build's extra palette after
+        // a downgrade, a hand edit) must not be able to fail the parse: the
+        // user would be thrown back into onboarding and lose their name. This
+        // is why `Settings.theme` is a `String` and not an enum. The value
+        // comes through verbatim, and the UI reads it as "system".
+        let conn = test_conn();
+        write_raw(
+            &conn,
+            r#"{"onboardingCompleted": true, "userName": "Ada", "theme": "sepia"}"#,
+        );
+
+        let s = load(&conn);
+        assert!(s.onboarding_completed);
+        assert_eq!(s.user_name.as_deref(), Some("Ada"));
+        assert_eq!(s.theme, "sepia");
+    }
 }

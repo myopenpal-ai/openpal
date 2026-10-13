@@ -131,7 +131,7 @@
   color: var(--ink);
 }
 
-/* The raised surface alone is enough in light mode (#ffffff on #f1ebdf) but
+/* The raised surface alone is enough in light mode (#ffffff on #ececef) but
  * not in dark, where --paper-raised on --paper-sunken is 1.06:1 and
  * --shadow-card becomes pure black — invisible on a near-black surface. The
  * border is what actually marks the selection in dark mode, so it is not

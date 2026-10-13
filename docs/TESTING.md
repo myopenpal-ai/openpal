@@ -181,6 +181,19 @@ plain Vite dev server with the Tauri IPC layer mocked:
   onboarding by hand in the real app, run `npm run dev:onboarding` from the repo
   root (a `tauri dev` session on a throwaway first-run profile; see the README's
   [Development](../README.md#development) section).
+- `ui/tests/e2e/theme.spec.ts` is the Theme setting meeting a real stylesheet,
+  which jsdom never computes. For every OS appearance × theme pair it checks
+  which palette `global.css` paints and that Light and Dark pin `color-scheme`;
+  that System follows an OS flip while the app is open and a pinned theme
+  ignores it; the Settings → General control (names, arrow keys, a pick that
+  shows before its save settles); that portalled dialogs, a native select and
+  the phone-width layout (English and French) follow it; and that after a
+  relaunch (`support/persistedSettings.ts` makes the mocked backend remember
+  saves) `<html data-theme>` is already set when the shell or onboarding first
+  appears, while the lock screen, drawn before settings can be read, follows the
+  OS. It never touches a real window: the OS-drawn frame, how a webview paints
+  select popups and scrollbars, a real OS appearance change reaching
+  WKWebView/WebView2 and the production stylesheet stay manual checks.
 
 **This tier is a fast frontend regression net, not a substitute for real
 e2e** — it validates React state machines, routing, and IPC call shape, not
