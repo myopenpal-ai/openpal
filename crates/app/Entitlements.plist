@@ -1,9 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!-- Applied when the bundler code-signs the app under the hardened runtime
-     (`codesign --options runtime --entitlements …`). The audio-input entitlement
-     is required for microphone access (Voice add-on / voice typing) to work in a
-     hardened, notarized build. -->
+     (codesign with the runtime option and an entitlements file). The audio-input
+     entitlement is required for microphone access (Voice add-on / voice typing)
+     to work in a hardened, notarized build. Keep double hyphens out of this
+     comment: they are illegal in XML comments, and codesign's strict parser
+     rejects the whole file with "AMFIUnserializeXML: syntax error". -->
 <plist version="1.0">
   <dict>
     <key>com.apple.security.device.audio-input</key>
