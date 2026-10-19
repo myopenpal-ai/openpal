@@ -3,9 +3,10 @@
 # from portable.yml, which builds release artifacts and never runs tests.
 #
 # Heavier/narrower checks live in their own path-filtered workflows so they
-# don't slow down every PR: plugin-tests.yml (Python plugin suites) and
+# don't slow down every PR: plugin-tests.yml (Python plugin suites),
 # engine-e2e.yml (the real llama-server engine test, only when the engine's
-# own code changes).
+# own code changes) and notify-platforms.yml (the notification backends on
+# macOS, Windows and Android, which this Linux-only workflow never compiles).
 name: ci
 
 on:
@@ -22,6 +23,18 @@ jobs:
     name: rust (fmt, clippy, test)
     runs-on: ubuntu-latest
     steps:
+      # A hosted runner has roughly 14 GB free and this workspace's debug
+      # `target/` is about 12 GB after clippy and the test builds (Tauri +
+      # WebKitGTK + the notification stack), so the app crate's test link step
+      # died with `ld terminated with signal 7 [Bus error]` once the disk ran
+      # out. The preinstalled .NET, Haskell and Android toolchains take several
+      # GB and nothing here uses them; the `df` lines show what was gained.
+      - name: Free disk space
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android
+          df -h /
+
       - uses: actions/checkout@v4
 
       - uses: dtolnay/rust-toolchain@stable

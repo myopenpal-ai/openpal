@@ -1,6 +1,14 @@
 import { create, type StateCreator } from "zustand";
 import i18n from "../i18n";
 import { api } from "../lib/api";
+import {
+  type AppEvent,
+  alertCopy,
+  decideDelivery,
+  hasNativeNotifications,
+} from "../lib/appEvents";
+import { createEngineTracker, type EngineAlertEvent, stepEngineTracker } from "../lib/engineEvents";
+import { engineModelName } from "../lib/format";
 import { applyTheme, normalizeTheme } from "../lib/theme";
 import {
   branchAnchorKey,
@@ -26,6 +34,8 @@ import {
   type EngineStatus,
   type EngineUpdateInfo,
   type ModelInfo,
+  type NotificationClick,
+  type NotificationPermission,
   type PluginInfo,
   type Project,
   recommendedSampling,
@@ -45,6 +55,24 @@ import {
 export const SIDEBAR_MIN_WIDTH = 220;
 export const SIDEBAR_MAX_WIDTH = 440;
 export const SIDEBAR_DEFAULT_WIDTH = 272;
+
+/** The four things the user is told about with an in-app alert (and, with
+ * "Desktop notifications" on and OpenPal in the background, an OS
+ * notification carrying the same words). */
+export type AlertKind = "modelLoaded" | "modelUnloaded" | "downloadFinished" | "answerReady";
+
+/** One in-app alert. `title` and `body` are already translated: the native
+ * notification for the same event is built from these same strings. `id` is
+ * the React key and what `dismissAlert` takes. */
+export interface AppAlert {
+  id: string;
+  kind: AlertKind;
+  title: string;
+  body: string;
+}
+
+/** How many alerts show at once; a new one beyond this pushes the oldest out. */
+export const MAX_VISIBLE_ALERTS = 3;
 
 export interface DownloadProgress {
   receivedBytes: number;
@@ -352,8 +380,39 @@ interface Store {
   /** Bridges `respondClarifyingQuestion` to the later `toolCallResult` event —
    * see `RespondedToolConsent`'s doc comment for why this exists. */
   lastRespondedClarifyingQuestion: RespondedClarifyingQuestion | null;
-  /** A short, friendly note shown as a passing toast (e.g. a failed action). */
+  /** A short, friendly note shown as a passing toast (e.g. a failed action).
+   * Nothing renders it today, and the in-app alerts below deliberately don't
+   * use it: it is written by about thirty failure paths with raw error text. */
   notice: string | null;
+  /** In-app alerts on screen now, newest first — rendered by
+   * `components/AlertHost.tsx`, filled by the helpers in `lib/appEvents.ts`.
+   * Capped at `MAX_VISIBLE_ALERTS`. */
+  appAlerts: AppAlert[];
+  showAlert: (alert: Omit<AppAlert, "id">) => void;
+  /** A no-op for an id that is already gone (auto-dismiss and a click can race). */
+  dismissAlert: (id: string) => void;
+  /** Whether OpenPal's window has the OS's focus — the rule for sending a
+   * native notification. Kept in step with the window's focus/blur events by
+   * `App.tsx`. */
+  windowFocused: boolean;
+  setWindowFocused: (focused: boolean) => void;
+  /** What the OS says about OpenPal posting notifications; only "denied" ever
+   * shows anything (Settings' "blocked" line). Starts "granted" until asked. */
+  notificationPermission: NotificationPermission;
+  /** Reads the OS's answer without asking anything. */
+  refreshNotificationPermission: () => Promise<void>;
+  /** Asks the OS (on macOS: shows its one-time prompt, resolving once it is
+   * answered) and keeps the answer. Only `setDesktopNotifications(true)` calls
+   * it, so the prompt follows the user's own click. (Rust also asks once, on
+   * the first post, for a switch that was already on before anything asked.) */
+  requestNotificationPermission: () => Promise<void>;
+  /** Acts on a click on one of OpenPal's notifications: takes it from Rust and,
+   * if it names a conversation, opens that conversation in the chat with the
+   * More dialog and conversation search closed. Does nothing until settings
+   * have loaded (the click waits in Rust), so `finishBootAfterUnlock` calls it
+   * once for a click that launched the app, and every `notification-clicked`
+   * nudge after that calls it again. Never throws. */
+  followNotificationClick: () => Promise<void>;
 
   /** modelId -> live progress for in-flight downloads. */
   downloads: Record<string, DownloadProgress>;
@@ -554,6 +613,12 @@ interface Store {
    * It also never assigns a snapshot after the write, so two quick picks can't
    * flicker back to the first when the replies arrive out of order. */
   setTheme: (theme: Theme) => Promise<void>;
+  /** The Settings → General switch and the onboarding "Turn on notifications"
+   * button. Optimistic and rolled back on a failed write exactly like
+   * `setTheme`, for the same reasons; turning it on then asks the OS for
+   * permission (macOS shows its prompt) so the "blocked" line can show, unless
+   * it was switched off again while the write was in flight. */
+  setDesktopNotifications: (on: boolean) => Promise<void>;
 
   /** Check for a newer version. `manual` (the Settings "Check for updates
    * now" button) always shows the dialog and surfaces a failure; a silent
@@ -648,6 +713,134 @@ function pushVariant(
 type SetState = Parameters<StateCreator<Store>>[0];
 type GetState = Parameters<StateCreator<Store>>[1];
 
+// ---------------------------------------------------------------------------
+// App alerts: the four events (model loaded, model unloaded, download
+// finished, answer ready) are announced from here. The rules for *what* is
+// said and *where* it goes live in `lib/appEvents.ts` and
+// `lib/engineEvents.ts`; this is the state they need and the one function that
+// acts on them.
+// ---------------------------------------------------------------------------
+
+/** Follows every status written to `engine` (see the subscriber at the bottom
+ * of this file) to find the loads and unloads in it. Module-level because it
+ * must outlive any one `set()`; `resetAlertTracking` clears it for tests. */
+const engineTracker = createEngineTracker();
+
+/** Display names of the models seen Running or Starting, by id. A model can
+ * drop out of `models` just before its unload is noticed — `deleteModel`
+ * refreshes the list (no longer holding a deleted custom model) before it
+ * re-reads the engine status — and the alert must still be able to name it. */
+const engineNames = new Map<string, string>();
+
+/** Keys of the events already announced, oldest first and bounded: a second
+ * delivery of the same occurrence (it should not happen, but a duplicated alert
+ * is the one thing the ticket forbids) is dropped. */
+const announcedKeys = new Set<string>();
+const MAX_ANNOUNCED_KEYS = 64;
+
+/** Set by the `stopGeneration` action while a reply is streaming; cleared at
+ * the start of every `runGeneration`. Pressing Stop makes the backend end the
+ * stream with a perfectly normal `done` event, so this is the only way to tell
+ * a stopped reply from a finished one. */
+let stopRequestedForTurn = false;
+
+/** Set once the Rust "engine status changed" listener is registered (by
+ * `finishBootAfterUnlock`), so a second boot path can't stack a second one. */
+let engineNudgeRegistered = false;
+
+/** The same, for the "notification clicked" listener. */
+let clickNudgeRegistered = false;
+
+/** True from the moment an app update has finished downloading until it fails
+ * or the app is gone: the install that follows verifies, unpacks and — in the
+ * portable build — stops the engine and exits, so the "unloaded" that a poll
+ * could catch in that window is the app leaving, not news. (Earlier in the
+ * update the download can take minutes, and loads and unloads during it are
+ * announced as usual.) */
+let updateRestarting = false;
+
+/** Counter behind the per-run part of a download's dedupe key, so downloading
+ * a model, deleting it and downloading it again are two announcements. */
+let downloadRunSeq = 0;
+
+/** Engine-status fetches are numbered when they are issued, and
+ * `engineAppliedSeq` is the newest number whose result is on screen. A reply
+ * that lands after a *newer* one was applied — or after a local write that is
+ * authoritative (the optimistic Starting, `stopModel`'s Stopped, `useModel`'s
+ * Failed) — is older than what the user already sees and is dropped.
+ * Tauri commands run concurrently, so replies can arrive out of order; an old
+ * `running(A)` landing after the unload would re-arm the tracker and announce
+ * the same unload a second time. This sits next to the existing `engineBusy`
+ * snapshot in `pollEngine`, which it does not replace: that one drops replies
+ * that straddle a start/stop, this one orders the rest (`deleteModel`, which
+ * never flips `engineBusy`, relies on it alone). */
+let engineFetchSeq = 0;
+let engineAppliedSeq = 0;
+
+/** Forget everything the alert wiring has seen. Module state survives
+ * `useStore.setState(...)`, so tests that walk the engine through a scenario
+ * call this between cases. */
+export function resetAlertTracking(): void {
+  Object.assign(engineTracker, createEngineTracker());
+  engineNames.clear();
+  announcedKeys.clear();
+  stopRequestedForTurn = false;
+  engineNudgeRegistered = false;
+  clickNudgeRegistered = false;
+  updateRestarting = false;
+}
+
+/** Say it: an in-app alert unless the rules skip it, and an OS notification
+ * with the same words when they send one. Total — it runs inside a store
+ * `set()` subscriber and right after a reply settles, where a throw would break
+ * the caller — so a missing function in a test mock or the e2e harness, a
+ * rejected IPC call, anything, is swallowed. */
+function announceAppEvent(get: GetState, event: AppEvent): void {
+  try {
+    if (announcedKeys.has(event.key)) return;
+    announcedKeys.add(event.key);
+    if (announcedKeys.size > MAX_ANNOUNCED_KEYS) {
+      const oldest = announcedKeys.values().next().value;
+      if (oldest !== undefined) announcedKeys.delete(oldest);
+    }
+
+    const s = get();
+    const { title, body } = alertCopy(event);
+    const { inApp, native } = decideDelivery(event, {
+      view: s.view,
+      active: s.active,
+      moreDialogPage: s.moreDialogPage,
+      conversationSearchOpen: s.conversationSearchOpen,
+      desktopNotifications: s.settings?.desktopNotifications,
+      windowFocused: s.windowFocused,
+      nativeNotifications: hasNativeNotifications(s.appInfo),
+    });
+    if (inApp) s.showAlert({ kind: event.kind, title, body });
+    // Fire and forget: the user doesn't wait on the OS, and a failure (not
+    // unlocked yet, blocked by the OS, no Tauri runtime) is not something to
+    // tell them about. `Promise.resolve` so that a function which returns
+    // nothing, as a bare mock does, is as harmless as one that rejects.
+    if (native) {
+      const conversationId = event.kind === "answerReady" ? event.conversationId : null;
+      Promise.resolve(api.notifyNative(title, body, conversationId)).catch(() => {});
+    }
+  } catch {
+    // See above: announcing must never break what it was called from. This
+    // also covers `notifyNative` not being callable at all (a test mock, the
+    // Playwright harness) — it throws synchronously.
+  }
+}
+
+/** The name the alert for this engine event will use: the model list's
+ * `spec.name` if it still holds the model, else the last name seen for it. */
+function engineAppEvent(state: Store, e: EngineAlertEvent): AppEvent {
+  return {
+    kind: e.kind,
+    key: `engine:${e.kind}:${e.occurrence}`,
+    modelName: engineModelName(state.models, e.modelId) ?? engineNames.get(e.modelId) ?? null,
+  };
+}
+
 /** The composer/search UI state that resets whenever the visible
  * conversation changes wholesale — a new chat, opening a different one, or
  * forking — never inherited from whatever was showing before. Shared by
@@ -709,6 +902,13 @@ async function runGeneration(
   // Set once the stream's "done" event lands; carries token/sec + duration
   // (thinking + answer combined) for the settled message's stats display.
   let stats: ChatStats | undefined;
+  // How the stream ended, for deciding whether this turn earns an "Answer
+  // ready" alert (see where it is announced, below). A `done` event alone
+  // doesn't: the backend also sends it when the user presses Stop.
+  stopRequestedForTurn = false;
+  let sawDone = false;
+  let sawError = false;
+  let streamThrew = false;
   const citations: Citation[] = [];
   // Tool-call steps (searches run, pages read), accumulated in order so they
   // persist on the message as a "what it did" panel. Titles seen in search
@@ -993,17 +1193,20 @@ async function runGeneration(
           patchAssistant();
           break;
         case "error":
+          sawError = true;
           set({ chatError: event.data.message });
           break;
         case "done":
           // Stream closes on "done"; the turn is settled below, where
           // `stats` is folded into the persisted message.
           stats = event.data.stats;
+          sawDone = true;
           break;
       }
       },
     );
   } catch (err: unknown) {
+    streamThrew = true;
     set((s) => ({ chatError: s.chatError || String(err) }));
   }
 
@@ -1042,6 +1245,23 @@ async function runGeneration(
     pendingClarifyingQuestion: null,
     active: s.active?.id === conversation.id ? settled : s.active,
   }));
+
+  // "Answer ready" — only for a turn that really ran to its end: the stream
+  // closed with `done` and no error, the user didn't press Stop, and there is
+  // reply text (a turn of thinking or tool steps only isn't an answer yet).
+  // Announced here, once per call and after `streaming` is false, and not from
+  // the `done` event or a `streaming` true->false subscription: the former is
+  // too early to know how the turn ended, the latter also fires for
+  // Translate/Correct, which toggle `streaming` themselves. Before the save
+  // below so a failing save can't swallow it; `announceAppEvent` can't throw.
+  if (sawDone && !sawError && !streamThrew && !stopRequestedForTurn && reply.trim() !== "") {
+    announceAppEvent(get, {
+      kind: "answerReady",
+      key: `answer:${assistantId}`,
+      conversationId: conversation.id,
+    });
+  }
+
   if (messages.some((m) => m.role === "assistant")) {
     try {
       await api.saveConversation(settled);
@@ -1230,6 +1450,20 @@ let bootStarted = false;
  * pick that is still the one on screen. */
 let themeWriteSeq = 0;
 
+/** Same job as `themeWriteSeq`, for `setDesktopNotifications`. */
+let desktopNotificationsWriteSeq = 0;
+
+/** What a failed `setDesktopNotifications` puts back: the value the last
+ * settled write left on disk, or the loaded one when none is outstanding.
+ * Restoring "the value before this pick" is wrong once picks overlap — if the
+ * pick before it also failed, that "before" is its optimistic value, never
+ * saved, and the switch would end up showing a state that is on no disk. */
+let desktopNotificationsOnDisk = false;
+let desktopNotificationsInFlight = 0;
+
+/** Counter behind `AppAlert.id`. */
+let alertSeq = 0;
+
 /**
  * Model ids whose download was requested again while the previous one was
  * still settling (e.g. cancel, then an immediate re-download). The new
@@ -1307,6 +1541,11 @@ export const useStore = create<Store>()((set, get) => ({
   pendingClarifyingQuestion: null,
   lastRespondedClarifyingQuestion: null,
   notice: null,
+  appAlerts: [],
+  // The webview can only say whether it has focus; `App.tsx` keeps this in
+  // step with the window's focus/blur events and re-syncs it on mount.
+  windowFocused: typeof document !== "undefined" && document.hasFocus(),
+  notificationPermission: "granted",
 
   downloads: {},
   downloadErrors: {},
@@ -1391,6 +1630,35 @@ export const useStore = create<Store>()((set, get) => ({
       agentTools: agentToolsAvailable(effectiveSettings),
     });
 
+    // Rust nudges the webview when it auto-unloads the model (see
+    // `api.onEngineStatusChanged`); the 2s poll alone would hear about it late
+    // when the window is hidden and its timers are throttled. Once per
+    // session, and never allowed to fail boot: the poll still sees every
+    // change, the nudge only makes it prompt.
+    if (!engineNudgeRegistered) {
+      engineNudgeRegistered = true;
+      try {
+        Promise.resolve(api.onEngineStatusChanged(() => void get().pollEngine())).catch(() => {});
+      } catch {
+        // Not callable here (a test mock).
+      }
+    }
+
+    // A click on one of OpenPal's notifications: Rust nudges, the store reads
+    // the click. Also once now, for a click that launched the app (or came in
+    // while it was locked) and so arrived before anything was listening.
+    if (!clickNudgeRegistered) {
+      clickNudgeRegistered = true;
+      try {
+        Promise.resolve(api.onNotificationClicked(() => void get().followNotificationClick())).catch(
+          () => {},
+        );
+      } catch {
+        // Not callable here (a test mock).
+      }
+    }
+    void get().followNotificationClick();
+
     // Models + report + plugins can land after first paint.
     const modelsReady = get().refreshModels();
     // Silent, fire-and-forget backfill for custom models added before OpenPal
@@ -1474,6 +1742,52 @@ export const useStore = create<Store>()((set, get) => ({
       sidebarWidth: Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, width)),
     }),
   setNotice: (notice) => set({ notice }),
+  showAlert: (alert) =>
+    set((s) => ({
+      appAlerts: [{ ...alert, id: `alert-${++alertSeq}` }, ...s.appAlerts].slice(
+        0,
+        MAX_VISIBLE_ALERTS,
+      ),
+    })),
+  dismissAlert: (id) =>
+    set((s) =>
+      s.appAlerts.some((a) => a.id === id)
+        ? { appAlerts: s.appAlerts.filter((a) => a.id !== id) }
+        : s,
+    ),
+  setWindowFocused: (windowFocused) => {
+    if (get().windowFocused !== windowFocused) set({ windowFocused });
+  },
+  refreshNotificationPermission: async () => {
+    try {
+      set({ notificationPermission: await api.notificationPermission() });
+    } catch {
+      // Not knowing is not "blocked": keep whatever we had.
+    }
+  },
+  requestNotificationPermission: async () => {
+    try {
+      set({ notificationPermission: await api.requestNotificationPermission() });
+    } catch {
+      // Same as above: a failed ask is not a "no".
+    }
+  },
+  followNotificationClick: async () => {
+    if (!get().settings) return;
+    let click: NotificationClick | null = null;
+    try {
+      click = await api.takeNotificationClick();
+    } catch {
+      // No bridge (a test mock) or nothing readable: there is no click to follow.
+      return;
+    }
+    // A click that names no conversation only brings OpenPal forward, which
+    // Rust has already done.
+    const id = click?.conversationId;
+    if (!id) return;
+    set({ moreDialogPage: null, conversationSearchOpen: false });
+    await get().openConversation(id);
+  },
 
   refreshModels: async () => {
     const models = await api.getModels();
@@ -1505,6 +1819,11 @@ export const useStore = create<Store>()((set, get) => ({
         return { downloads: next };
       });
 
+    // Whether this run already announced its `finished`; also names the run in
+    // the announcement's dedupe key.
+    let announced = false;
+    const run = ++downloadRunSeq;
+
     api
       .downloadModel(modelId, (event) => {
         // Channel events can land after the download has settled and been
@@ -1535,11 +1854,27 @@ export const useStore = create<Store>()((set, get) => ({
           set((s) => ({
             downloadErrors: { ...s.downloadErrors, [modelId]: event.data.message },
           }));
+        } else if (event.type === "finished" && !announced) {
+          // The `finished` event is the one true success signal: the command
+          // also resolves OK when the user cancels, so announcing from
+          // `.then()` below would say "Download complete" for a cancel. One
+          // `finished` comes per model, not per file (the backend forwards
+          // only the last part's). Named here, before the refresh below
+          // replaces `models`.
+          announced = true;
+          announceAppEvent(get, {
+            kind: "downloadFinished",
+            key: `download:${modelId}:${run}`,
+            modelName: engineModelName(get().models, modelId),
+          });
         }
       })
       .then(async () => {
         clear();
-        if (pendingRestarts.delete(modelId)) {
+        // A restart queued behind a run that just finished would re-run
+        // against complete files and report a second `finished` at once, so
+        // it is dropped; after a cancel or failure it restarts as before.
+        if (pendingRestarts.delete(modelId) && !announced) {
           get().startDownload(modelId);
         }
         await get().refreshModels();
@@ -1554,7 +1889,7 @@ export const useStore = create<Store>()((set, get) => ({
             [modelId]: s.downloadErrors[modelId] || String(err),
           },
         }));
-        if (pendingRestarts.delete(modelId)) {
+        if (pendingRestarts.delete(modelId) && !announced) {
           get().startDownload(modelId);
         }
         void get().refreshModels();
@@ -1577,11 +1912,20 @@ export const useStore = create<Store>()((set, get) => ({
     try {
       await api.deleteModel(modelId);
       await get().refreshModels();
+      const ticket = ++engineFetchSeq;
       const [settings, engine] = await Promise.all([
         api.getSettings(),
         api.getEngineStatus(),
       ]);
-      set({ settings, engine });
+      // Deleting the running model stops the engine, so this reply carries the
+      // unload. A poll that was already in flight and lands after it must not
+      // put the old Running status back — see `engineFetchSeq`.
+      if (ticket >= engineAppliedSeq) {
+        engineAppliedSeq = ticket;
+        set({ settings, engine });
+      } else {
+        set({ settings });
+      }
     } catch (err: unknown) {
       set({ notice: String(err) });
     }
@@ -1603,6 +1947,9 @@ export const useStore = create<Store>()((set, get) => ({
   useModel: async (modelId, contextLength) => {
     if (get().engineBusy) return;
     const length = contextLength ?? get().active?.contextLength ?? DEFAULT_CONTEXT_LENGTH;
+    // The Starting below is a local write that is newer than any status fetch
+    // still in flight — see `engineFetchSeq`.
+    engineAppliedSeq = ++engineFetchSeq;
     // A fresh load attempt (manual or the composer's typing-triggered preload)
     // supersedes any earlier explicit stop — see `userStoppedModel`.
     set({
@@ -1617,12 +1964,20 @@ export const useStore = create<Store>()((set, get) => ({
     });
     try {
       await api.startEngine(modelId, length);
+      const ticket = ++engineFetchSeq;
       const [settings, engine] = await Promise.all([
         api.getSettings(),
         api.getEngineStatus(),
       ]);
-      set({ settings, engine, runningContextLength: length });
+      if (ticket >= engineAppliedSeq) {
+        engineAppliedSeq = ticket;
+        set({ settings, engine, runningContextLength: length });
+      } else {
+        // A newer status is already on screen; keep it.
+        set({ settings, runningContextLength: length });
+      }
     } catch (err: unknown) {
+      engineAppliedSeq = ++engineFetchSeq;
       set({ engine: { type: "failed", data: { message: String(err) } } });
     } finally {
       set({ engineBusy: false });
@@ -1639,6 +1994,7 @@ export const useStore = create<Store>()((set, get) => ({
       // deliberate stop so the composer's typing-triggered preload (which
       // would otherwise treat "stopped" as "please load it back") leaves it
       // alone for the rest of the current draft — see `userStoppedModel`.
+      engineAppliedSeq = ++engineFetchSeq;
       set({ engine: { type: "stopped" }, userStoppedModel: true });
     } catch (err: unknown) {
       set({ notice: String(err) });
@@ -1683,9 +2039,15 @@ export const useStore = create<Store>()((set, get) => ({
     // just finished and already set its own authoritative final state.
     // Applying either would flicker the UI backward.
     const wasBusy = get().engineBusy;
+    const ticket = ++engineFetchSeq;
     try {
       const engine = await api.getEngineStatus();
       if (get().engineBusy !== wasBusy) return;
+      // Also drop a reply older than one already applied — see `engineFetchSeq`.
+      // (Not "skip if a poll is in flight": the poll `snoozeAutoUnload` fires
+      // must still run, it is how the fresh `autoUnloadAt` arrives.)
+      if (ticket < engineAppliedSeq) return;
+      engineAppliedSeq = ticket;
       set({ engine });
     } catch {
       // Polling must never surface errors.
@@ -2430,7 +2792,18 @@ export const useStore = create<Store>()((set, get) => ({
   },
 
   stopGeneration: async () => {
-    await api.stopGeneration();
+    // Only the chat Stop button comes through here (Translate/Correct/Improve
+    // call the api directly). The backend ends a stopped reply with a normal
+    // `done`, so remember the press — see where `runGeneration` announces
+    // "Answer ready", and resets this for the next turn.
+    stopRequestedForTurn = true;
+    try {
+      await api.stopGeneration();
+    } catch (err: unknown) {
+      // The stop didn't happen, so the reply will run to its end.
+      stopRequestedForTurn = false;
+      throw err;
+    }
   },
 
   dismissSafetyAlert: (conversationId) => {
@@ -2532,6 +2905,41 @@ export const useStore = create<Store>()((set, get) => ({
     }
   },
 
+  setDesktopNotifications: async (on) => {
+    const before = get().settings;
+    // The switch only exists once settings have loaded; a missing field
+    // (a row saved before it existed) counts as off, so choosing "off" again
+    // has nothing to write.
+    if (!before || (before.desktopNotifications === true) === on) return;
+    if (desktopNotificationsInFlight === 0) {
+      desktopNotificationsOnDisk = before.desktopNotifications === true;
+    }
+    desktopNotificationsInFlight++;
+    const mine = ++desktopNotificationsWriteSeq;
+    set({ settings: { ...before, desktopNotifications: on } });
+    try {
+      await api.updateSettings({ ...(get().settings ?? before), desktopNotifications: on });
+      desktopNotificationsOnDisk = on;
+    } catch (err: unknown) {
+      if (mine === desktopNotificationsWriteSeq) {
+        const now = get().settings;
+        if (now) set({ settings: { ...now, desktopNotifications: desktopNotificationsOnDisk } });
+      }
+      set({ notice: String(err) });
+      return;
+    } finally {
+      desktopNotificationsInFlight--;
+    }
+    // The switch is saved first so a slow or never-answered prompt can't hold
+    // the choice hostage; the prompt (macOS) then follows the user's own click,
+    // and a "no" in it is what puts up Settings' "blocked" line. Not if the
+    // user has already turned it off again while the write was in flight: a
+    // prompt for a switch that is off would be a surprise.
+    if (on && get().settings?.desktopNotifications === true) {
+      await get().requestNotificationPermission();
+    }
+  },
+
   checkForUpdate: async (manual = false) => {
     if (get().updateStatus === "checking" || get().updateStatus === "downloading") return;
     set({ updateStatus: "checking", updateError: null });
@@ -2556,6 +2964,7 @@ export const useStore = create<Store>()((set, get) => ({
 
   startUpdateInstall: async () => {
     if (get().updateStatus === "downloading") return;
+    updateRestarting = false;
     set({
       updateStatus: "downloading",
       updateProgress: { receivedBytes: 0, totalBytes: 0, bytesPerSec: 0, etaSeconds: 0 },
@@ -2574,13 +2983,17 @@ export const useStore = create<Store>()((set, get) => ({
           });
         } else if (event.type === "progress") {
           set({ updateProgress: { ...event.data } });
+        } else if (event.type === "finished") {
+          updateRestarting = true;
         } else if (event.type === "failed") {
+          updateRestarting = false;
           set({ updateStatus: "error", updateError: event.data.message });
         }
       });
       // Success means the app is restarting or exiting on its own — this
       // frontend instance is about to disappear, nothing further to do.
     } catch (err: unknown) {
+      updateRestarting = false;
       set({ updateStatus: "error", updateError: String(err) });
     }
   },
@@ -2826,4 +3239,37 @@ export const useStore = create<Store>()((set, get) => ({
 // one cheap check on the many updates that don't touch the theme.
 useStore.subscribe((state, prev) => {
   if (state.settings?.theme !== prev.settings?.theme) applyTheme(state.settings?.theme);
+});
+
+// Announces "model loaded" / "model unloaded". Listening here rather than in
+// each writer of `engine` (boot, the 2s poll, useModel, stopModel, deleteModel)
+// means no path can forget to, and none can announce twice: they all end up as
+// one more status handed to the same tracker, which reports transitions, not
+// statuses (see `lib/engineEvents.ts`). Registered at module scope, never in a
+// React effect: StrictMode runs effects twice and would double every alert.
+// The body is wrapped because zustand doesn't catch a throwing listener, and a
+// throw here would break whichever `set()` caused it.
+useStore.subscribe((state, prev) => {
+  try {
+    if (state.engine !== prev.engine || state.models !== prev.models) {
+      const st = state.engine;
+      if (st.type === "running" || st.type === "starting") {
+        const name = engineModelName(state.models, st.data.modelId);
+        if (name) engineNames.set(st.data.modelId, name);
+      }
+    }
+    if (state.engine !== prev.engine) {
+      const events = stepEngineTracker(engineTracker, state.engine, {
+        busy: state.engineBusy,
+        suppress:
+          state.appInfo?.isAndroid === true || state.settings === null || updateRestarting,
+      });
+      for (const e of events) announceAppEvent(useStore.getState, engineAppEvent(state, e));
+    }
+    // A start/stop call has ended, so a load still being waited on can't
+    // complete any more (a final read that came back `stopped`).
+    if (prev.engineBusy && !state.engineBusy) engineTracker.loading = null;
+  } catch {
+    // See above.
+  }
 });

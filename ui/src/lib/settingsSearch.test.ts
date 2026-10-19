@@ -113,6 +113,63 @@ describe("searchSettings", () => {
   });
 });
 
+describe("notifications", () => {
+  it("finds the Notifications group and its Desktop notifications switch, group first", () => {
+    expect(labels("notifications")).toEqual(["Notifications", "Desktop notifications"]);
+    expect(labels("desktop")).toEqual(["Desktop notifications"]);
+    // The hint says "system notification", so the OS's own word finds it too.
+    expect(labels("system notification")).toEqual(["Desktop notifications"]);
+    // Both sit in General, after Language and before Updates.
+    const hits = searchSettings("notifications", desktop, t);
+    expect(hits.map((h) => h.section)).toEqual(["general", "general"]);
+  });
+
+  it("lands on the switch itself, with nowhere else to look first", () => {
+    const [, hit] = searchSettings("notifications", desktop, t);
+    expect(hit).toEqual({
+      section: "general",
+      label: "Desktop notifications",
+      reveal: ["Desktop notifications"],
+    });
+  });
+
+  it("finds the switch under its phone wording on Android, and only there", () => {
+    const android = {
+      ...desktop,
+      appInfo: { portable: false, isAndroid: true, nativeNotifications: true } as AppInfo,
+    };
+    expect(labels("notifications", android)).toEqual(["Notifications", "Notifications on this device"]);
+    expect(labels("downloads and answers", android)).toEqual(["Notifications on this device"]);
+    expect(labels("desktop notifications", android)).toEqual([]);
+    expect(labels("on this device")).toEqual([]);
+  });
+
+  it("doesn't offer them in a build with no OS notifications, where Settings doesn't show them", () => {
+    // Not `isAndroid`: the build's own answer is what counts.
+    const none = {
+      ...desktop,
+      appInfo: { portable: false, isAndroid: false, nativeNotifications: false } as AppInfo,
+    };
+    expect(labels("notifications", none)).toEqual([]);
+    expect(labels("desktop notifications", none)).toEqual([]);
+    // ...while the same query on a desktop finds the switch.
+    expect(labels("desktop notifications")).toEqual(["Desktop notifications"]);
+  });
+
+  it("finds them in French too, with or without the accents", async () => {
+    await i18next.changeLanguage("fr");
+    try {
+      expect(labels("notifications")).toEqual(["Notifications", "Notifications de bureau"]);
+      expect(labels("bureau")).toEqual(["Notifications de bureau"]);
+      // The hint's "arrière-plan" is found from either spelling of its first word.
+      expect(labels("arriere")).toEqual(["Notifications de bureau"]);
+      expect(labels("arrière")).toEqual(["Notifications de bureau"]);
+    } finally {
+      await i18next.changeLanguage("en");
+    }
+  });
+});
+
 describe("SETTINGS_SEARCH_ENTRIES", () => {
   it("only names keys that exist", () => {
     const keys = SETTINGS_SEARCH_ENTRIES.flatMap((e) => [

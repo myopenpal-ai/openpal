@@ -240,6 +240,21 @@ const stylesheets: Record<string, string> = Object.fromEntries(
     .map((file) => [file, readFileSync(join(stylesDir, file), "utf-8")]),
 );
 
+/** The token behind every `color: var(--token)` declared in a rule of `source`
+ * whose selector contains `selectorPart`, paired with that selector. Reads the
+ * stylesheet itself, so a colour changed in the CSS is the colour checked. It
+ * understands only flat `selector { declarations }` rules, which is all the
+ * rules it is pointed at are. */
+function colorTokensOf(source: string, selectorPart: string): { selector: string; token: string }[] {
+  const found: { selector: string; token: string }[] = [];
+  for (const rule of stripComments(source).matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    const selector = rule[1].trim();
+    const color = rule[2].match(/(?<![-\w])color:\s*var\(--([\w-]+)\)/);
+    if (color && selector.includes(selectorPart)) found.push({ selector, token: color[1] });
+  }
+  return found;
+}
+
 describe.each([
   ["light", palettes.light],
   ["dark (pinned)", palettes.pinnedDark],
@@ -291,6 +306,26 @@ describe.each([
       hexToRgb(resolveHex(tokens, "paper-raised")),
     );
     expect(contrastRatio(resolveHex(tokens, "ink-soft"), surface)).toBeGreaterThanOrEqual(3);
+  });
+
+  it("AlertHost's kind icons and dismiss glyph clear 3:1 on the card (--paper-raised, or --paper-sunken once hovered)", () => {
+    // The card is shadcn's Alert on `bg-card`, which tailwind.css maps to
+    // --paper-raised, with no tint over it. Each icon colour and the dismiss
+    // glyph's two states are read out of alerts.css rather than repeated here.
+    const alertsCss = stylesheets["alerts.css"];
+    const icons = colorTokensOf(alertsCss, ".alert-host-icon-");
+    const dismiss = colorTokensOf(alertsCss, ".alert-host-dismiss");
+    // One colour per tone of icon (good, neutral, informative) and both
+    // dismiss states: fewer means the extraction found nothing to check.
+    expect(icons.length).toBeGreaterThanOrEqual(3);
+    expect(dismiss.length).toBeGreaterThanOrEqual(2);
+    for (const { selector, token } of [...icons, ...dismiss]) {
+      const surface = selector.includes(":hover") ? "paper-sunken" : "paper-raised";
+      expect(
+        contrastRatio(resolveHex(tokens, token), resolveHex(tokens, surface)),
+        `${selector}: --${token} on --${surface}`,
+      ).toBeGreaterThanOrEqual(3);
+    }
   });
 
   it("--badge-toobig text (--ink-soft) clears 4.5:1 on .badge-toobig's --paper-sunken background", () => {

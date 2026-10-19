@@ -43,16 +43,19 @@ pub(super) fn hash_grant_key(tool_id: &str, parts: &[&str]) -> String {
 /// truncating it. Used so command/code text never appears on argv — a
 /// secret a user inlines into a command is visible only to processes that
 /// can read this file, not to every process on the account via `ps`.
+/// Windows has no mode bits: the file inherits the scratch dir's ACL instead.
 pub(super) fn write_private_script(
     path: &std::path::Path,
     content: &str,
 ) -> Result<(), super::tool::ToolError> {
-    use std::os::unix::fs::OpenOptionsExt;
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let mut file = opts
         .open(path)
         .map_err(|e| super::tool::ToolError::ExecutionFailed(format!("scratch file: {e}")))?;
     file.write_all(content.as_bytes())

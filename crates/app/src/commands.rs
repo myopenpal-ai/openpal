@@ -9,6 +9,7 @@
 
 use crate::agent_bridge;
 use crate::logging;
+use crate::notify::{Notification, NotificationClick, NotificationPermission, Notifications};
 use crate::parental;
 use crate::state::{AppState, BootState};
 use openpal_core::account::{Account, AccountEvent};
@@ -1368,14 +1369,22 @@ pub struct AppInfo {
     /// into `engine`). No `@tauri-apps/plugin-os` dependency needed for
     /// just this one flag.
     is_android: bool,
+    /// Whether this build can post OS notifications at all (false on Android
+    /// and iOS, which have no backend yet). Gates the "Desktop notifications"
+    /// switch, its onboarding step and native delivery; what the OS currently
+    /// allows is `notification_permission`'s answer, read later.
+    native_notifications: bool,
 }
 
-/// Works before `AppState` exists — every field comes from `BootState`,
-/// which is managed from the very start of `setup()`. This is what lets the
-/// frontend's boot sequence check lock state before ever calling a command
-/// that needs a store.
+/// Works before `AppState` exists — every field comes from `BootState` and
+/// `Notifications`, both managed from the very start of `setup()`. This is
+/// what lets the frontend's boot sequence check lock state before ever
+/// calling a command that needs a store.
 #[tauri::command]
-pub fn get_app_info(state: State<'_, BootState>) -> AppInfo {
+pub fn get_app_info(
+    state: State<'_, BootState>,
+    notifications: State<'_, Notifications>,
+) -> AppInfo {
     AppInfo {
         portable: state.paths.portable,
         data_dir: state.paths.data_dir.display().to_string(),
@@ -1393,6 +1402,7 @@ pub fn get_app_info(state: State<'_, BootState>) -> AppInfo {
         )
         .enabled,
         is_android: cfg!(target_os = "android"),
+        native_notifications: notifications.supported(),
     }
 }
 
@@ -1703,6 +1713,104 @@ fn auto_unload_at_ms(settings: &Settings, info: &engine::ActivityInfo) -> Option
 #[tauri::command]
 pub async fn snooze_auto_unload(state: State<'_, AppState>) -> Result<(), String> {
     state.engine.touch_activity().await;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Native notifications
+// ---------------------------------------------------------------------------
+
+/// Whether the OS currently lets OpenPal show notifications, without ever
+/// prompting. Settings -> General shows a "blocked" line on `denied`.
+///
+/// Takes no `State<AppState>`, so it answers before the app is unlocked (the
+/// onboarding and Settings screens ask while the store is still booting).
+/// Best-effort: see `NotificationPermission::Granted`.
+#[tauri::command]
+pub async fn notification_permission(
+    notifications: State<'_, Notifications>,
+) -> Result<NotificationPermission, String> {
+    Ok(notifications.permission().await)
+}
+
+/// Ask the OS to let OpenPal show notifications, and report the result. On
+/// macOS this puts the system's one-time "Allow notifications?" prompt in front
+/// of the user and returns once they have answered; it is called when the user
+/// turns the Desktop notifications switch on. Elsewhere there is nothing to ask
+/// and it reads like [`notification_permission`]. Same pre-unlock rules as
+/// that command.
+#[tauri::command]
+pub async fn request_notification_permission(
+    notifications: State<'_, Notifications>,
+) -> Result<NotificationPermission, String> {
+    Ok(notifications.request_permission().await)
+}
+
+/// Open the OS page where the user allows notifications for OpenPal: what the
+/// "blocked" line's button in Settings -> General does, since the OS will not
+/// ask a second time. Takes no `State<AppState>`, like the two commands above.
+#[tauri::command]
+pub async fn open_notification_settings(
+    notifications: State<'_, Notifications>,
+) -> Result<(), String> {
+    notifications.open_settings().await.map_err(|e| {
+        tracing::warn!("opening notification settings failed: {e}");
+        "Couldn't open your system settings.".to_string()
+    })
+}
+
+/// The notification click the UI has not acted on yet, once: what it reads
+/// after the `notification-clicked` nudge, and once more when it has finished
+/// booting, for a click that launched the app. Takes no `State<AppState>`, like
+/// the commands above; the UI only acts on the answer once it is unlocked.
+#[tauri::command]
+pub fn take_notification_click(
+    notifications: State<'_, Notifications>,
+) -> Option<NotificationClick> {
+    notifications.take_click()
+}
+
+/// The decision half of [`notify_native`], pure so it is unit-testable.
+fn should_notify_native(enabled: bool, window_focused: bool) -> bool {
+    enabled && !window_focused
+}
+
+/// Mirror an in-app alert as an OS notification. Best-effort: resolves `Ok`
+/// even when it posts nothing (switch off, window focused, or an OS that drops
+/// the notification, which we cannot see anyway); a delivery error is only
+/// logged. Re-checks the switch and the window's focus here as a backstop to
+/// the UI's own check, so a stale webview can never pop a notification while
+/// the user is looking at OpenPal or after they turned the switch off.
+///
+/// Unlike the in-app alert, this ignores which conversation is open: the
+/// caller decides what to send, this decides only whether the user is away.
+/// Title and body are length-capped, and the body escaped where the OS reads
+/// markup, in `Notifications::show`. `conversation_id` is what a click on the
+/// notification opens (see `take_notification_click`).
+///
+/// On Android the window's focus cannot be read (tao reports it as never
+/// focused), so there the UI's own check is the only one.
+#[tauri::command]
+pub async fn notify_native(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    notifications: State<'_, Notifications>,
+    title: String,
+    body: String,
+    conversation_id: Option<String>,
+) -> Result<(), String> {
+    let enabled = state.settings.lock().await.desktop_notifications;
+    let focused = app
+        .get_webview_window("main")
+        .and_then(|w| w.is_focused().ok())
+        .unwrap_or(false);
+    if should_notify_native(enabled, focused) {
+        notifications.show(Notification {
+            title,
+            body,
+            conversation_id,
+        });
+    }
     Ok(())
 }
 
@@ -5005,6 +5113,14 @@ pub async fn remote_forget(state: State<'_, AppState>) -> Result<(), String> {
 mod tests {
     use super::*;
     use openpal_core::types::FitLevel;
+
+    #[test]
+    fn native_notification_needs_the_switch_on_and_the_window_unfocused() {
+        assert!(should_notify_native(true, false));
+        assert!(!should_notify_native(true, true));
+        assert!(!should_notify_native(false, false));
+        assert!(!should_notify_native(false, true));
+    }
 
     #[test]
     fn validate_writing_tool_text_rejects_empty_and_whitespace_only() {

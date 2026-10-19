@@ -32,6 +32,12 @@ vi.mock("./SettingsSheet", () => ({
               <option>English</option>
             </select>
           </div>
+          <div className="settings-field" data-testid="notifications-field">
+            <span className="settings-label">Desktop notifications</span>
+            <label className="settings-toggle">
+              <input type="checkbox" aria-label="Desktop notifications" />
+            </label>
+          </div>
         </>
       )}
     </>
@@ -251,6 +257,39 @@ describe("MoreDialog", () => {
     expect(field.scrollIntoView).toHaveBeenCalled();
     // Focus lands on the field's first control, as it does for any setting.
     expect(screen.getByRole("radio", { name: "System" })).toHaveFocus();
+  });
+
+  it("finds the Desktop notifications switch, and opens General right on it", async () => {
+    const user = userEvent.setup();
+    render(<Harness />);
+    await user.click(screen.getByRole("button", { name: "open skills" }));
+
+    await user.type(searchField(), "desktop notif");
+    expect(screen.getByRole("status")).toHaveTextContent("1 result");
+    await user.click(screen.getByRole("button", { name: "Desktop notifications General" }));
+
+    expect(screen.getByRole("heading", { name: "Settings page: general" })).toBeInTheDocument();
+    const field = screen.getByTestId("notifications-field");
+    expect(field).toHaveClass("settings-search-hit");
+    expect(field.scrollIntoView).toHaveBeenCalled();
+    // Focus lands on the field's first control: the switch itself.
+    expect(screen.getByRole("checkbox", { name: "Desktop notifications" })).toHaveFocus();
+  });
+
+  it("doesn't offer the Desktop notifications switch in a build with none (Android, iOS)", async () => {
+    useStore.setState({
+      appInfo: { portable: false, isAndroid: false, nativeNotifications: false } as AppInfo,
+    });
+    const user = userEvent.setup();
+    render(<Harness />);
+    await user.click(screen.getByRole("button", { name: "open skills" }));
+
+    await user.type(searchField(), "desktop notif");
+
+    expect(screen.getByRole("status")).toHaveTextContent("No results for “desktop notif”");
+    expect(
+      screen.queryByRole("button", { name: "Desktop notifications General" }),
+    ).not.toBeInTheDocument();
   });
 
   it("says when nothing matches, and Escape clears the search before it closes", async () => {

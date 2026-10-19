@@ -24,9 +24,10 @@ Rust core, a Python-sidecar plugin system, and no server to deploy.
 | `.github/workflows/ci.yml` | every PR, push to `main` | **yes** (required) | `cargo fmt --check`, `cargo clippy --workspace -- -D warnings`, `cargo test` per crate, `ui` typecheck + `vite build`, Vitest, Playwright mocked-IPC e2e |
 | `.github/workflows/plugin-tests.yml` | PR/push touching `plugins/web-search/**` or `plugins/speech/**` | yes, scoped | pytest for whichever plugin(s) changed |
 | `.github/workflows/engine-e2e.yml` | PR/push touching `crates/core/src/engine/**`, `download.rs`, `sse.rs`, `writing_tools.rs`, `prompt_enhancer.rs`, or any file under `crates/core/tests/` | yes, scoped | the real llama-server engine tests (stages the engine via the bundler, downloads the ~140MB SmolLM2 test model, runs a real chat round-trip for plain chat, Writing Tools Translate/Correct, and the Message improver) |
+| `.github/workflows/notify-platforms.yml` | PR/push touching `crates/app/src/notify/**`, `crates/app/src/lib.rs`, `crates/app/Cargo.toml` or `Cargo.lock` | yes, scoped | `cargo clippy -p openpal-app --all-targets -- -D warnings` and `cargo test -p openpal-app notify` on macOS and Windows runners, and `cargo clippy -p openpal-app` for `aarch64-linux-android` with the runner's NDK — the platform-gated notification backends `ci.yml`'s Linux job never compiles. Not the Kotlin half (no Gradle build), and nothing that shows a notification |
 | `.github/workflows/portable.yml` (pre-existing, unchanged) | manual dispatch, `v*` tags | no (release pipeline, not a test gate) | cross-platform Portable builds + signed draft release |
 
-Path-filtered workflows (`plugin-tests.yml`, `engine-e2e.yml`) simply don't
+Path-filtered workflows (`plugin-tests.yml`, `engine-e2e.yml`, `notify-platforms.yml`) simply don't
 run at all on a PR that doesn't touch their paths — GitHub treats a required
 check from a workflow that wasn't triggered as satisfied, so they're safe to
 mark as required status checks without blocking unrelated PRs.
@@ -138,6 +139,82 @@ for the interactive runner). Currently covers:
   ordering (`"M4 Max"` must not fall through to bare `"M4"`), MoE vs. dense.
 - `state/store.ts` — the exported pure predicates `modelBrowserAvailable`
   and `cloudModelsAvailable`.
+- The in-app alerts and the native-notification rules (the settings side is
+  the next bullet):
+  - `lib/engineEvents.test.ts` and `state/storeAlerts.test.ts` — "model loaded" and
+    "model unloaded" come from status *transitions*: the same status read again
+    and again is one alert, the first read after launch is a silent baseline, a
+    swap A → B is one load (stale or transient statuses in between included),
+    failures and the remote states announce nothing, and an older status reply
+    landing late is dropped rather than re-announcing an unload.
+  - `lib/appEvents.test.ts` and `state/storeAlerts.test.ts` — "answer ready" fires
+    once for a turn that really ran to its end (not Stop, not an error, not an empty
+    reply, not Translate/Correct toggling `streaming`), its in-app alert is skipped
+    only when that conversation is open in the chat view with the More dialog and
+    conversation search closed, "download finished" fires
+    from the `finished` event once per model (not on cancel, failure, or a queued
+    re-run), and a native notification carries the alert's own title and text only
+    with the switch on and the window not focused — including for the open
+    conversation, and never from a build with no OS notifications
+    (`nativeNotifications: false`, set without `isAndroid` so the capability is
+    what's tested). These need Vitest because the e2e mock
+    cannot stream answers or downloads.
+  - `components/AlertHost.test.tsx` — the host on fake timers: a live region that
+    exists before any alert, no assertive second announcement, self-dismissal after
+    6s that pauses on hover, focus and window blur, Dismiss and Escape (consumed so
+    it can't also close a dialog), no focus ever taken, newest first and capped.
+    `styles/tailwind.test.ts` pins the shadcn colour mapping to existing palette
+    tokens, and `styles/contrast.test.ts` holds the alert icon and dismiss colours
+    to 3:1 in all three palettes.
+- The "Desktop notifications" setting, settings side:
+  - `state/storeNotifications.test.ts` — `setDesktopNotifications` is optimistic,
+    persists the whole settings object, writes nothing for an unchanged value
+    (including a row saved before the field existed), rolls a failed write back
+    (only the latest pick's) with a notice, and asks the OS
+    (`requestNotificationPermission`, the call that raises macOS's prompt) only
+    after a successful turn-on; `refreshNotificationPermission` only reads, and
+    both keep the last answer when the call fails. It has an api mock of its own, so a stray call to
+    any other command throws.
+  - `views/SettingsSheet.test.tsx` — the Notifications group (named switch
+    described by its hint, off for a missing field, one click saves, a failed
+    write goes back), the "blocked" line (only with the switch on and the OS
+    saying no, a plain description rather than an alert, cleared when the window
+    regains focus), its "Open notification settings" button (only while the line
+    shows, outside the status region, one `openNotificationSettings` call per
+    press, and a fallback sentence appended to the line when that call rejects),
+    the group's order between Language and Updates, its absence
+    from a build with no OS notifications, and French.
+  - `views/Onboarding.test.tsx` — the notifications step sits between appearance
+    and the hardware scan: Skip this step writes nothing, "Turn on notifications"
+    saves the choice and moves on without waiting for the OS (even when it says
+    no), "Skip setup" asks first, and a build with no OS notifications skips the
+    step.
+  - `lib/settingsSearch.test.ts` and `views/MoreDialog.test.tsx` — the group and
+    the switch are findable in English and (accent-folded) French, hidden in a
+    build with no OS notifications, and picking the switch opens General with
+    focus on it.
+- The Rust side, `cargo test -p openpal-app notify`: the length caps and
+  escaping (`notify/content.rs`), the macOS status mapping, bundle-path guard and
+  click payload (`userInfo` round trip), the Android answer mapping, the deep
+  link, each backend the host can build against the shared `assert_contract`
+  (on Windows that includes "reading leaves no registry trace, asking registers
+  the app id", on a throwaway id it removes again), the backend `select` gives a
+  test binary (never the macOS center, which would abort it), and what
+  `Notifications` does on top of a fake backend (text capped and escaped per
+  backend, the click's conversation passed through untouched, errors passed
+  through, a click waiting for the UI once with the latest winning). The macOS
+  center and the Android plugin only run in a bundled app; `notify-platforms.yml`
+  runs this on macOS and Windows runners and type-checks Android.
+- The click, UI side: `state/storeNotifications.test.ts` holds
+  `followNotificationClick` (nothing before settings load, so the click waits in
+  Rust; the conversation opened with the More dialog and search closed; a click
+  naming none changes nothing; a failed read never throws);
+  `state/storeAlerts.test.ts` that "answer ready" is posted with its
+  conversation and a model event with none; `lib/apiEvents.test.ts` the
+  `notification-clicked` event name and `take_notification_click`. The phone
+  wording of the switch, its hint, its search entry and the onboarding step
+  are in `SettingsSheet.test.tsx`, `settingsSearch.test.ts` and
+  `Onboarding.test.tsx`.
 
 **Backlog** (from the research pass, not yet implemented — concrete enough to
 pick up directly): `lib/api.ts`'s Channel-based methods need a hand-rolled
@@ -176,8 +253,13 @@ plain Vite dev server with the Tauri IPC layer mocked:
 - `ui/tests/e2e/onboarding-skip.spec.ts` drives the two skip buttons from a
   fresh install: "Skip this step" (moves on, no question asked) and "Skip setup"
   (asks "Skip setup?" first, then enters the app), including a download held in
-  flight and the commands sent to the backend; `npm run test:e2e:onboarding` (in
-  `ui/`) runs just that spec. It is a headless pass/fail check — to use
+  flight and the commands sent to the backend, and the notifications step that
+  follows appearance: skipping it leaves "Desktop notifications" off all the way
+  into Settings, "Turn on notifications" saves it on (and Settings shows it
+  checked, also after a relaunch), the OS answering "denied" lets onboarding go
+  on and leaves Settings showing the "blocked" line with no alert and no console
+  error, and "Skip setup" from that step asks first; `npm run test:e2e:onboarding`
+  (in `ui/`) runs just that spec. It is a headless pass/fail check — to use
   onboarding by hand in the real app, run `npm run dev:onboarding` from the repo
   root (a `tauri dev` session on a throwaway first-run profile; see the README's
   [Development](../README.md#development) section).
@@ -194,6 +276,63 @@ plain Vite dev server with the Tauri IPC layer mocked:
   OS. It never touches a real window: the OS-drawn frame, how a webview paints
   select popups and scrollbars, a real OS appearance change reaching
   WKWebView/WebView2 and the production stylesheet stay manual checks.
+- `ui/tests/e2e/alerts.spec.ts` drives the alerts by changing what the mocked
+  `get_engine_status` answers while the page polls it on a fake clock: one "Model
+  ready" per load however many times Running is read, an unload, a swap, and the
+  silent first read; the card paints above an open dialog, never takes focus from
+  the composer, clears itself after 6s, is reachable with Tab and dismissed with
+  Escape, and stacks newest-first up to three; a card dismissed with the mouse
+  (Chromium sends no `pointerleave` when it disappears under a resting pointer)
+  and a press on a card that must not count as a click outside an open panel are
+  covered, and so is an alert raised while onboarding is up. The clock is
+  stopped after boot so only the test moves time. Window `blur`/`focus` events show
+  the rule for `notify_native` end to end -- called once with the card's own
+  title and text only with the switch on and the window blurred, never with it
+  off, and a rejecting call surfaces nothing. Answers and downloads arrive over
+  Channels, which this tier cannot stream (Vitest above); what stays manual is a
+  notification actually appearing, and a screen reader announcing the card.
+- `ui/tests/e2e/notifications.spec.ts` is the Settings → General → Notifications
+  group in a real browser: an install saved before the setting existed shows
+  "Desktop notifications" off, one click saves `desktopNotifications: true` with
+  the rest of the settings, the choice survives a relaunch both ways
+  (`support/persistedSettings.ts`), and the switch works from the keyboard. The
+  OS is the mocked `notification_permission` (a read) and
+  `request_notification_permission` (the ask a click makes), which the spec can
+  change while the page runs: opening Settings only reads, turning the switch on
+  asks once, the "blocked" line shows only with the switch on and the
+  OS answering "denied" (a plain description, no `role="alert"`, the switch still
+  usable) next to a button that sends `open_notification_settings` (and, when the
+  mock rejects it, a sentence saying where to look), clears when the window
+  regains focus after the answer changes, and a failing read shows nothing and
+  logs no console error. It also covers the group
+  being absent where `get_app_info` says there are no OS notifications (and from
+  search), the French labels, and a click that launched the app
+  (`take_notification_click` answering at boot) opening its conversation, read
+  exactly once; the mock has no event bridge, so the `notification-clicked`
+  nudge itself is unit-tested only;
+  `more-dialog.spec.ts` covers finding the switch through the More dialog's
+  search. What stays manual, because only the shipped app has a notification
+  service: a notification actually being posted and shown (also with the window
+  minimized, where OpenPal is still the active app), the macOS and Android
+  permission prompts, the OS really reporting "blocked" (macOS, Windows and
+  Android can), the "Open notification settings" button landing on System
+  Settings -> Notifications -> OpenPal (the deep link in `notify/mod.rs`'s
+  `macos_settings_url`; the unit tests pin the URL, not where macOS takes it),
+  on Windows' notifications page and on Android's app notification settings, a
+  click (or tap) bringing OpenPal forward and opening the answer's conversation,
+  including the tap that cold-starts the Android app, and that none is posted
+  while OpenPal is the focused window. On Windows, check a portable build from a
+  folder outside `target/`: before this change its toasts were dropped silently
+  (no Start-menu AUMID), so a toast appearing at all, named "OpenPal", is the
+  test, and `HKCU\Software\Classes\AppUserModelId\com.myopenpal.openpal` should
+  exist only once the switch has been turned on. On Linux, check a GNOME
+  session (the notification stays in the tray instead of vanishing, and a click
+  opens the conversation). After touching `crates/app/src/notify/`
+  on macOS, run the bundled app and read `log show --last 5m --predicate
+  'process == "usernoted"'` for the app's bundle id: `Delivering <NotificationRecord`
+  means the post arrived; `can't mix modern clients with legacy clients` or
+  `Denying message` means something in the process used the legacy and the modern
+  center together (see `notify/macos.rs`), and nothing will ever be shown.
 
 **This tier is a fast frontend regression net, not a substitute for real
 e2e** — it validates React state machines, routing, and IPC call shape, not
@@ -284,7 +423,7 @@ GitHub Flow (no release branches at all) and full GitFlow (a permanent
 - **`main`** is trunk: always releasable, protected. Feature/fix branches
   branch from it and land back via PR + squash merge. Required status
   checks: `ci.yml`'s `rust` and `frontend` jobs (always run), plus
-  `plugin-tests.yml`/`engine-e2e.yml` (path-filtered — satisfied
+  `plugin-tests.yml`/`engine-e2e.yml`/`notify-platforms.yml` (path-filtered — satisfied
   automatically when not triggered, so safe to mark required).
 - **`release/vX.Y`** branches are cut from `main` when stabilizing a release
   — only fixes land here after the cut, no new features. Same required

@@ -181,6 +181,52 @@ mod tests {
     }
 
     #[test]
+    fn desktop_notifications_default_off_for_a_settings_row_predating_them() {
+        // An existing install's row from before the notification switch
+        // shipped has no `desktopNotifications` key. It must load as off, so
+        // upgrading never starts raising OS notifications the user never
+        // asked for. The other keys must come through too: off is also the
+        // whole-row default, so a row that failed to parse would read off as
+        // well, and the switch alone can't tell the two apart.
+        let conn = test_conn();
+        write_raw(&conn, r#"{"onboardingCompleted": true, "userName": "Ada"}"#);
+
+        let s = load(&conn);
+        assert!(!s.desktop_notifications);
+        assert!(s.onboarding_completed);
+        assert_eq!(s.user_name.as_deref(), Some("Ada"));
+    }
+
+    #[test]
+    fn a_saved_desktop_notifications_choice_survives_a_reload() {
+        // The Rust tier of "the switch's value survives a restart": a relaunch
+        // is `app_db::open` on the same file followed by `load` (see
+        // `finish_unlock` in the app crate), so this reopens the database
+        // rather than reading back through the connection that wrote it. The
+        // other fields are non-default so a row that came back as all
+        // defaults can't pass for one that came back whole (and `false` is
+        // the default, so only the `true` side proves anything).
+        let conn = test_conn();
+        let db_path = conn.path().expect("test_conn opens a file").to_owned();
+        let chosen = Settings {
+            onboarding_completed: true,
+            user_name: Some("Ada".into()),
+            language: "fr".into(),
+            desktop_notifications: true,
+            ..Settings::default()
+        };
+        save(&conn, &chosen).unwrap();
+        drop(conn);
+
+        let (reopened, _, _) = crate::app_db::open(std::path::Path::new(&db_path), None).unwrap();
+        let s = load(&reopened);
+        assert!(s.desktop_notifications);
+        assert!(s.onboarding_completed);
+        assert_eq!(s.user_name.as_deref(), Some("Ada"));
+        assert_eq!(s.language, "fr");
+    }
+
+    #[test]
     fn an_unrecognised_theme_does_not_reset_the_rest_of_the_row() {
         // `load` resets the WHOLE row to defaults on any parse error, so a
         // theme this build doesn't know (a newer build's extra palette after

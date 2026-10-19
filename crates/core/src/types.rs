@@ -1819,6 +1819,15 @@ pub struct Settings {
     /// this build doesn't know (a newer build's, a hand edit) must not be able
     /// to fail the load and reset every other setting.
     pub theme: String,
+    /// Settings → General → Notifications "Desktop notifications" switch (and
+    /// the onboarding step that offers it): mirror the four model and answer
+    /// alerts as OS notifications while OpenPal is not the focused window.
+    /// Off by default, and off for a settings row saved before this field
+    /// existed (struct-level `#[serde(default)]`), so an upgrade never starts
+    /// raising notifications the user did not ask for. `commands::notify_native`
+    /// re-reads it on every call, so flipping the switch off takes effect at
+    /// once even for a stale webview.
+    pub desktop_notifications: bool,
 }
 
 impl Default for Settings {
@@ -1857,6 +1866,7 @@ impl Default for Settings {
             custom_models_enabled: false,
             experimental_features: false,
             theme: "system".to_string(),
+            desktop_notifications: false,
             system_prompt: "You are a friendly, helpful AI assistant running privately on the \
                             user's own computer. Be clear and warm. When the user seems new to a \
                             topic, explain it simply and avoid jargon. Keep answers concise unless \
@@ -2212,6 +2222,13 @@ mod tests {
         assert_eq!(Settings::default().theme, "system");
     }
 
+    /// Native notifications are opt-in: a fresh install must not raise OS
+    /// notifications until the user turns the switch on.
+    #[test]
+    fn settings_default_has_desktop_notifications_off() {
+        assert!(!Settings::default().desktop_notifications);
+    }
+
     /// A settings.json saved before `chatBackend` existed must still load,
     /// defaulting to `Local` (struct-level `#[serde(default)]`) — an app that
     /// never signed in should never silently end up in cloud mode.
@@ -2349,6 +2366,47 @@ mod tests {
             serde_json::from_str(json).expect("old settings.json must still parse");
         assert_eq!(settings.theme, "system");
         assert!(settings.onboarding_completed);
+    }
+
+    /// A settings.json saved before `desktopNotifications` existed must still
+    /// load, with the switch off (struct-level `#[serde(default)]`) — an
+    /// existing install must not start raising OS notifications after the
+    /// upgrade. The `onboardingCompleted` check is what makes this more than a
+    /// restatement of the default: a blob that failed to parse would come back
+    /// as `Settings::default()`, whose switch is also off.
+    #[test]
+    fn settings_deserializes_missing_desktop_notifications_as_off() {
+        let json = r#"{
+            "onboardingCompleted": true,
+            "selectedModelId": null,
+            "systemPrompt": "hi",
+            "showThinking": true,
+            "forceCpu": false,
+            "logLevel": "info",
+            "voiceSpeed": 1.0,
+            "voiceExpressiveness": 1.0,
+            "voiceSentencePause": 0.2,
+            "voiceId": "en_US-amy-medium"
+        }"#;
+        let settings: Settings =
+            serde_json::from_str(json).expect("old settings.json must still parse");
+        assert!(!settings.desktop_notifications);
+        assert!(settings.onboarding_completed);
+    }
+
+    /// `desktop_notifications` reaches the frontend, and is stored in the
+    /// settings row, under exactly `desktopNotifications`.
+    /// `ui/src/lib/types.ts` mirrors `Settings` by hand with no parity test,
+    /// so pin the wire name here: a rename would make the UI read `undefined`
+    /// and quietly treat the switch as off.
+    #[test]
+    fn settings_serializes_desktop_notifications_under_that_key() {
+        let settings = Settings {
+            desktop_notifications: true,
+            ..Settings::default()
+        };
+        let value = serde_json::to_value(&settings).unwrap();
+        assert_eq!(value["desktopNotifications"], true);
     }
 
     /// `theme` reaches the frontend, and is stored in the settings row, under

@@ -29,6 +29,7 @@ export function freshInstallResponses(overrides: Record<string, unknown> = {}) {
       selectedCloudModelId: null,
       defaultModelId: null,
       theme: "system",
+      desktopNotifications: false,
     },
     get_engine_status: { type: "stopped" },
     list_conversations: [],
@@ -43,6 +44,20 @@ export function freshInstallResponses(overrides: Record<string, unknown> = {}) {
     // turn and floods every spec's console-error assertion.
     backfill_custom_model_metadata: 0,
     frontend_log: null,
+    // Settings -> General -> Notifications reads the OS permission when it
+    // opens (`notification_permission`, which never prompts), and turning the
+    // switch on asks for it (`request_notification_permission`, which on macOS
+    // shows the system prompt; state/store.ts). "granted" is also what every
+    // desktop OS but macOS ever answers. Without them the mock rejects, the
+    // store swallows that, and nothing shows -- but a failure path that logged
+    // it would flood every spec's console-error assertion. A spec for the
+    // "blocked" line overrides both with "denied".
+    notification_permission: "granted",
+    request_notification_permission: "granted",
+    // Asking Rust to post the OS notification that mirrors an in-app alert.
+    // Rust posts it only with the switch on and the window unfocused, so the
+    // reply carries nothing; registered so no call is ever an unknown command.
+    notify_native: null,
     list_plugins: [],
     list_cloud_models: [],
     get_system_report: {

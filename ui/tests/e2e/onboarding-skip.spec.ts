@@ -38,6 +38,8 @@ const skipSetup = (page: Page) => clickQuiet(page.getByRole("button", { name: "S
 
 const appearanceHeading = (page: Page) =>
   page.getByRole("heading", { name: "How should OpenPal look?" });
+const notificationsHeading = (page: Page) =>
+  page.getByRole("heading", { name: "Want a heads-up?" });
 const scanHeading = (page: Page) =>
   page.getByRole("heading", { name: "First, let's see what your Mac can do." });
 /** One of the appearance step's three options. */
@@ -91,8 +93,13 @@ type Invoke = { cmd: string; args?: Record<string, unknown> };
  * is recorded (see `invokes`), and `download_model` never settles — a download
  * genuinely in flight — since the plain request/response mock can't stream.
  * With `persist` the mocked backend also remembers what `update_settings` was
- * sent, so a reload is a relaunch (see `persistSettings`). */
-async function bootFreshInstall(page: Page, { persist = false } = {}) {
+ * sent, so a reload is a relaunch (see `persistSettings`). `responses` replaces
+ * the canned answer of any command, for a spec that needs the OS to say something
+ * else (the notification permission, say). */
+async function bootFreshInstall(
+  page: Page,
+  { persist = false, responses = {} }: { persist?: boolean; responses?: Record<string, unknown> } = {},
+) {
   const base = freshInstallResponses();
   await mockTauriIpc(page, {
     ...base,
@@ -109,6 +116,7 @@ async function bootFreshInstall(page: Page, { persist = false } = {}) {
         ranked: [{ modelId: "qwen3-4b", fit: "perfect", why: "Fits easily in your memory." }],
       },
     },
+    ...responses,
   });
   // Before the recorder below, so the recorder is the outer wrapper and still
   // sees the `update_settings` calls this one answers itself.
@@ -167,10 +175,17 @@ async function toAppearance(page: Page) {
   await expect(appearanceHeading(page)).toBeVisible();
 }
 
-/** ...and on past the appearance step, with nothing picked, to the hardware scan. */
-async function toScan(page: Page) {
+/** ...and on past the appearance step, with nothing picked, to the notifications step. */
+async function toNotifications(page: Page) {
   await toAppearance(page);
   await skipStep(page); // the appearance step
+  await expect(notificationsHeading(page)).toBeVisible();
+}
+
+/** ...and on past the notifications step, left off, to the hardware scan. */
+async function toScan(page: Page) {
+  await toNotifications(page);
+  await skipStep(page); // the notifications step
   await expect(scanHeading(page)).toBeVisible();
 }
 
@@ -376,9 +391,9 @@ const WAYS_OUT: {
   {
     way: "Continue",
     leave: (page) => page.getByRole("button", { name: "Continue" }).click(),
-    lands: scanHeading,
+    lands: notificationsHeading,
   },
-  { way: "Skip this step", leave: skipStep, lands: scanHeading },
+  { way: "Skip this step", leave: skipStep, lands: notificationsHeading },
   {
     way: "Skip setup",
     leave: async (page) => {
@@ -530,4 +545,160 @@ test("appearance scene: quitting mid-onboarding, the relaunched welcome is dark 
   await expectDarkFromFirstFrame(page);
   await toAppearance(page);
   await expect(themeOption(page, "Dark")).toBeChecked();
+});
+
+// The notifications step: turning them on is saved there and then and asks the
+// OS (on macOS, its one-time prompt); skipping it, or the whole setup, leaves
+// them off. The OS side is the mocked `request_notification_permission` command
+// and `notification_permission`, which Settings reads ("granted" unless a spec
+// says otherwise): a real notification, and the OS really reporting it blocked, can
+// only be seen in the shipped app (see docs/TESTING.md).
+
+/** The `desktopNotifications` of every `update_settings` sent, in order. Each one
+ * carries the whole `Settings`, so even the name step's save has one (false, from
+ * the fresh install's settings). */
+const savedNotificationFlags = (calls: Invoke[]) =>
+  calls
+    .filter((c) => c.cmd === "update_settings")
+    .map((c) => (c.args?.settings as { desktopNotifications?: boolean } | undefined)?.desktopNotifications);
+
+/** Opens Settings (its General page) from the app shell's More menu. */
+async function openSettings(page: Page) {
+  await page.getByRole("button", { name: "More", exact: true }).click();
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  return page.getByRole("dialog", { name: "Settings" });
+}
+const notificationsSwitch = (dialog: Locator) =>
+  dialog.getByRole("checkbox", { name: "Desktop notifications" });
+const BLOCKED = "Notifications are blocked for OpenPal. In your system settings, turn on \"Allow notifications\" for OpenPal, then come back here.";
+
+/** Every console error the page logs from here on. */
+function collectConsoleErrors(page: Page) {
+  const errors: string[] = [];
+  page.on("console", (msg) => {
+    if (msg.type() === "error") errors.push(msg.text());
+  });
+  page.on("pageerror", (error) => errors.push(String(error)));
+  return errors;
+}
+
+test("notifications scene: Skip this step leaves them off all the way into Settings", async ({
+  page,
+}) => {
+  const errors = collectConsoleErrors(page);
+  await bootFreshInstall(page, { persist: true });
+  await toNotifications(page);
+  await expect(
+    page.getByText(/OpenPal can notify you when a model loads, unloads or finishes downloading/),
+  ).toBeVisible();
+  await expect(page.getByRole("button", { name: "Turn on notifications" })).toBeVisible();
+
+  await skipStep(page);
+
+  await expect(scanHeading(page)).toBeVisible();
+  expect(savedNotificationFlags(await invokes(page)).filter((on) => on === true)).toEqual([]);
+
+  await skipSetup(page);
+  await confirmSkip(page);
+  await expect(shell(page)).toBeVisible();
+  const settings = await openSettings(page);
+  await expect(notificationsSwitch(settings)).not.toBeChecked();
+  await expect(settings.getByText(BLOCKED)).toHaveCount(0);
+  expect(errors).toEqual([]);
+});
+
+test("notifications scene: Turn on notifications saves it on, asks the OS, and Settings shows it on, even after a relaunch", async ({
+  page,
+}) => {
+  const errors = collectConsoleErrors(page);
+  await bootFreshInstall(page, { persist: true });
+  await toNotifications(page);
+
+  await page.getByRole("button", { name: "Turn on notifications" }).click();
+
+  // Straight on to the scan: the choice is saved, nothing waits for the OS.
+  await expect(scanHeading(page)).toBeVisible();
+  await expect.poll(async () => savedNotificationFlags(await invokes(page)).at(-1)).toBe(true);
+  // ...and the OS is asked once the choice is safe on disk.
+  await expect
+    .poll(async () => {
+      const calls = await invokes(page);
+      const saved = calls.findLastIndex(
+        (c) =>
+          c.cmd === "update_settings" &&
+          (c.args?.settings as { desktopNotifications?: boolean } | undefined)
+            ?.desktopNotifications === true,
+      );
+      return (
+        saved >= 0 && calls.slice(saved).some((c) => c.cmd === "request_notification_permission")
+      );
+    })
+    .toBe(true);
+  expect(completionIndex(await invokes(page))).toBe(-1);
+
+  await skipSetup(page);
+  await confirmSkip(page);
+  await expect(shell(page)).toBeVisible();
+  let settings = await openSettings(page);
+  await expect(notificationsSwitch(settings)).toBeChecked();
+  // The OS allowed it: no "blocked" line.
+  await expect(settings.getByText(BLOCKED)).toHaveCount(0);
+
+  // Quit and open it again: the choice was saved, not just held in memory.
+  await page.reload();
+  await expect(shell(page)).toBeVisible();
+  settings = await openSettings(page);
+  await expect(notificationsSwitch(settings)).toBeChecked();
+  expect(errors).toEqual([]);
+});
+
+test("notifications scene: when the OS blocks them, onboarding goes on, the switch stays on, and Settings says why", async ({
+  page,
+}) => {
+  const errors = collectConsoleErrors(page);
+  // Both answer "denied", as the OS would: the ask during onboarding, and the
+  // read Settings does when it opens.
+  await bootFreshInstall(page, {
+    persist: true,
+    responses: { notification_permission: "denied", request_notification_permission: "denied" },
+  });
+  await toNotifications(page);
+
+  await page.getByRole("button", { name: "Turn on notifications" }).click();
+
+  await expect(scanHeading(page)).toBeVisible();
+  await skipSetup(page);
+  await confirmSkip(page);
+  await expect(shell(page)).toBeVisible();
+  const settings = await openSettings(page);
+
+  const toggle = notificationsSwitch(settings);
+  await expect(toggle).toBeChecked();
+  await expect(toggle).toBeEnabled();
+  const line = settings.getByText(BLOCKED);
+  await expect(line).toBeVisible();
+  // A polite status the switch is described by, not an interruption.
+  await expect(line).toHaveAttribute("role", "status");
+  await expect(toggle).toHaveAccessibleDescription(new RegExp(BLOCKED.replace(/\./g, "\\.")));
+  await expect(settings.getByRole("alert")).toHaveCount(0);
+  expect(errors).toEqual([]);
+});
+
+test("notifications scene: Skip setup asks first and leaves them off", async ({ page }) => {
+  await bootFreshInstall(page);
+  await toNotifications(page);
+
+  await skipSetup(page);
+  await expect(skipDialog(page)).toBeVisible();
+  await expect(skipDialog(page)).toContainText("You can't chat until you pick a model");
+  // Backing out returns to the same step, still undecided.
+  await skipDialog(page).getByRole("button", { name: "Cancel" }).click();
+  await expect(skipDialog(page)).toBeHidden();
+  await expect(notificationsHeading(page)).toBeVisible();
+
+  await skipSetup(page);
+  await confirmSkip(page);
+
+  await expect(shell(page)).toBeVisible();
+  expect(savedNotificationFlags(await invokes(page)).filter((on) => on === true)).toEqual([]);
 });

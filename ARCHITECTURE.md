@@ -2,7 +2,7 @@
 
 ```
 ┌────────────────────────────────────────────────────────────────────┐
-│  ui/  (React + TS, Vite)                                           │
+│  ui/  (React + TS, Vite · hand-written CSS + shadcn/ui Alert)      │
 │  views: Onboarding · Chat · Library · Plugins · Settings           │
 │  state: zustand store — single seam to Rust in src/lib/api.ts      │
 └──────────────────────────────┬─────────────────────────────────────┘
@@ -110,9 +110,98 @@ pick", and the recommendation flow stays catalog-only.
 `ui/src/lib/types.ts`). The frontend never talks to llama-server directly —
 CSP only allows the IPC origin, so the webview has no network access at all.
 
+**Hand-written CSS first; Tailwind and shadcn/ui only for vendored
+components.** The UI's look is the tokenised stylesheets in `ui/src/styles/`;
+`global.css` holds the palette (light, plus the dark copy written once pinned
+by `Settings.theme` and once under the OS media query). shadcn/ui components
+are copied into `ui/src/components/ui/` as source — today only `Alert`, for the
+in-app alerts — and styled by Tailwind CSS v4, loaded through
+`@tailwindcss/vite` without Tailwind's preflight reset and scanning only that
+folder (`styles/tailwind.css`). Their colours are `@theme inline` aliases of the
+existing palette tokens, so Light, Dark and System all follow the one palette
+and no second set of dark rules exists. Everything Tailwind emits sits in a
+cascade layer and the hand-written CSS does not, so the hand-written CSS always
+wins; existing components are not migrated to it.
+
 **Resumable everything.** Downloads stream to `<file>.part` with HTTP Range
 resume; quitting mid-download resumes later. Engine status is polled, and the
 UI auto-wakes the engine on launch so the app opens ready to chat.
+
+**Alerts are decided in the UI; the OS mirror is delivered by Rust.** Four
+events — a model finishes loading, a model is unloaded, a model download
+finishes, an answer finishes — each raise one in-app alert (the store's
+`appAlerts`, rendered by `AlertHost`) and, when Settings → General's "Desktop
+notifications" switch is on and OpenPal is not the focused window, the same
+words as an OS notification (`notify_native`; Rust re-checks the switch and,
+except on Android where tao cannot read it, the window's focus). The "answer
+ready" in-app alert is skipped when that conversation is open in the chat view
+with nothing laid over it (not while the More dialog or conversation search
+covers it); the native one is never skipped for that reason. Events are
+detected by diffing, never by trusting one signal: engine load/unload comes
+from state transitions (`ui/src/lib/engineEvents.ts`), so the repeated
+2-second status polls cannot repeat an alert. Auto-unload is decided in Rust
+(`idle.rs`) whether or not the webview is awake; it only emits a payload-less
+`engine-status-changed` nudge so the UI re-reads and diffs sooner. The switch
+is `Settings.desktop_notifications`, off by default — including for a settings
+row saved before the field existed (struct-level `#[serde(default)]`).
+
+Each way of delivering is a `Notifier` backend in `crates/app/src/notify/`,
+behind one contract (permission, request, settings page, markup, post):
+
+- a bundled macOS app: `UNUserNotificationCenter` (`macos.rs`), for the
+  permission, the posts and the clicks. `usernoted` will not serve one bundle
+  as both a legacy and a modern client (it logs "You can't mix modern clients
+  with legacy clients" and drops every legacy post, even from later launches),
+  so nothing posts for OpenPal's bundle id through the legacy center. A
+  delegate on the center lets the banner show even while OpenPal is the active
+  app (a minimized window is not a focused one, but macOS would otherwise
+  swallow the banner) and hears the clicks.
+- macOS outside a bundle (`tauri dev`), where the modern center aborts the
+  process: the legacy center through `notify-rust`, posting as Terminal
+  (`macos_dev.rs`). A development convenience: no permission, no clicks.
+- Windows: WinRT toasts through `tauri-winrt-notification` (`windows.rs`).
+  Windows only shows a toast from an unpackaged app whose app id (AUMID) it
+  knows, and drops the rest without an error. OpenPal ships on Windows only as
+  a portable zip, with no Start-menu shortcut to carry the AUMID, so it writes
+  `HKCU\Software\Classes\AppUserModelId\com.myopenpal.openpal` (a display name)
+  itself: the one host trace a portable build leaves, written only once the
+  switch is on (by the request and before each post; reading the permission,
+  as Settings does, only looks). It also reads the per-app switch in Windows
+  Settings, so Windows can report "blocked" too.
+- Linux: the notification server over D-Bus through `notify-rust`
+  (`freedesktop.rs`), with the body's markup escaped.
+- Android: `NotifyPlugin.kt` (`android.rs`): a channel, the POST_NOTIFICATIONS
+  runtime permission (Android 13 and later; Tauri's permission cache is what
+  tells "can still ask" from "denied for good"), the app's notification
+  settings page, and taps.
+- iOS: `unsupported.rs`, until it has a backend.
+
+`notify::select` picks one at the start of `setup()` (the OS by `cfg`; whether
+a macOS binary is inside an app bundle at runtime), and commands only ever see
+the managed `Notifications`. `get_app_info`'s `nativeNotifications` says at
+boot whether there is a backend at all; that, not `isAndroid`, is what the UI
+leaves the switch, its onboarding step and native delivery out on (`isAndroid`
+only picks the switch's wording for a phone).
+
+The OS's answer is one of `granted`, `denied`, `prompt` (not asked yet) and
+`unsupported`; only macOS, Windows and Android can say `denied`, and turning
+the switch on is what asks (`request_notification_permission`, which raises
+macOS's and Android's prompt). Because neither asks again after a refusal, the
+"blocked" line tells the user what to switch on and carries an "Open
+notification settings" button (`open_notification_settings`): macOS's
+Notifications pane on OpenPal's own row via the bundle id, Windows' notifications
+page, or Android's app notification settings; if the page cannot be opened the
+line says where to look instead.
+
+A click on a notification (a tap on Android) is reported by the backend to
+`notify::Clicks`, which raises the window and sends a payload-less
+`notification-clicked` nudge; the store then reads the click
+(`take_notification_click`) and, for "answer ready", opens that conversation
+with nothing laid over it. The store also reads once at the end of boot, so a
+click that launched the app, or came in while it was locked, still lands. A
+Windows toast reports a click only while it is on screen (a click from the
+notification center would need a COM activator), and a Linux server only when
+it supports actions.
 
 **Per-model engine args.** Catalog entries carry an `extraArgs` field for
 model-specific launch flags, currently unused (every curated entry ships

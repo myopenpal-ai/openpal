@@ -20,6 +20,7 @@
         "minHeight": 620,
         "titleBarStyle": "Overlay",
         "hiddenTitle": true,
+        "backgroundThrottling": "disabled",
         "create": false
       }
     ],

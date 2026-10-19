@@ -1,16 +1,37 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import i18n from "../i18n";
 import SettingsSheet, { ExperimentalSection } from "./SettingsSheet";
 import { useStore } from "../state/store";
-import type { PluginInfo, Settings } from "../lib/types";
+import type { AppInfo, PluginInfo, Settings } from "../lib/types";
 
-const { updateSettings } = vi.hoisted(() => ({ updateSettings: vi.fn() }));
+const {
+  updateSettings,
+  notificationPermission,
+  requestNotificationPermission,
+  openNotificationSettings,
+} = vi.hoisted(() => ({
+  updateSettings: vi.fn(),
+  notificationPermission: vi.fn(),
+  requestNotificationPermission: vi.fn(),
+  openNotificationSettings: vi.fn(),
+}));
 
-// The one call the pages rendered here may make is the write behind the theme
-// picker (the store's `setTheme`); any other still throws.
-vi.mock("../lib/api", () => ({ api: { updateSettings } }));
+// The only calls the pages rendered here may make are the write behind the theme
+// picker and the notifications switch (the store's `setTheme` and
+// `setDesktopNotifications`), the OS permission read the Notifications group
+// does when it opens, the OS permission request that turning the switch on
+// makes, and the "blocked" line's button that opens the OS notification
+// settings; any other still throws.
+vi.mock("../lib/api", () => ({
+  api: {
+    updateSettings,
+    notificationPermission,
+    requestNotificationPermission,
+    openNotificationSettings,
+  },
+}));
 
 function plugin(overrides: Partial<PluginInfo> & { id: string; name: string }): PluginInfo {
   return {
@@ -186,6 +207,7 @@ describe("General settings: appearance", () => {
   beforeEach(() => {
     saveSettings.mockClear();
     updateSettings.mockReset().mockResolvedValue(undefined);
+    notificationPermission.mockReset().mockResolvedValue("granted");
     // Starting from nothing loaded makes seeding a theme a real change, which
     // the store pins on <html> the way boot does.
     useStore.setState({ settings: null, account: null, notice: null });
@@ -375,6 +397,352 @@ describe("General settings: appearance", () => {
         expect(radios[i]).toHaveAccessibleName(name),
       );
       expect(within(group).getByRole("radio", { checked: true })).toHaveAccessibleName("Sombre");
+      // Out before the language changes back, so the page isn't re-rendered
+      // outside act.
+      unmount();
+    } finally {
+      await i18n.changeLanguage("en");
+    }
+  });
+});
+
+describe("General settings: notifications", () => {
+  beforeEach(() => {
+    saveSettings.mockClear();
+    updateSettings.mockReset().mockResolvedValue(undefined);
+    notificationPermission.mockReset().mockResolvedValue("granted");
+    requestNotificationPermission.mockReset().mockResolvedValue("granted");
+    openNotificationSettings.mockReset().mockResolvedValue(undefined);
+    useStore.setState({
+      settings: null,
+      account: null,
+      notice: null,
+      appInfo: null,
+      notificationPermission: "granted",
+    });
+  });
+
+  function renderGeneral(settings: Partial<Settings> = {}) {
+    useStore.setState({ settings: settings as Settings, plugins: [], saveSettings });
+    return render(<SettingsSheet section="general" />);
+  }
+  const toggle = () => screen.getByRole("checkbox", { name: "Desktop notifications" });
+  const OPEN_SETTINGS = "Open notification settings";
+  const OPEN_FAILED =
+    "Couldn't open your system settings. Open them yourself, find OpenPal under Notifications and turn on \"Allow notifications\".";
+  const BLOCKED = "Notifications are blocked for OpenPal. In your system settings, turn on \"Allow notifications\" for OpenPal, then come back here.";
+
+  it("has a Notifications group with a Desktop notifications switch, described by its hint", () => {
+    renderGeneral({ desktopNotifications: false });
+    expect(screen.getByRole("heading", { level: 2, name: "Notifications" })).toBeInTheDocument();
+    // Named by the visible label (not the "On"/"Off" beside it), described by the hint.
+    expect(toggle()).toHaveAccessibleDescription(/system notification about models and answers/);
+    expect(toggle().closest("label")).toHaveTextContent("Off");
+  });
+
+  it.each([
+    { saved: undefined, checked: false, when: "a settings file saved before it existed has none" },
+    { saved: false, checked: false, when: "it is saved off" },
+    { saved: true, checked: true, when: "it is saved on" },
+  ])("is checked: $checked, when $when", ({ saved, checked }) => {
+    renderGeneral({ desktopNotifications: saved });
+    if (checked) expect(toggle()).toBeChecked();
+    else expect(toggle()).not.toBeChecked();
+  });
+
+  it("turns on with one click: saves the whole settings, asks the OS, no dialog of ours", async () => {
+    renderGeneral({ desktopNotifications: false, userName: "Ada" });
+    await waitFor(() => expect(notificationPermission).toHaveBeenCalledTimes(1)); // on opening
+    notificationPermission.mockClear();
+    // Merely opening the page reads; it never asks (and so never prompts).
+    expect(requestNotificationPermission).not.toHaveBeenCalled();
+
+    await userEvent.click(toggle());
+
+    expect(toggle()).toBeChecked();
+    expect(updateSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ desktopNotifications: true, userName: "Ada" }),
+    );
+    await waitFor(() => expect(requestNotificationPermission).toHaveBeenCalledTimes(1));
+    expect(notificationPermission).not.toHaveBeenCalled();
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    // Not one of the drafts saved when Settings closes: it saved itself.
+    expect(saveSettings).not.toHaveBeenCalled();
+  });
+
+  it("turns off with one click, saved, without asking the OS", async () => {
+    renderGeneral({ desktopNotifications: true });
+    await waitFor(() => expect(notificationPermission).toHaveBeenCalledTimes(1));
+    notificationPermission.mockClear();
+
+    await userEvent.click(toggle());
+
+    expect(toggle()).not.toBeChecked();
+    expect(updateSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ desktopNotifications: false }),
+    );
+    await act(async () => {});
+    expect(notificationPermission).not.toHaveBeenCalled();
+    expect(requestNotificationPermission).not.toHaveBeenCalled();
+  });
+
+  it("can be flipped from the keyboard with Space", async () => {
+    const user = userEvent.setup();
+    renderGeneral({ desktopNotifications: false });
+
+    toggle().focus();
+    await user.keyboard(" ");
+
+    expect(toggle()).toBeChecked();
+    expect(updateSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ desktopNotifications: true }),
+    );
+  });
+
+  it("goes back to the saved choice, with a notice, when the write fails", async () => {
+    updateSettings.mockRejectedValueOnce(new Error("disk full"));
+    renderGeneral({ desktopNotifications: false });
+
+    await userEvent.click(toggle());
+
+    await waitFor(() => expect(toggle()).not.toBeChecked());
+    expect(useStore.getState().notice).toContain("disk full");
+  });
+
+  it("reads the OS permission when the page opens, and shows no blocked line while it allows", async () => {
+    renderGeneral({ desktopNotifications: true });
+
+    await waitFor(() => expect(notificationPermission).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText(BLOCKED)).not.toBeInTheDocument();
+  });
+
+  it("shows the blocked line, as a description and not an alert, when the switch is on and the OS says no", async () => {
+    notificationPermission.mockResolvedValue("denied");
+    renderGeneral({ desktopNotifications: true });
+
+    const line = await screen.findByText(BLOCKED);
+    expect(toggle()).toHaveAccessibleDescription(/system notification about models/);
+    expect(toggle()).toHaveAccessibleDescription(/blocked for OpenPal/);
+    // Announced politely when it fills in, never an interrupting alert, and
+    // the switch is still theirs to use.
+    expect(line).toHaveAttribute("role", "status");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(toggle()).toBeEnabled();
+    expect(toggle()).toBeChecked();
+  });
+
+  it("has the blocked line's status region in place, empty, before the OS has said anything", async () => {
+    // A status message is only announced when it is added to a region that is
+    // already there, and the answer arrives after the switch is turned on.
+    renderGeneral({ desktopNotifications: false });
+    const region = document.querySelector(".settings-status");
+    expect(region).toHaveAttribute("role", "status");
+    expect(region).toBeEmptyDOMElement();
+    requestNotificationPermission.mockResolvedValue("denied");
+    await userEvent.click(toggle());
+    expect(await screen.findByText(BLOCKED)).toBe(region);
+  });
+
+  it("doesn't show the blocked line while the switch is off, whatever the OS says", async () => {
+    notificationPermission.mockResolvedValue("denied");
+    renderGeneral({ desktopNotifications: false });
+
+    await waitFor(() => expect(useStore.getState().notificationPermission).toBe("denied"));
+    expect(screen.queryByText(BLOCKED)).not.toBeInTheDocument();
+    expect(toggle()).toHaveAccessibleDescription(/^Get a system notification/);
+  });
+
+  it("shows the blocked line as soon as the OS refuses a switch just turned on", async () => {
+    // Open and untouched: nothing was blocked, the OS had not been asked yet.
+    renderGeneral({ desktopNotifications: false });
+    await waitFor(() => expect(notificationPermission).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText(BLOCKED)).not.toBeInTheDocument();
+
+    // The user says "Don't Allow" at the system prompt that the click raises.
+    requestNotificationPermission.mockResolvedValue("denied");
+    await userEvent.click(toggle());
+
+    expect(await screen.findByText(BLOCKED)).toBeInTheDocument();
+  });
+
+  it("re-reads the OS when the window regains focus, so fixing it in system settings clears the line", async () => {
+    notificationPermission.mockResolvedValue("denied");
+    renderGeneral({ desktopNotifications: true });
+    expect(await screen.findByText(BLOCKED)).toBeInTheDocument();
+
+    // The user allowed OpenPal in system settings and came back.
+    notificationPermission.mockResolvedValue("granted");
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+    });
+
+    await waitFor(() => expect(screen.queryByText(BLOCKED)).not.toBeInTheDocument());
+  });
+
+  it("offers a button to the OS notification settings with the blocked line, and with nothing else", async () => {
+    notificationPermission.mockResolvedValue("denied");
+    renderGeneral({ desktopNotifications: true });
+
+    const button = await screen.findByRole("button", { name: OPEN_SETTINGS });
+    // Next to the line but outside its status region (a button in a live region
+    // is read out again with every change), and not part of what describes the
+    // switch.
+    const region = document.querySelector(".settings-status");
+    expect(region).not.toContainElement(button);
+    expect(button.closest(".settings-field")).toContainElement(toggle());
+    expect(toggle()).not.toHaveAccessibleDescription(/Open notification settings/);
+    // Showing it opens nothing.
+    expect(openNotificationSettings).not.toHaveBeenCalled();
+  });
+
+  it("opens the OS settings when the button is pressed, and says nothing more when that works", async () => {
+    notificationPermission.mockResolvedValue("denied");
+    renderGeneral({ desktopNotifications: true });
+
+    await userEvent.click(await screen.findByRole("button", { name: OPEN_SETTINGS }));
+
+    expect(openNotificationSettings).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText(OPEN_FAILED, { exact: false })).not.toBeInTheDocument();
+    // Still blocked until the OS says otherwise.
+    expect(screen.getByText(BLOCKED)).toBeInTheDocument();
+  });
+
+  it("says where to look when the OS settings cannot be opened, and clears that on the next try", async () => {
+    notificationPermission.mockResolvedValue("denied");
+    openNotificationSettings.mockRejectedValueOnce(new Error("Not available on this system."));
+    renderGeneral({ desktopNotifications: true });
+
+    await userEvent.click(await screen.findByRole("button", { name: OPEN_SETTINGS }));
+
+    // Appended to the polite status the switch is described by: no alert, no
+    // raw error text, and the button is still there to try again.
+    const region = document.querySelector(".settings-status");
+    await waitFor(() => expect(region).toHaveTextContent(OPEN_FAILED));
+    expect(region).toHaveAttribute("role", "status");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(region).not.toHaveTextContent("Not available on this system");
+    expect(toggle()).toHaveAccessibleDescription(/Allow notifications/);
+
+    await userEvent.click(screen.getByRole("button", { name: OPEN_SETTINGS }));
+    expect(openNotificationSettings).toHaveBeenCalledTimes(2);
+    await waitFor(() => expect(region).not.toHaveTextContent(OPEN_FAILED));
+    expect(region).toHaveTextContent(BLOCKED);
+  });
+
+  it("has no button while the OS allows it or the switch is off", async () => {
+    notificationPermission.mockResolvedValue("granted");
+    renderGeneral({ desktopNotifications: true });
+    await waitFor(() => expect(notificationPermission).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole("button", { name: OPEN_SETTINGS })).not.toBeInTheDocument();
+
+    // Not asked yet is not blocked: turning the switch on is what asks.
+    act(() => useStore.setState({ notificationPermission: "prompt" }));
+    expect(screen.queryByText(BLOCKED)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: OPEN_SETTINGS })).not.toBeInTheDocument();
+
+    // Denied, but nobody asked for notifications: nothing to fix.
+    useStore.setState({ notificationPermission: "denied" });
+    await userEvent.click(toggle()); // off
+    await waitFor(() => expect(toggle()).not.toBeChecked());
+    expect(screen.queryByRole("button", { name: OPEN_SETTINGS })).not.toBeInTheDocument();
+  });
+
+  it("drops the button when the OS setting is fixed and the window comes back", async () => {
+    notificationPermission.mockResolvedValue("denied");
+    renderGeneral({ desktopNotifications: true });
+    expect(await screen.findByRole("button", { name: OPEN_SETTINGS })).toBeInTheDocument();
+
+    notificationPermission.mockResolvedValue("granted");
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+    });
+
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: OPEN_SETTINGS })).not.toBeInTheDocument(),
+    );
+  });
+
+  it("stops listening for focus once the page is gone", async () => {
+    const { unmount } = renderGeneral({ desktopNotifications: true });
+    await waitFor(() => expect(notificationPermission).toHaveBeenCalledTimes(1));
+    unmount();
+    notificationPermission.mockClear();
+
+    window.dispatchEvent(new Event("focus"));
+
+    await act(async () => {});
+    expect(notificationPermission).not.toHaveBeenCalled();
+  });
+
+  it("words the switch for a phone on Android, with the same hint-and-switch shape", async () => {
+    useStore.setState({ appInfo: { isAndroid: true, nativeNotifications: true } as AppInfo });
+    renderGeneral({ desktopNotifications: false });
+
+    const mobile = screen.getByRole("checkbox", { name: "Notifications on this device" });
+    expect(mobile).toHaveAccessibleDescription(/about downloads and answers while you're using another app/);
+    expect(screen.queryByRole("checkbox", { name: "Desktop notifications" })).not.toBeInTheDocument();
+    await act(async () => {});
+  });
+
+  it("is left out of a build with no OS notifications (Android, iOS)", async () => {
+    useStore.setState({ appInfo: { isAndroid: false, nativeNotifications: false } as AppInfo });
+    renderGeneral({ desktopNotifications: false });
+
+    expect(screen.queryByRole("heading", { level: 2, name: "Notifications" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("checkbox", { name: "Desktop notifications" })).not.toBeInTheDocument();
+    // Updates is still there after Language, and nothing asked the OS anything.
+    expect(screen.getByRole("heading", { level: 2, name: "Updates" })).toBeInTheDocument();
+    await act(async () => {});
+    expect(notificationPermission).not.toHaveBeenCalled();
+  });
+
+  // MoreDialog.test.tsx runs against a stub of this page, so this holds the real
+  // markup to what that stub assumes of it (see the same test for the theme).
+  it("is laid out the way Settings search finds it", () => {
+    renderGeneral();
+    const named = (text: string) =>
+      Array.from(document.querySelectorAll(".settings-label, .settings-group-title")).find(
+        (el) => el.textContent?.trim() === text,
+      );
+    expect(named("Desktop notifications")?.closest(".settings-field")).toContainElement(toggle());
+    expect(named("Notifications")?.closest(".settings-group")).toContainElement(toggle());
+    // Search focuses the first enabled control of the field: the switch itself.
+    expect(toggle()).toBeEnabled();
+  });
+
+  it("sits after Language and before Updates", () => {
+    renderGeneral();
+    const order = ["Appearance", "Language", "Notifications", "Desktop notifications", "Updates"];
+    const shown = Array.from(document.querySelectorAll(".settings-label, .settings-group-title"))
+      .map((el) => el.textContent ?? "")
+      .filter((text) => order.includes(text));
+    expect(shown).toEqual(order);
+  });
+
+  it("is named in the General subtitle", () => {
+    renderGeneral();
+    expect(screen.getByText(/notifications/i, { selector: ".settings-sub" })).toBeInTheDocument();
+  });
+
+  it("is all in French when the app is", async () => {
+    await i18n.changeLanguage("fr");
+    try {
+      notificationPermission.mockResolvedValue("denied");
+      const { unmount } = renderGeneral({ desktopNotifications: true });
+      expect(screen.getByText(/notifications/i, { selector: ".settings-sub" })).toBeInTheDocument();
+      expect(screen.getByRole("heading", { level: 2, name: "Notifications" })).toBeInTheDocument();
+      const field = screen.getByRole("checkbox", { name: "Notifications de bureau" });
+      expect(field).toBeChecked();
+      expect(field).toHaveAccessibleDescription(/notification système au sujet des modèles/);
+      expect(
+        await screen.findByText(
+          "Les notifications sont bloquées pour OpenPal. Dans les réglages de votre système, activez « Autoriser les notifications » pour OpenPal, puis revenez ici.",
+        ),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: "Ouvrir les réglages des notifications" }),
+      ).toBeInTheDocument();
       // Out before the language changes back, so the page isn't re-rendered
       // outside act.
       unmount();

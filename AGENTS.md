@@ -24,11 +24,18 @@ asks otherwise:
   command must be added there to be reachable from the frontend.
 - **Every user-facing string needs both `en` and `fr` keys.**
   `ui/src/i18n/keys.test.ts` fails CI otherwise.
+- **Tailwind only works inside `ui/src/components/ui/`.** The shadcn/ui
+  components are vendored there, and `ui/src/styles/tailwind.css` scans only
+  that folder, ships no preflight and maps shadcn colours onto `global.css`
+  tokens — use tokens, never `dark:`. Its output is layered and loses to every
+  unlayered rule, so layout and margins stay in the hand-written CSS.
 - **Never run a blanket `cargo update`.** `time` is pinned in `Cargo.lock`; bump
   only the dependency you mean to.
 - **Pull-request CI compiles Linux only.** Platform-gated code (macOS sandbox,
   keychain, Windows paths, Android) isn't built by the PR gates — say which
-  platform you verified it on.
+  platform you verified it on. The one exception is the notification code
+  (`crates/app/src/notify/`): `notify-platforms.yml` builds and tests it on
+  macOS and Windows, and type-checks it for Android, when it changes.
 
 ## Checks (what CI runs)
 

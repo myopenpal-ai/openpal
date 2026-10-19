@@ -6,6 +6,7 @@ import FactoryResetConfirm from "../components/FactoryResetConfirm";
 import PinPad from "../components/PinPad";
 import ThemePicker from "../components/ThemePicker";
 import { api } from "../lib/api";
+import { hasNativeNotifications } from "../lib/appEvents";
 import { usePluginDisplayName } from "../lib/pluginName";
 import { normalizeTheme, THEMES } from "../lib/theme";
 import type {
@@ -127,7 +128,8 @@ function SettingsGroup({ title, children }: { title: string; children: ReactNode
   );
 }
 
-/** General: who's signed in, the app's appearance and language, and updates. */
+/** General: who's signed in, the app's appearance and language, notifications,
+ * and updates. */
 function GeneralSettings() {
   const settings = useStore((s) => s.settings);
   const saveSettings = useStore((s) => s.saveSettings);
@@ -154,6 +156,8 @@ function GeneralSettings() {
           <option value="fr">Français</option>
         </select>
       </div>
+
+      <NotificationsSection />
 
       <UpdatesSection />
     </>
@@ -591,6 +595,113 @@ function AppearanceSection() {
             label: t(`settingsSheet.appearance.theme.${value}`),
           }))}
         />
+      </div>
+    </SettingsGroup>
+  );
+}
+
+/**
+ * "Desktop notifications": whether the four model/answer alerts are also sent
+ * as OS notifications while OpenPal is in the background. Like the theme it
+ * applies at once, with no draft and no Save, so it isn't one of the `Drafts`:
+ * the pick goes through the store's `setDesktopNotifications`, which persists it
+ * and, when turning it on, asks the OS for permission (on macOS: its one-time
+ * prompt). Opening this page only reads the OS's answer and never prompts.
+ *
+ * The "blocked" line is a plain hint, not an alert, and the switch stays
+ * enabled either way: the user may well be about to fix it in system settings,
+ * and Settings search focuses only an enabled control. It shows only while the
+ * switch is on, since a user who never asked for notifications has nothing to be
+ * told is blocked. Because the OS never asks twice, the line says what to do
+ * and carries a button that opens the OS page where "Allow notifications" is;
+ * if that page can't be opened, the line says where to find it instead.
+ *
+ * A build with no OS notifications at all (`AppInfo.nativeNotifications`:
+ * Android and iOS today) leaves the group out, and settingsSearch.ts doesn't
+ * offer it either.
+ */
+function NotificationsSection() {
+  const { t } = useTranslation();
+  const supported = useStore((s) => hasNativeNotifications(s.appInfo));
+  // A phone or tablet has no desktop, and nothing about models to say: the
+  // same switch, in words for Android.
+  const context = useStore((s) => (s.appInfo?.isAndroid ? "mobile" : undefined));
+  // A settings row saved before this existed has no value, which reads as off,
+  // the same as on a fresh install.
+  const on = useStore((s) => s.settings?.desktopNotifications === true);
+  const permission = useStore((s) => s.notificationPermission);
+  const setDesktopNotifications = useStore((s) => s.setDesktopNotifications);
+  const refreshNotificationPermission = useStore((s) => s.refreshNotificationPermission);
+  const labelId = useId();
+  const hintId = useId();
+  const blockedId = useId();
+  const [openFailed, setOpenFailed] = useState(false);
+
+  // The user may have changed the OS setting since the app last asked, so read
+  // it when this page opens and again whenever the window regains focus, which
+  // is where they come back to after visiting system settings. The store's read
+  // never throws and keeps the last answer when it can't tell.
+  useEffect(() => {
+    if (!supported) return;
+    void refreshNotificationPermission();
+    const onFocus = () => void refreshNotificationPermission();
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [supported, refreshNotificationPermission]);
+
+  if (!supported) return null;
+  const blocked = on && permission === "denied";
+
+  const openSettings = async () => {
+    setOpenFailed(false);
+    try {
+      await api.openNotificationSettings();
+    } catch {
+      setOpenFailed(true);
+    }
+  };
+
+  return (
+    <SettingsGroup title={t("settingsSheet.notifications.title")}>
+      {/* Named by the visible label, not by the toggle's "On"/"Off" text, so a
+          screen reader says what the switch is for; the hint, and the blocked
+          line while it shows, describe it. */}
+      <div className="settings-field">
+        <span id={labelId} className="settings-label">
+          {t("settingsSheet.notifications.native.label", { context })}
+        </span>
+        <span id={hintId} className="settings-hint">
+          {t("settingsSheet.notifications.native.hint", { context })}
+        </span>
+        <label className="settings-toggle">
+          <input
+            type="checkbox"
+            checked={on}
+            onChange={(e) => void setDesktopNotifications(e.target.checked)}
+            aria-labelledby={labelId}
+            aria-describedby={blocked ? `${hintId} ${blockedId}` : hintId}
+          />
+          <span aria-hidden="true">
+            {t(on ? "settingsSheet.toggle.on" : "settingsSheet.toggle.off")}
+          </span>
+        </label>
+        {/* Always in the DOM, empty until the OS says no: a status message is
+            only announced when it is added to a region that already exists, and
+            the "blocked" answer arrives a moment after the switch is turned on. */}
+        <span id={blockedId} className="settings-hint settings-status" role="status">
+          {blocked ? t("settingsSheet.notifications.native.blocked") : null}
+          {blocked && openFailed ? ` ${t("settingsSheet.notifications.native.openFailed")}` : null}
+        </span>
+        {/* Outside the status region, which is read out as text: a button in it
+            would be announced with every change. A sibling of the switch, so
+            Tab goes switch -> button. */}
+        {blocked && (
+          <div className="settings-notification-help">
+            <button className="btn-ghost" onClick={() => void openSettings()}>
+              {t("settingsSheet.notifications.native.openSettings")}
+            </button>
+          </div>
+        )}
       </div>
     </SettingsGroup>
   );

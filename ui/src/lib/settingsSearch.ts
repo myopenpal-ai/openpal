@@ -1,3 +1,4 @@
+import { hasNativeNotifications } from "./appEvents";
 import type { AppInfo, PluginInfo } from "./types";
 import type { SettingsSection } from "../state/store";
 
@@ -23,6 +24,10 @@ interface SettingsSearchEntry<Key extends string = string> {
 }
 
 const hasVoice = ({ plugins }: SettingsSearchContext) => plugins.some((p) => p.id === "speech");
+/** A build with no OS notifications (iOS) has no such group in Settings. */
+const showsNotifications = ({ appInfo }: SettingsSearchContext) => hasNativeNotifications(appInfo);
+/** Android words the same switch for a phone (the `_mobile` keys). */
+const onAndroid = ({ appInfo }: SettingsSearchContext) => appInfo?.isAndroid ?? false;
 
 /**
  * Everything the More dialog's search can find inside Settings, in nav
@@ -39,6 +44,19 @@ export const SETTINGS_SEARCH_ENTRIES = [
     hint: "settingsSheet.appearance.theme.hint",
   },
   { section: "general", label: "settingsSheet.language.label" },
+  { section: "general", label: "settingsSheet.notifications.title", when: showsNotifications },
+  {
+    section: "general",
+    label: "settingsSheet.notifications.native.label",
+    hint: "settingsSheet.notifications.native.hint",
+    when: (c) => showsNotifications(c) && !onAndroid(c),
+  },
+  {
+    section: "general",
+    label: "settingsSheet.notifications.native.label_mobile",
+    hint: "settingsSheet.notifications.native.hint_mobile",
+    when: (c) => showsNotifications(c) && onAndroid(c),
+  },
   { section: "general", label: "settingsSheet.updates.title" },
   { section: "general", label: "settingsSheet.diagnostics.updates.label" },
   {

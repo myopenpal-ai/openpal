@@ -1,0 +1,4 @@
+<resources>
+    <string name="notification_channel_name">Téléchargements et réponses</string>
+    <string name="notification_channel_description">Quand un téléchargement se termine ou qu\'une réponse est prête pendant que vous utilisez une autre app.</string>
+</resources>

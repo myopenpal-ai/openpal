@@ -3,6 +3,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import "@fontsource-variable/bricolage-grotesque";
 import "katex/dist/katex.min.css";
+import "./styles/tailwind.css";
 import "./styles/global.css";
 import "./styles/onboarding.css";
 import "./styles/chat.css";
@@ -12,6 +13,7 @@ import "./styles/plugins.css";
 import "./styles/discover.css";
 import "./styles/skills.css";
 import "./styles/writing-tools.css";
+import "./styles/alerts.css";
 import App from "./App";
 import { api } from "./lib/api";
 

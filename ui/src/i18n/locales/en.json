@@ -24,7 +24,7 @@
     "sections": {
       "general": {
         "label": "General",
-        "subtitle": "Your account, the app's appearance, language, and updates."
+        "subtitle": "Your account, the app's appearance, language, notifications, and updates."
       },
       "chat": {
         "label": "Chat",
@@ -76,6 +76,18 @@
         "system": "System",
         "light": "Light",
         "dark": "Dark"
+      }
+    },
+    "notifications": {
+      "title": "Notifications",
+      "native": {
+        "label": "Desktop notifications",
+        "label_mobile": "Notifications on this device",
+        "hint": "Get a system notification about models and answers while OpenPal is in the background.",
+        "hint_mobile": "Get a notification about downloads and answers while you're using another app.",
+        "blocked": "Notifications are blocked for OpenPal. In your system settings, turn on \"Allow notifications\" for OpenPal, then come back here.",
+        "openSettings": "Open notification settings",
+        "openFailed": "Couldn't open your system settings. Open them yourself, find OpenPal under Notifications and turn on \"Allow notifications\"."
       }
     },
     "toggle": {
@@ -527,6 +539,29 @@
       "summary": "Advanced"
     }
   },
+  "alerts": {
+    "region": "Notifications",
+    "dismiss": "Dismiss"
+  },
+  "notifications": {
+    "modelLoaded": {
+      "title": "Model ready",
+      "body": "{{name}} is loaded and ready to chat."
+    },
+    "modelUnloaded": {
+      "title": "Model unloaded",
+      "body": "{{name}} is no longer loaded."
+    },
+    "downloadFinished": {
+      "title": "Download complete",
+      "body": "{{name}} has finished downloading."
+    },
+    "answerReady": {
+      "title": "Answer ready",
+      "body": "OpenPal has finished answering."
+    },
+    "unknownModel": "Your AI"
+  },
   "autoUnloadBanner": {
     "unloadingIn": "Unloading your AI in {{seconds}}s to free up memory.",
     "announce": "Your AI is about to unload to free up memory.",
@@ -680,6 +715,12 @@
       "light": "Light",
       "dark": "Dark",
       "continue": "Continue"
+    },
+    "notifications": {
+      "title": "Want a heads-up?",
+      "sub": "OpenPal can notify you when a model loads, unloads or finishes downloading, and when an answer is ready, while you're in another window. You can change this anytime in Settings.",
+      "sub_mobile": "OpenPal can notify you when a download finishes or an answer is ready, while you're using another app. You can change this anytime in Settings.",
+      "enable": "Turn on notifications"
     },
     "scan": {
       "title": "First, let's see what your Mac can do.",

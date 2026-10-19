@@ -1,4 +1,7 @@
 <resources>
     <string name="app_name">OpenPal</string>
     <string name="main_activity_title">OpenPal</string>
+    <!-- NotifyPlugin.kt's channel, as Android's notification settings list it. -->
+    <string name="notification_channel_name">Downloads and answers</string>
+    <string name="notification_channel_description">When a download finishes or an answer is ready while you\'re using another app.</string>
 </resources>

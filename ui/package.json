@@ -16,6 +16,8 @@
   "dependencies": {
     "@fontsource-variable/bricolage-grotesque": "^5",
     "@tauri-apps/api": "^2",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
     "diff": "^9.0.0",
     "i18next": "^26",
     "katex": "^0.16.47",
@@ -28,10 +30,12 @@
     "rehype-katex": "^7.0.1",
     "remark-gfm": "^4",
     "remark-math": "^6.0.0",
+    "tailwind-merge": "^3.7.0",
     "zustand": "^5"
   },
   "devDependencies": {
     "@playwright/test": "^1.61.1",
+    "@tailwindcss/vite": "^4.3.3",
     "@testing-library/dom": "^10.4.1",
     "@testing-library/jest-dom": "^7.0.0",
     "@testing-library/react": "^16.3.2",
@@ -46,6 +50,7 @@
     "eslint": "^9.39.5",
     "eslint-plugin-jsx-a11y": "^6.10.2",
     "jsdom": "^29.1.1",
+    "tailwindcss": "^4.3.3",
     "typescript": "^5",
     "vite": "^8",
     "vitest": "^4.1.10"

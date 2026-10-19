@@ -1,0 +1,52 @@
+/* ---------------------------------------------------------------------------
+   Tailwind CSS v4, for shadcn/ui components ONLY (src/components/ui/).
+
+   The app's own look is the hand-written Hearth stylesheets beside this file.
+   Tailwind is wired in so it can never restyle any of that:
+
+   - No preflight. `@import "tailwindcss"` would pull in preflight.css, a
+     global reset that fights global.css's own. Only theme.css (the design
+     tokens utilities read) and utilities.css (the utility classes) come in.
+   - No automatic source detection (`source(none)`). Tailwind only generates
+     the classes found under the `@source` paths below, so a stray word in some
+     other file ("flex", "hidden", "container") never turns into a rule.
+     A file that uses Tailwind classes must live under src/components/ui/ or
+     be added as another @source line, or its classes silently don't exist.
+   - Everything Tailwind emits is in a cascade layer; the Hearth stylesheets
+     are unlayered, and unlayered always wins. That is the point (nothing here
+     can override them) and the catch: a utility loses to any unlayered rule on
+     the same property, e.g. `* { margin: 0 }` kills `m-*`/`mt-*`, and the
+     `button { padding: 0; border: none; background: none }` reset kills
+     `p-*`/`border`/`bg-*` on a <button>. Hand-written CSS can therefore
+     override a shadcn class without tailwind-merge.
+   - Colors are not new tokens. `@theme inline` points each shadcn color at an
+     existing global.css token, so Light, Dark and System all follow the three
+     palette blocks already there, and nothing is added to them (which
+     contrast.test.ts would have to learn about). Do not add `dark:` utilities
+     or a `dark` custom variant: there is no `.dark` class in this app.
+   --------------------------------------------------------------------------- */
+
+@layer theme, base, components, utilities;
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities) source(none);
+@source "../components/ui";
+
+@theme inline {
+  --color-background: var(--paper);
+  --color-foreground: var(--ink);
+  --color-card: var(--paper-raised);
+  --color-card-foreground: var(--ink);
+  /* --ink-soft, not --ink-faint: only --ink-soft is held to 4.5:1 for text. */
+  --color-muted-foreground: var(--ink-soft);
+  --color-destructive: var(--danger);
+  --color-border: var(--line);
+  --radius-lg: var(--radius-m);
+}
+
+/* What preflight's `* { border: 0 solid <color> }` would have given shadcn's
+   `border` utility: a default border color, but only on shadcn elements. */
+@layer base {
+  [data-slot] {
+    @apply border-border;
+  }
+}

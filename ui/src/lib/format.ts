@@ -52,6 +52,15 @@ export function isStartingModelDiskSlow(models: ModelInfo[], modelId: string): b
   return models.find((m) => m.spec.id === modelId)?.fit === "diskSlow";
 }
 
+/** The display name of the model with this id — `spec.name`, the same label
+ * the sidebar's engine pill shows — or null when `models` doesn't hold it
+ * (not loaded yet, or the model was deleted). Callers that need words for the
+ * user fall back to a generic name; they never show the raw id, which for a
+ * custom model reads like `custom-qwen3-4b-q4-k-m`. */
+export function engineModelName(models: ModelInfo[], modelId: string): string | null {
+  return models.find((m) => m.spec.id === modelId)?.spec.name || null;
+}
+
 /** Total download/on-disk size across every shard (shard 1 + `extraShards`).
  * Model-size displays must use this, not `.sizeBytes` alone, or a split
  * model's real size reads as shard 1's size only. Structurally typed so it

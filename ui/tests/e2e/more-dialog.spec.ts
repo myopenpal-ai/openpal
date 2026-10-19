@@ -105,7 +105,15 @@ test("every Settings category shows its own settings, and only those", async ({ 
   const text = (t: string) => dialog.getByText(t, { exact: true });
 
   const expected: [string, Locator[]][] = [
-    ["General", [text("Theme"), text("Language"), ...groups(["Appearance", "Updates"])]],
+    [
+      "General",
+      [
+        text("Theme"),
+        text("Language"),
+        text("Desktop notifications"),
+        ...groups(["Appearance", "Notifications", "Updates"]),
+      ],
+    ],
     ["Chat", [dialog.getByRole("textbox", { name: /Personality/ }), text("Smart tuning")]],
     ["AI model", [text("Smart model loading"), text("Add your own models"), ...groups(["Performance"])]],
     ["Privacy & safety", [text("Crisis support banner"), ...groups(["App lock", "Parental controls"])]],
@@ -177,6 +185,57 @@ test("the nav's search finds the Theme setting and opens General right on its op
     "aria-current",
     "page",
   );
+});
+
+test("the nav's search finds Desktop notifications and opens General right on its switch", async ({
+  page,
+}) => {
+  const consoleErrors: string[] = [];
+  page.on("console", (msg) => {
+    if (msg.type() === "error") consoleErrors.push(msg.text());
+  });
+  await openApp(page);
+  await openFromMoreMenu(page, "Skills");
+  const dialog = page.getByRole("dialog");
+  const nav = dialog.getByRole("navigation", { name: "More" });
+  const search = nav.getByRole("textbox", { name: "Search settings" });
+
+  // Both the group and its switch are named "notifications"; the switch is the
+  // one whose hint also says "system notification".
+  await search.fill("desktop notifications");
+  await nav.getByRole("button", { name: "Desktop notifications General" }).click();
+
+  await expect(page.getByRole("dialog", { name: "Settings" })).toBeVisible();
+  await expect(dialog.getByRole("heading", { level: 1, name: "General" })).toBeVisible();
+  const field = dialog.locator(".settings-field", { hasText: "Desktop notifications" });
+  await expect(field).toHaveClass(/settings-search-hit/);
+  await expect(field).toBeInViewport();
+  // Focus lands on the switch itself, so Space flips it at once.
+  const toggle = field.getByRole("checkbox", { name: "Desktop notifications" });
+  await expect(toggle).toBeFocused();
+  await expect(toggle).not.toBeChecked();
+  await expect(search).toHaveValue("");
+  expect(consoleErrors).toEqual([]);
+});
+
+test("searching for notifications offers the group as well as the switch, and the group opens General", async ({
+  page,
+}) => {
+  await openApp(page);
+  await openFromMoreMenu(page, "Skills");
+  const dialog = page.getByRole("dialog");
+  const nav = dialog.getByRole("navigation", { name: "More" });
+
+  await nav.getByRole("textbox", { name: "Search settings" }).fill("notifications");
+  const group = nav.getByRole("button", { name: "Notifications General", exact: true });
+  await expect(group).toBeVisible();
+  await expect(nav.getByRole("button", { name: "Desktop notifications General" })).toBeVisible();
+  await group.click();
+
+  await expect(dialog.getByRole("heading", { level: 1, name: "General" })).toBeVisible();
+  const groupSection = dialog.getByRole("region", { name: "Notifications" });
+  await expect(groupSection).toHaveClass(/settings-search-hit/);
+  await expect(groupSection).toBeInViewport();
 });
 
 test("searching for Theme with Dark saved lands focus on Dark, the option the arrow keys continue from", async ({
@@ -294,7 +353,13 @@ test("the Android pairing pill opens the dialog on Settings' Devices", async ({ 
   await openApp(
     page,
     {
-      get_app_info: { portable: false, isAndroid: true, dataDir: "/tmp/openpal-e2e", version: "0.1.0" },
+      get_app_info: {
+        portable: false,
+        isAndroid: true,
+        nativeNotifications: false,
+        dataDir: "/tmp/openpal-e2e",
+        version: "0.1.0",
+      },
       get_engine_status: { type: "remoteUnpaired" },
     },
     { stubChannels: true },

@@ -12,6 +12,11 @@ mod commands;
 mod factory_reset;
 mod idle;
 mod logging;
+// OS-native notifications: one `Notifier` backend per kind of platform, picked
+// by `notify::select` at the start of `setup()` below rather than by swapping
+// files here, because a macOS binary only knows at runtime whether it is
+// inside an app bundle (see notify/mod.rs).
+mod notify;
 // Desktop/iOS: spawn the OS's default opener (opener.rs). Android: bridges
 // Intent.ACTION_VIEW instead (opener_android.rs) — see that file's own doc
 // comment for why a subprocess spawn doesn't work there at all.
@@ -92,7 +97,8 @@ pub fn run() {
     let builder = builder
         .plugin(secret_store::plugin_init())
         .plugin(wifi_lock::plugin_init())
-        .plugin(opener::plugin_init());
+        .plugin(opener::plugin_init())
+        .plugin(notify::android_plugin_init());
     builder
         .setup(|app| {
             // The whole boot sequence runs inside this closure, itself
@@ -108,6 +114,11 @@ pub fn run() {
             // `fatal_startup_error` dialog below.
             let outcome = std::panic::catch_unwind(AssertUnwindSafe(
                 || -> Result<(), Box<dyn std::error::Error>> {
+                    // Before anything the window can call: the notification
+                    // commands answer pre-unlock, and `get_app_info` reports
+                    // whether this build has a backend at all.
+                    app.manage(notify::select(app.handle()));
+
                     // Phase 1, pre-unlock, no crypto: paths, the instance
                     // lock, file logging (+ panic hook), and the window —
                     // see `BootState`'s doc comment. A failure here has
@@ -163,10 +174,13 @@ pub fn run() {
         })
         // Every command below except `get_app_info`, `generate_recovery_code`,
         // `attempt_recovery_unlock`, `get_app_lock_status`, `verify_app_lock_pin`,
-        // `set_app_lock_pin`, `unlock_app_lock_with_recovery_code`, and
+        // `set_app_lock_pin`, `unlock_app_lock_with_recovery_code`,
+        // `notification_permission`, `request_notification_permission`,
+        // `open_notification_settings` and `take_notification_click` (they only
+        // ask the OS, send the user to it, or hand back a click), and
         // `factory_reset` (see their own doc comments) takes
         // `State<'_, AppState>`, unmanaged until `state::finish_unlock`
-        // succeeds. That alone is the pre-unlock gate for the other ~93 —
+        // succeeds. That alone is the pre-unlock gate for the other ~94 —
         // deliberately audited once, here, rather than per-command: Tauri's
         // `State<T>` extractor already rejects a command with a catchable
         // error (not a panic) when `T` isn't managed yet, confirmed against
@@ -194,6 +208,11 @@ pub fn run() {
             commands::start_engine,
             commands::stop_engine,
             commands::get_engine_status,
+            commands::notification_permission,
+            commands::request_notification_permission,
+            commands::open_notification_settings,
+            commands::take_notification_click,
+            commands::notify_native,
             commands::snooze_auto_unload,
             commands::list_cloud_models,
             commands::chat_stream,

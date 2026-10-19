@@ -4,6 +4,7 @@
  */
 
 import { Channel, invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import type {
   Account,
   AccountEvent,
@@ -35,6 +36,8 @@ import type {
   HfSearchQuery,
   ImportSummary,
   ModelInfo,
+  NotificationClick,
+  NotificationPermission,
   ParentalConfigInput,
   ParentalSettingsView,
   ParentalStatus,
@@ -181,6 +184,61 @@ export const api = {
    * activity. Backs AutoUnloadTooltip's "Cancel" button
    * and the composer's typing-pauses-the-countdown behavior. */
   snoozeAutoUnload: () => invoke<void>("snooze_auto_unload"),
+  /** Subscribe to Rust's "the engine's state may have changed" nudge — sent
+   * when the idle loop auto-unloads the model, which nothing in the webview
+   * would otherwise notice until its next 2s poll (and a hidden window's
+   * timers are throttled). It carries no payload on purpose: the caller
+   * re-reads `getEngineStatus` and diffs, so this and the poll can never
+   * disagree. Resolves to the unsubscribe function; resolves to a no-op where
+   * there is no event bridge (the Playwright mock, jsdom) instead of rejecting. */
+  onEngineStatusChanged: async (cb: () => void): Promise<() => void> => {
+    try {
+      return await listen("engine-status-changed", () => cb());
+    } catch {
+      return () => {};
+    }
+  },
+
+  // Notifications
+  /** Whether the OS currently lets OpenPal post notifications. Never prompts.
+   * "denied" (only macOS can say so today) is what puts up Settings' "blocked"
+   * line; see `NotificationPermission` for the other answers. */
+  notificationPermission: () =>
+    invoke<NotificationPermission>("notification_permission"),
+  /** Ask the OS to let OpenPal post notifications, and resolve to where that
+   * left us. On macOS this is what shows the system's one-time "Allow
+   * notifications?" prompt, and it resolves once the user has answered; it is
+   * called when the user turns the switch on, never on its own. Elsewhere there
+   * is nothing to ask and it reads like `notificationPermission`. */
+  requestNotificationPermission: () =>
+    invoke<NotificationPermission>("request_notification_permission"),
+  /** Open the OS page where the user allows notifications for OpenPal (on
+   * macOS: System Settings -> Notifications, on OpenPal's row). Rejects where
+   * there is no such page to open, so a caller can tell the user where to look. */
+  openNotificationSettings: () => invoke<void>("open_notification_settings"),
+  /** Post an OS notification. Rust re-checks the "Desktop notifications"
+   * switch and that OpenPal is not the focused window, and posts nothing
+   * otherwise — so a caller that decided wrongly can't produce a stray one.
+   * `conversationId` is what a click on it opens (see `takeNotificationClick`).
+   * Rejects before the app is unlocked; callers swallow that. */
+  notifyNative: (title: string, body: string, conversationId: string | null = null) =>
+    invoke<void>("notify_native", { title, body, conversationId }),
+  /** Subscribe to Rust's "a notification was clicked" nudge. Rust has already
+   * brought the window forward; the nudge carries no payload, and the caller
+   * reads the click itself with `takeNotificationClick`, so a click that
+   * arrived before anyone listened (the one that launched the app) is read the
+   * same way. Resolves to the unsubscribe function; resolves to a no-op where
+   * there is no event bridge (the Playwright mock, jsdom) instead of rejecting. */
+  onNotificationClicked: async (cb: () => void): Promise<() => void> => {
+    try {
+      return await listen("notification-clicked", () => cb());
+    } catch {
+      return () => {};
+    }
+  },
+  /** The notification click not acted on yet, once (a second call has
+   * nothing); null when there is none. Works before unlock. */
+  takeNotificationClick: () => invoke<NotificationClick | null>("take_notification_click"),
 
   // Cloud models
   /** The cloud model catalog — shown to everyone, signed in or not. */

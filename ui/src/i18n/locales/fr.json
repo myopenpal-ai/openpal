@@ -24,7 +24,7 @@
     "sections": {
       "general": {
         "label": "Général",
-        "subtitle": "Votre compte, l'apparence, la langue de l'application et les mises à jour."
+        "subtitle": "Votre compte, l'apparence, la langue de l'application, les notifications et les mises à jour."
       },
       "chat": {
         "label": "Discussion",
@@ -76,6 +76,18 @@
         "system": "Système",
         "light": "Clair",
         "dark": "Sombre"
+      }
+    },
+    "notifications": {
+      "title": "Notifications",
+      "native": {
+        "label": "Notifications de bureau",
+        "label_mobile": "Notifications sur cet appareil",
+        "hint": "Recevez une notification système au sujet des modèles et des réponses lorsque OpenPal est en arrière-plan.",
+        "hint_mobile": "Recevez une notification au sujet des téléchargements et des réponses pendant que vous utilisez une autre app.",
+        "blocked": "Les notifications sont bloquées pour OpenPal. Dans les réglages de votre système, activez « Autoriser les notifications » pour OpenPal, puis revenez ici.",
+        "openSettings": "Ouvrir les réglages des notifications",
+        "openFailed": "Impossible d'ouvrir les réglages de votre système. Ouvrez-les vous-même, trouvez OpenPal dans Notifications et activez « Autoriser les notifications »."
       }
     },
     "toggle": {
@@ -527,6 +539,29 @@
       "summary": "Avancé"
     }
   },
+  "alerts": {
+    "region": "Notifications",
+    "dismiss": "Fermer"
+  },
+  "notifications": {
+    "modelLoaded": {
+      "title": "Modèle prêt",
+      "body": "{{name}} est chargé et prêt à discuter."
+    },
+    "modelUnloaded": {
+      "title": "Modèle déchargé",
+      "body": "{{name}} n'est plus chargé."
+    },
+    "downloadFinished": {
+      "title": "Téléchargement terminé",
+      "body": "{{name}} a fini de se télécharger."
+    },
+    "answerReady": {
+      "title": "Réponse prête",
+      "body": "OpenPal a fini de répondre."
+    },
+    "unknownModel": "Le modèle"
+  },
   "autoUnloadBanner": {
     "unloadingIn": "Déchargement de votre IA dans {{seconds}}s pour libérer de la mémoire.",
     "announce": "Votre IA va bientôt être déchargée pour libérer de la mémoire.",
@@ -680,6 +715,12 @@
       "light": "Clair",
       "dark": "Sombre",
       "continue": "Continuer"
+    },
+    "notifications": {
+      "title": "Souhaitez-vous être prévenu ?",
+      "sub": "OpenPal peut vous notifier quand un modèle se charge, se décharge ou finit de se télécharger, et quand une réponse est prête, pendant que vous êtes dans une autre fenêtre. Vous pourrez modifier ce choix à tout moment dans les Réglages.",
+      "sub_mobile": "OpenPal peut vous prévenir quand un téléchargement se termine ou qu'une réponse est prête, pendant que vous utilisez une autre app. Vous pourrez modifier ce choix à tout moment dans les Réglages.",
+      "enable": "Activer les notifications"
     },
     "scan": {
       "title": "D'abord, voyons ce que votre Mac sait faire.",

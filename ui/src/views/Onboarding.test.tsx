@@ -1,10 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import "../i18n";
+import i18n from "../i18n";
 import Onboarding from "./Onboarding";
 import { useStore } from "../state/store";
 import type {
+  AppInfo,
   DownloadEvent,
   EngineStatus,
   HardwareInfo,
@@ -20,6 +21,8 @@ const {
   getSettings,
   getModels,
   updateSettings,
+  notificationPermission,
+  requestNotificationPermission,
   installMockDefaults,
 } = vi.hoisted(() => {
   const downloadModel = vi.fn();
@@ -27,6 +30,11 @@ const {
   const getSettings = vi.fn();
   const getModels = vi.fn();
   const updateSettings = vi.fn();
+  // The OS permission behind the notifications step: turning them on asks
+  // (`requestNotificationPermission`) once; nothing here has a reason to merely
+  // read it (`notificationPermission`).
+  const notificationPermission = vi.fn();
+  const requestNotificationPermission = vi.fn();
   // Re-installed after a full reset before every test, so a `…Once` that an
   // earlier (failing) test left unconsumed can't leak into the next one.
   const installMockDefaults = () => {
@@ -46,13 +54,32 @@ const {
     // store's current list so the recommended model stays mounted.
     getModels.mockReset().mockImplementation(async () => useStore.getState().models);
     updateSettings.mockReset().mockResolvedValue(undefined);
+    notificationPermission.mockReset().mockResolvedValue("granted");
+    requestNotificationPermission.mockReset().mockResolvedValue("granted");
   };
   installMockDefaults();
-  return { downloadModel, cancelDownload, getSettings, getModels, updateSettings, installMockDefaults };
+  return {
+    downloadModel,
+    cancelDownload,
+    getSettings,
+    getModels,
+    updateSettings,
+    notificationPermission,
+    requestNotificationPermission,
+    installMockDefaults,
+  };
 });
 
 vi.mock("../lib/api", () => ({
-  api: { downloadModel, cancelDownload, getSettings, getModels, updateSettings },
+  api: {
+    downloadModel,
+    cancelDownload,
+    getSettings,
+    getModels,
+    updateSettings,
+    notificationPermission,
+    requestNotificationPermission,
+  },
 }));
 
 const SPEC: ModelSpec = {
@@ -145,6 +172,8 @@ function seedNoDownload() {
     downloads: {},
     downloadErrors: {},
     notice: null,
+    appInfo: null,
+    notificationPermission: "granted",
   });
 }
 
@@ -184,6 +213,7 @@ const themesWritten = () =>
 // normalize the way Playwright's does — hence the regex.
 const SCAN_HEADING = /^First, let's see what your Mac can\sdo\.$/;
 const APPEARANCE_HEADING = "How should OpenPal look?";
+const NOTIFICATIONS_HEADING = "Want a heads-up?";
 async function toName() {
   await click("Let's set things up");
   await screen.findByRole("heading", { name: "What should we call you?" });
@@ -196,9 +226,14 @@ async function toAppearance() {
   // disabled button and silently do nothing.
   await screen.findByRole("heading", { name: APPEARANCE_HEADING });
 }
-async function toScan() {
+async function toNotifications() {
   await toAppearance();
   await skipStep(); // the appearance step's skip: nothing picked, nothing saved
+  await screen.findByRole("heading", { name: NOTIFICATIONS_HEADING });
+}
+async function toScan() {
+  await toNotifications();
+  await skipStep(); // the notifications step's skip: left off, nothing saved
   await screen.findByRole("heading", { name: SCAN_HEADING });
 }
 async function toRecommend() {
@@ -266,6 +301,7 @@ describe("Onboarding: the two skip buttons", () => {
   it.each([
     ["name", toName],
     ["appearance", toAppearance],
+    ["notifications", toNotifications],
     ["scan", toScan],
     ["recommend", toRecommend],
   ])("the %s screen's Skip setup asks first", async (_scene, drive) => {
@@ -699,7 +735,7 @@ describe("Onboarding: the appearance step", () => {
 
       await click(button);
 
-      expect(await screen.findByRole("heading", { name: SCAN_HEADING })).toBeInTheDocument();
+      expect(await screen.findByRole("heading", { name: NOTIFICATIONS_HEADING })).toBeInTheDocument();
       await act(async () => {
         finishSave();
       });
@@ -718,7 +754,7 @@ describe("Onboarding: the appearance step", () => {
 
       await click(button);
 
-      expect(await screen.findByRole("heading", { name: SCAN_HEADING })).toBeInTheDocument();
+      expect(await screen.findByRole("heading", { name: NOTIFICATIONS_HEADING })).toBeInTheDocument();
       noDialog();
       // Still just the name step's own skip: leaving here adds no write of its own.
       expect(updateSettings).toHaveBeenCalledTimes(1);
@@ -801,6 +837,153 @@ describe("Onboarding: the appearance step", () => {
     // The group is a single Tab stop, so the next one is the button below it.
     await userEvent.tab();
     expect(screen.getByRole("button", { name: "Continue" })).toHaveFocus();
+  });
+});
+
+describe("Onboarding: the notifications step", () => {
+  /** The `desktopNotifications` of every settings write that carries one, in the
+   * order they were sent. The seeded settings have none, so a write only shows up
+   * here if this step (or the switch behind it) put the flag in it. */
+  const notificationsWritten = () =>
+    updateSettings.mock.calls.flatMap(([s]) =>
+      s?.desktopNotifications === undefined ? [] : [s.desktopNotifications],
+    );
+
+  it("comes right after the appearance step and before the hardware scan", async () => {
+    render(<Onboarding />);
+    await toAppearance();
+
+    await click("Continue");
+
+    expect(await screen.findByRole("heading", { name: NOTIFICATIONS_HEADING })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: SCAN_HEADING })).not.toBeInTheDocument();
+    expect(screen.getByText(/OpenPal can notify you when a model loads/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Turn on notifications" })).toBeInTheDocument();
+  });
+
+  it("takes focus to the heading on arrival, and arriving saves and asks nothing", async () => {
+    render(<Onboarding />);
+    await toNotifications();
+
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { name: NOTIFICATIONS_HEADING })).toHaveFocus(),
+    );
+    expect(notificationsWritten()).toEqual([]);
+    expect(requestNotificationPermission).not.toHaveBeenCalled();
+    // Optional like the steps around it: both ways out are live from the first frame.
+    expect(screen.getByRole("button", { name: "Skip this step" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Skip setup" })).toBeEnabled();
+  });
+
+  it("Skip this step moves on to the scan and leaves notifications off", async () => {
+    render(<Onboarding />);
+    await toNotifications();
+
+    await skipStep();
+
+    expect(await screen.findByRole("heading", { name: SCAN_HEADING })).toBeInTheDocument();
+    noDialog();
+    expect(notificationsWritten()).toEqual([]);
+    expect(requestNotificationPermission).not.toHaveBeenCalled();
+    expect(useStore.getState().settings?.desktopNotifications).not.toBe(true);
+    expect(useStore.getState().settings?.onboardingCompleted).not.toBe(true);
+  });
+
+  it("Turn on notifications saves the choice, asks the OS once, and moves on", async () => {
+    render(<Onboarding />);
+    await toNotifications();
+
+    await click("Turn on notifications");
+
+    expect(await screen.findByRole("heading", { name: SCAN_HEADING })).toBeInTheDocument();
+    await waitFor(() => expect(notificationsWritten()).toEqual([true]));
+    expect(useStore.getState().settings?.desktopNotifications).toBe(true);
+    await waitFor(() => expect(requestNotificationPermission).toHaveBeenCalledTimes(1));
+    // Asking is the only OS call: the read-only one has nothing to add.
+    expect(notificationPermission).not.toHaveBeenCalled();
+    expect(useStore.getState().settings?.onboardingCompleted).not.toBe(true);
+  });
+
+  it("moves on at once, without waiting for the save (and so the OS) to answer", async () => {
+    render(<Onboarding />);
+    await toNotifications();
+    // The write never settles, so the permission request behind it never starts
+    // either: nothing the OS or the disk is slow to answer may strand the user here.
+    updateSettings.mockImplementationOnce(() => new Promise<void>(() => {}));
+
+    await click("Turn on notifications");
+
+    expect(await screen.findByRole("heading", { name: SCAN_HEADING })).toBeInTheDocument();
+    // The store already has the choice, so what follows (Settings) shows it.
+    expect(useStore.getState().settings?.desktopNotifications).toBe(true);
+  });
+
+  it("still moves on, with the choice kept and no notice, when the OS says it is blocked", async () => {
+    requestNotificationPermission.mockResolvedValue("denied");
+    render(<Onboarding />);
+    await toNotifications();
+
+    await click("Turn on notifications");
+
+    expect(await screen.findByRole("heading", { name: SCAN_HEADING })).toBeInTheDocument();
+    await waitFor(() => expect(useStore.getState().notificationPermission).toBe("denied"));
+    expect(useStore.getState().settings?.desktopNotifications).toBe(true);
+    expect(useStore.getState().notice).toBeNull();
+  });
+
+  it("Skip setup asks first, and confirming leaves notifications off", async () => {
+    render(<Onboarding />);
+    await toNotifications();
+
+    await openSkipSetup();
+    expect(within(skipDialog()).getByText(MSG_NO_MODEL)).toBeInTheDocument();
+    expect(completedSaves()).toHaveLength(0);
+    await confirmSkip();
+
+    await waitFor(() => expect(completedSaves()).toHaveLength(1));
+    expect(notificationsWritten()).toEqual([]);
+    expect(requestNotificationPermission).not.toHaveBeenCalled();
+  });
+
+  it("is worded for a phone on Android, which has notifications but no desktop", async () => {
+    useStore.setState({ appInfo: { isAndroid: true, nativeNotifications: true } as AppInfo });
+    render(<Onboarding />);
+    await toNotifications();
+
+    expect(screen.getByText(/when a download finishes or an answer is ready, while you're using another app/)).toBeInTheDocument();
+    expect(screen.queryByText(/in another window/)).not.toBeInTheDocument();
+  });
+
+  it("is left out in a build with no OS notifications, where appearance goes straight to the scan", async () => {
+    useStore.setState({ appInfo: { isAndroid: false, nativeNotifications: false } as AppInfo });
+    render(<Onboarding />);
+    await toAppearance();
+
+    await skipStep();
+
+    expect(await screen.findByRole("heading", { name: SCAN_HEADING })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: NOTIFICATIONS_HEADING })).not.toBeInTheDocument();
+    expect(notificationsWritten()).toEqual([]);
+  });
+
+  it("is all in French when the app is", async () => {
+    await i18n.changeLanguage("fr");
+    try {
+      render(<Onboarding />);
+      await userEvent.click(screen.getByRole("button", { name: "Configurons tout ça" }));
+      await screen.findByRole("heading", { name: "Comment devons-nous vous appeler ?" });
+      // The name step's skip, then the appearance step's.
+      await userEvent.click(screen.getByRole("button", { name: "Passer cette étape" }));
+      await screen.findByRole("heading", { name: "Quelle apparence souhaitez-vous pour OpenPal ?" });
+      await userEvent.click(screen.getByRole("button", { name: "Passer cette étape" }));
+
+      expect(
+        await screen.findByRole("heading", { name: "Souhaitez-vous être prévenu ?" }),
+      ).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Activer les notifications" })).toBeInTheDocument();
+    } finally {
+      await i18n.changeLanguage("en");
+    }
   });
 });
 

@@ -1059,11 +1059,35 @@ export interface Settings {
    * side, like `language`, so code that reads this must treat a missing or
    * unrecognised value as "system" — `normalizeTheme` in `lib/theme.ts` does. */
   theme: "system" | "light" | "dark";
+  /** Settings → General → Notifications "Desktop notifications": mirror the
+   * four model/answer alerts as OS notifications while OpenPal is not the
+   * focused window. Off by default, and off for a settings row saved before the
+   * field existed — so code that reads it can compare with `=== true`. */
+  desktopNotifications: boolean;
 }
 
 /** The Settings UI's language picker, and every other file that needs to name
  * this type — single source of truth is `Settings["language"]` itself. */
 export type Language = Settings["language"];
+
+/** Whether the OS lets OpenPal post notifications, as far as it can tell
+ * (mirrors `NotificationPermission` in `crates/app/src/notify/mod.rs`):
+ * - "granted": allowed, or nothing to ask on this OS (Windows and Linux answer
+ *   this whatever the user's system settings are), or the OS couldn't be asked;
+ * - "denied": the user said no, which only the OS's settings can undo (only
+ *   macOS can say so today);
+ * - "prompt": not asked yet, so turning the switch on shows the OS's prompt;
+ * - "unsupported": this build has no notification backend, which
+ *   `AppInfo.nativeNotifications` already said at boot. */
+export type NotificationPermission = "granted" | "denied" | "prompt" | "unsupported";
+
+/** A click (or tap) on one of OpenPal's notifications, as `take_notification_click`
+ * hands it back (mirrors `NotificationClick` in `crates/app/src/notify/mod.rs`).
+ * `conversationId` is the conversation the notification was about ("answer
+ * ready"); null for one that only brings OpenPal forward. */
+export interface NotificationClick {
+  conversationId: string | null;
+}
 
 /** The theme picker's choices — single source of truth is `Settings["theme"]`
  * itself, same as `Language`. */
@@ -1098,6 +1122,12 @@ export interface AppInfo {
    * section, which only makes sense on the one platform where the engine
    * itself is `RemoteBackend` (see `crates/app/src/state.rs`). */
   isAndroid: boolean;
+  /** Whether this build can post OS notifications at all (false on Android and
+   * iOS, which have no backend yet). Gates the "Desktop notifications" switch,
+   * its onboarding step, Settings search and native delivery; read it through
+   * `hasNativeNotifications`. What the OS allows is `NotificationPermission`,
+   * which is only known later. */
+  nativeNotifications: boolean;
 }
 
 /** A newer OpenPal version, as returned by `checkForUpdate`. */

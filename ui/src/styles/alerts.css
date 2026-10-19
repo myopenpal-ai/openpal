@@ -1,0 +1,107 @@
+/* ---------------------------------------------------------------------------
+   In-app alerts — the stack of "Model ready" / "Download complete" cards
+   (components/AlertHost.tsx). The card itself is shadcn's Alert
+   (components/ui/alert.tsx, styled by tailwind.css); everything about WHERE it
+   sits, how the stack behaves and the dismiss button is plain CSS, here.
+
+   Why this file and not Tailwind classes on the host: Tailwind's output is
+   layered and loses to every unlayered rule on the same property, and its
+   scanner only reads components/ui/. The rules below are unlayered, so they
+   also win over the Alert's own utilities where they overlap (the icon colour,
+   the right padding).
+
+   Placement: top-right, just under the titlebar. Bottom-right would sit on the
+   composer's Send button at the minimum window width, and bottom-left is where
+   AutoUnloadTooltip warns about the very unload that raises one of these.
+   Newest on top, so an expiring (oldest) alert at the bottom never moves the
+   ones above it.
+
+   Layer: 800, above everything the user can interact with — the dialog
+   backdrop (600), portalled menus (650), the PIN pad and lightbox (700) and
+   the app-lock erase link (750). It has to be: a download usually finishes
+   while the user is inside the More dialog, and an alert under that backdrop
+   would be invisible exactly when it is wanted. Only the paper-grain overlay
+   (9999, pointer-events: none) and the skip link (10000) are higher.
+
+   Tokens only, and nothing here may look at prefers-color-scheme or use
+   light-dark(): global.css's palette blocks decide Light, Dark and System, and
+   styles/contrast.test.ts fails on either. Its "AlertHost" case also reads the
+   icon and dismiss colours below, so a new colour is checked against all three
+   palettes.
+--------------------------------------------------------------------------- */
+
+.alert-host {
+  position: fixed;
+  top: calc(var(--titlebar-safe-h) + 8px);
+  right: calc(16px + env(safe-area-inset-right, 0px));
+  z-index: 800;
+  width: min(360px, calc(100vw - 32px));
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  /* The stack's own box never eats a click meant for the app underneath it:
+     only the cards (below) take the pointer. */
+  pointer-events: none;
+}
+
+.alert-host-item {
+  position: relative;
+  pointer-events: auto;
+  border-radius: var(--radius-m);
+  /* paper-raised is only 1.07:1 (light) / 1.13:1 (dark) off --paper, so the
+     card needs the same lift .modal and .menu get. It lives on this wrapper,
+     not the Alert, so the Alert stays exactly as shadcn ships it. */
+  box-shadow: var(--shadow-pop);
+  /* A long model name has no break opportunity; without this the grid's 1fr
+     column grows to the name's width and the card spills out of the stack.
+     `anywhere`, unlike `break-word`, also lowers the min-content size. */
+  overflow-wrap: anywhere;
+  animation: alert-host-in 0.18s ease both;
+}
+
+/* Room for the dismiss button parked in the top-right corner, so neither the
+   title nor the first line of the description runs underneath it. */
+.alert-host-item .alert-host-alert {
+  padding-right: 40px;
+}
+
+.alert-host-icon-ok {
+  color: var(--ok);
+}
+
+.alert-host-icon-accent {
+  color: var(--accent);
+}
+
+/* "Unloaded" is neutral news, not good or bad. */
+.alert-host-icon-quiet {
+  color: var(--ink-soft);
+}
+
+.alert-host-dismiss {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  /* --ink-faint, .icon-btn's own colour, is decorative-only (3.4 to 3.7:1 on
+     paper-raised); --ink-soft is the one held to 4.5:1 for anything that
+     carries meaning, and this glyph is the only way to see the control. */
+  color: var(--ink-soft);
+}
+
+.alert-host-dismiss:hover {
+  color: var(--ink);
+}
+
+@keyframes alert-host-in {
+  from { opacity: 0; transform: translateY(-8px); }
+  to { opacity: 1; transform: none; }
+}
+
+/* Phone-width layout (the repo's literal 600px breakpoint): the stack takes the
+   full width between two gutters instead of a fixed 360px column. */
+@media (max-width: 600px) {
+  .alert-host {
+    left: calc(16px + env(safe-area-inset-left, 0px));
+    width: auto;
+  }
+}

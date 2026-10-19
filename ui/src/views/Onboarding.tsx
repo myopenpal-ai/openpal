@@ -5,6 +5,7 @@ import PinPad from "../components/PinPad";
 import ProgressRing from "../components/ProgressRing";
 import ThemePicker from "../components/ThemePicker";
 import { api } from "../lib/api";
+import { hasNativeNotifications } from "../lib/appEvents";
 import {
   formatBytes,
   formatEta,
@@ -21,6 +22,7 @@ type Scene =
   | "welcome"
   | "name"
   | "appearance"
+  | "notifications"
   | "scan"
   | "recommend"
   | "download"
@@ -218,8 +220,29 @@ export default function Onboarding() {
   // The appearance step has nothing to save on the way out: a pick persisted
   // itself the moment it was made (`setTheme`), and Continue or Skip with nothing
   // picked leaves the theme as it was. So neither button writes or waits on
-  // anything, and both are live from the first frame.
-  const continueFromAppearance = () => setScene("scan");
+  // anything, and both are live from the first frame. What comes next is the
+  // notifications step, except in a build with no OS notifications (Android and
+  // iOS today; see NotificationsSection in Settings): there it is left out.
+  const nativeNotifications = useStore((s) => hasNativeNotifications(s.appInfo));
+  // The step's words for Android, which has no desktop and no model events.
+  const notificationsContext = useStore((s) => (s.appInfo?.isAndroid ? "mobile" : undefined));
+  const continueFromAppearance = () => setScene(nativeNotifications ? "notifications" : "scan");
+
+  // The notifications step: placed before the model setup so the choice is made
+  // before the first multi-gigabyte download, the very moment "tell me when
+  // it's done" is useful. Turning them on goes through the store's
+  // `setDesktopNotifications`, which saves the choice at once and then asks the
+  // OS for permission (on macOS that is its one-time "Allow notifications?"
+  // prompt, which is why it only ever follows this click) — and the scene moves
+  // on without waiting for either. If the OS says no, the switch stays on and
+  // Settings says so. Skipping writes nothing:
+  // the switch stays off, as it is for everyone who never sees this step.
+  const setDesktopNotifications = useStore((s) => s.setDesktopNotifications);
+  const continueFromNotifications = () => setScene("scan");
+  const enableNotifications = () => {
+    void setDesktopNotifications(true);
+    continueFromNotifications();
+  };
 
   // Skip just the model setup (scan → recommend → download) and carry on to the
   // optional steps. A download in flight is stopped (its partial file is kept,
@@ -376,6 +399,24 @@ export default function Onboarding() {
               </button>
               <SkipButtons onSkipStep={continueFromAppearance} onSkipSetup={askToSkipSetup} />
             </div>
+          </div>
+        </section>
+      )}
+
+      {scene === "notifications" && (
+        <section className="ob-scene" key="notifications" ref={sceneRef} tabIndex={-1}>
+          <p className="ob-brand ob-appear">OpenPal</p>
+          <h1 className="ob-title ob-appear" tabIndex={-1} style={{ animationDelay: "0.1s" }}>
+            {t("onboarding.notifications.title")}
+          </h1>
+          <p className="ob-sub ob-appear" style={{ animationDelay: "0.2s" }}>
+            {t("onboarding.notifications.sub", { context: notificationsContext })}
+          </p>
+          <div className="ob-name-actions ob-appear" style={{ animationDelay: "0.3s" }}>
+            <button className="btn btn-big" onClick={enableNotifications}>
+              {t("onboarding.notifications.enable")}
+            </button>
+            <SkipButtons onSkipStep={continueFromNotifications} onSkipSetup={askToSkipSetup} />
           </div>
         </section>
       )}

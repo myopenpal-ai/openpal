@@ -17,6 +17,7 @@ import UpdateDialog from "./views/UpdateDialog";
 import SignInDialog from "./views/SignInDialog";
 import AddDeviceDialog from "./views/AddDeviceDialog";
 import JoinGroupDialog from "./views/JoinGroupDialog";
+import AlertHost from "./components/AlertHost";
 import AutoUnloadTooltip from "./components/AutoUnloadTooltip";
 
 const MenuIcon = () => (
@@ -77,6 +78,7 @@ export default function App() {
   const joinGroupOpen = useStore((s) => s.joinGroupOpen);
   const boot = useStore((s) => s.boot);
   const pollEngine = useStore((s) => s.pollEngine);
+  const setWindowFocused = useStore((s) => s.setWindowFocused);
 
   useEffect(() => {
     void boot();
@@ -86,6 +88,40 @@ export default function App() {
     const id = window.setInterval(() => void pollEngine(), 2000);
     return () => window.clearInterval(id);
   }, [pollEngine]);
+
+  // Whether OpenPal is the focused window is what lets a native notification
+  // through (see `windowFocused` in the store). Coming back to the window — or
+  // to a window that was hidden — also re-reads the engine right away instead
+  // of waiting out the next 2s tick, since a hidden webview's timers run late
+  // and an auto-unload may have happened while it was away.
+  useEffect(() => {
+    setWindowFocused(document.hasFocus());
+    const onFocus = () => {
+      setWindowFocused(true);
+      void pollEngine();
+    };
+    const onBlur = () => setWindowFocused(false);
+    // A hidden page is never the one the user is looking at, whatever focus
+    // says: on Android, where the app goes to the background without the
+    // webview reliably losing focus, this is what lets a native notification
+    // through.
+    const onVisible = () => {
+      if (document.visibilityState === "visible") {
+        setWindowFocused(document.hasFocus());
+        void pollEngine();
+      } else {
+        setWindowFocused(false);
+      }
+    };
+    window.addEventListener("focus", onFocus);
+    window.addEventListener("blur", onBlur);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      window.removeEventListener("blur", onBlur);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [setWindowFocused, pollEngine]);
 
   if (!booted) {
     return <header className="titlebar" data-tauri-drag-region />;
@@ -142,6 +178,8 @@ export default function App() {
       <>
         <header className="titlebar" data-tauri-drag-region />
         <Onboarding />
+        {/* A download or the first model load finishes during onboarding too. */}
+        <AlertHost />
       </>
     );
   }
@@ -221,6 +259,10 @@ export default function App() {
           <ImproveView />
         )}
       </main>
+      {/* Right after <main> so it is the next Tab stop after the composer. Fixed
+          and above every dialog (alerts.css); the alerts it shows come from the
+          store's `appAlerts`. */}
+      <AlertHost />
       {/* Renders over the sidebar's model row but from up here, not inside
           that column — see `.auto-unload-tooltip` for why. Shows nothing
           unless a loaded model is seconds from being unloaded. */}

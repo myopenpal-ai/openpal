@@ -1,0 +1,131 @@
+# The notification code on the platforms it is gated to. ci.yml builds on
+# Linux only, so without this nothing on a pull request compiles
+# crates/app/src/notify/macos.rs (UNUserNotificationCenter through objc2), the
+# Windows arms, or the Android backend: each `#[cfg(target_os)]` arm, and the
+# dead-code allowances that differ per OS, would first meet a compiler at
+# release time (portable.yml, on dispatch or a tag). Path-filtered like
+# engine-e2e.yml, since a Windows build of the app crate is the slowest job we
+# have. Nothing here can show a notification: posting, the permission prompt
+# and taps stay manual checks (docs/TESTING.md).
+name: notify-platforms
+
+on:
+  pull_request:
+    paths:
+      - "crates/app/src/notify/**"
+      - "crates/app/src/lib.rs"
+      - "crates/app/Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/notify-platforms.yml"
+  push:
+    branches: [main]
+    paths:
+      - "crates/app/src/notify/**"
+      - "crates/app/src/lib.rs"
+      - "crates/app/Cargo.toml"
+      - "Cargo.lock"
+
+concurrency:
+  group: notify-platforms-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  desktop:
+    name: notify on ${{ matrix.name }} (clippy, tests)
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: macos, os: macos-14 }
+          - { name: windows, os: windows-latest }
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      # Saved on failure too: a cold Windows build is ~18 min, and a red run
+      # that keeps nothing makes the next push pay it again.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: notify-${{ matrix.name }}
+          cache-on-failure: true
+
+      # SQLCipher's vendored OpenSSL (crates/core/Cargo.toml) is a ~13 min
+      # serial nmake build on Windows. This job only lints and tests, so link
+      # the runner image's OpenSSL instead (installed to Program Files, its
+      # bin/ already on PATH for the test binary's DLLs). Releases still
+      # vendor it: portable.yml doesn't set OPENSSL_NO_VENDOR.
+      - name: Use the runner's OpenSSL (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          dir="C:/Program Files/OpenSSL"
+          for lib in "$dir/lib/VC/x64/MD" "$dir/lib"; do
+            if [ -f "$lib/libcrypto.lib" ]; then break; fi
+            lib=""
+          done
+          if [ -z "$lib" ] || [ ! -f "$dir/include/openssl/ssl.h" ]; then
+            echo "::error::No OpenSSL under $dir; the runner image changed"
+            exit 1
+          fi
+          {
+            echo "OPENSSL_NO_VENDOR=1"
+            echo "OPENSSL_DIR=$dir"
+            echo "OPENSSL_LIB_DIR=$lib"
+            echo "OPENSSL_INCLUDE_DIR=$dir/include"
+          } >> "$GITHUB_ENV"
+
+      # The whole app crate, not just notify/: a backend's dead-code allowances
+      # and its callers in commands.rs and lib.rs only hold together as one
+      # build per OS.
+      - name: cargo clippy (openpal-app)
+        run: cargo clippy -p openpal-app --all-targets -- -D warnings
+
+      # The notify tests run each backend this OS can build against the shared
+      # contract (notify::assert_contract); the macOS center itself refuses to
+      # exist outside an app bundle, so only its pure parts run here.
+      - name: cargo test (notify)
+        run: cargo test -p openpal-app notify
+
+  android:
+    name: notify on android (clippy)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+          targets: aarch64-linux-android
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: notify-android
+          cache-on-failure: true
+
+      # The C parts of dependencies are compiled for the device, with the
+      # runner's preinstalled NDK (minSdk 24, as in
+      # crates/app/gen/android/app/build.gradle.kts). Nothing is linked: this
+      # is a type check of the Rust side, not an APK. RANLIB too: vendored
+      # OpenSSL's `make install` runs it, and the NDK ships only llvm-ranlib,
+      # not the `aarch64-linux-android-ranlib` cc falls back to.
+      - name: Point cc at the NDK
+        run: |
+          bin="$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          {
+            echo "CC_aarch64_linux_android=$bin/aarch64-linux-android24-clang"
+            echo "CXX_aarch64_linux_android=$bin/aarch64-linux-android24-clang++"
+            echo "AR_aarch64_linux_android=$bin/llvm-ar"
+            echo "RANLIB_aarch64_linux_android=$bin/llvm-ranlib"
+            echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$bin/aarch64-linux-android24-clang"
+          } >> "$GITHUB_ENV"
+
+      # The library only: the Kotlin half (crates/app/gen/android) needs the
+      # full Gradle build, which no workflow runs yet.
+      - name: cargo clippy (openpal-app, aarch64-linux-android)
+        run: cargo clippy -p openpal-app --target aarch64-linux-android -- -D warnings

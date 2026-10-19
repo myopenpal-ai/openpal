@@ -69,6 +69,10 @@ test("onboarding saves a name before choosing a model", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "How should OpenPal look?" })).toBeVisible();
   await page.getByRole("button", { name: "Continue" }).click();
 
+  // ...then whether to be told about models and answers, which is optional too.
+  await expect(page.getByRole("heading", { name: "Want a heads-up?" })).toBeVisible();
+  await page.getByRole("button", { name: "Skip this step" }).click();
+
   await expect(page.getByRole("heading", { name: "First, let's see what your Mac can do." })).toBeVisible();
 
   // Regression guard for the scan stat cards: the Graphics value ("Ready for
@@ -296,6 +300,8 @@ test("'Pick a different one' lists the recommended model first and scrolls inste
   await page.getByRole("button", { name: "Continue" }).click();
   await expect(page.getByRole("heading", { name: "How should OpenPal look?" })).toBeVisible();
   await page.getByRole("button", { name: "Continue" }).click();
+  await expect(page.getByRole("heading", { name: "Want a heads-up?" })).toBeVisible();
+  await page.getByRole("button", { name: "Skip this step" }).click();
   await page.getByRole("button", { name: "Show my match" }).click();
   await expect(page.getByRole("heading", { name: "Qwen 3 4B" })).toBeVisible();
 

@@ -65,7 +65,9 @@ cd ui && npm run build && npm run lint && npm test && npm run test:e2e
 
 Pull-request CI compiles on Linux only. If your change touches
 platform-specific code (macOS sandbox, keychain, Windows paths, Android), say
-which platform you built and tested it on. [docs/TESTING.md](docs/TESTING.md)
+which platform you built and tested it on. The notification code
+(`crates/app/src/notify/`) is the exception: `notify-platforms.yml` also builds
+it on macOS, Windows and Android when it changes. [docs/TESTING.md](docs/TESTING.md)
 describes the full test strategy.
 
 Then open the PR with `Closes #<issue>` at the top of the description (the

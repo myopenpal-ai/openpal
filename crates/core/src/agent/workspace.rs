@@ -12,8 +12,19 @@
 
 use super::tool::{ResolvedPath, ToolError};
 use std::fs::{File, OpenOptions};
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
+#[cfg(windows)]
+use std::os::windows::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
+
+/// Open flag that keeps `open` off a symlink leaf. Unix refuses one outright
+/// (`O_NOFOLLOW`); Windows opens the link itself rather than its target
+/// (`FILE_FLAG_OPEN_REPARSE_POINT`), which `verify_fd_matches` then rejects.
+#[cfg(unix)]
+const NO_FOLLOW: i32 = libc::O_NOFOLLOW;
+#[cfg(windows)]
+const NO_FOLLOW: u32 = 0x0020_0000;
 
 /// How `write_file` should open its target.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -246,13 +257,25 @@ fn reject_if_symlink(path: &Path) -> Result<(), ToolError> {
 /// consent-time resolution and this call; that's `resolve_for_read`/
 /// `resolve_for_write` re-running the denylist fresh every time, regardless
 /// of what an earlier resolution saw (see the workspace-jail tests).
+///
+/// Stable std has no file ID on Windows (`MetadataExt::file_index` is
+/// unstable), so there the check is that neither the opened handle nor the
+/// path is a link: a symlink swapped in after `reject_if_symlink` is opened
+/// as the link itself (see [`NO_FOLLOW`]) and refused here.
 fn verify_fd_matches(file: &File, canonical: &Path) -> Result<(), ToolError> {
     let fd_meta = file
         .metadata()
         .map_err(|e| ToolError::ExecutionFailed(format!("stat failed: {e}")))?;
     let path_meta = std::fs::symlink_metadata(canonical)
         .map_err(|_| ToolError::Rejected("This path changed since it was approved.".to_string()))?;
-    if fd_meta.dev() != path_meta.dev() || fd_meta.ino() != path_meta.ino() {
+    #[cfg(unix)]
+    let unchanged = {
+        use std::os::unix::fs::MetadataExt;
+        fd_meta.dev() == path_meta.dev() && fd_meta.ino() == path_meta.ino()
+    };
+    #[cfg(windows)]
+    let unchanged = !fd_meta.file_type().is_symlink() && !path_meta.file_type().is_symlink();
+    if !unchanged {
         return Err(ToolError::Rejected(
             "This path changed since it was approved.".to_string(),
         ));
@@ -269,7 +292,7 @@ pub fn secure_open_for_read(canonical: &Path) -> Result<File, ToolError> {
     reject_if_symlink(canonical)?;
     let file = OpenOptions::new()
         .read(true)
-        .custom_flags(libc::O_NOFOLLOW)
+        .custom_flags(NO_FOLLOW)
         .open(canonical)
         .map_err(|e| ToolError::ExecutionFailed(format!("Could not open file: {e}")))?;
     verify_fd_matches(&file, canonical)?;
@@ -285,7 +308,7 @@ pub fn secure_open_for_write(canonical: &Path, mode: WriteMode) -> Result<File, 
         reject_if_symlink(canonical)?;
     }
     let mut opts = OpenOptions::new();
-    opts.write(true).custom_flags(libc::O_NOFOLLOW);
+    opts.write(true).custom_flags(NO_FOLLOW);
     match mode {
         WriteMode::Overwrite => {
             opts.create(true).truncate(true);
@@ -349,6 +372,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn symlink_escape_is_rejected_at_open_time() {
         let tmp = tempfile::tempdir().unwrap();
@@ -379,6 +403,7 @@ mod tests {
     /// time rather than trusting an earlier resolution, so a swap introduced
     /// between consent and execution is caught by the *second* resolve, not
     /// by comparing against the first one.
+    #[cfg(unix)]
     #[test]
     fn a_symlink_swapped_in_after_first_resolution_is_caught_by_a_fresh_resolve() {
         let tmp = tempfile::tempdir().unwrap();

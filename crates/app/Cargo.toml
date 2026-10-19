@@ -11,6 +11,10 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+# build.rs's Windows manifest, linked into every artifact rather than only the
+# bins tauri-build covers (the lib's test binary needs it to start). Already in
+# the lock through tauri-winres, so this only adds an edge.
+embed-resource = "3"
 
 [dependencies]
 tauri = { version = "2", features = [] }
@@ -50,6 +54,7 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "tls1
 
 [dev-dependencies]
 tempfile = "3"
+tauri = { version = "2", features = ["test"] }
 
 # `lib.rs`'s crash handler: a blocking native "OpenPal couldn't start" dialog
 # for a `setup()` panic or error. Already resolved transitively via
@@ -79,3 +84,34 @@ rfd = { version = "0.16", default-features = false, features = ["common-controls
 cpal = "0.15"
 rodio = { version = "0.17", default-features = false, features = ["wav", "mp3"] }
 hound = "3.5"
+
+# OS-native notifications on Linux (src/notify/freedesktop.rs, D-Bus through
+# zbus) and on macOS outside an app bundle (src/notify/macos_dev.rs, the legacy
+# NSUserNotificationCenter). Used directly rather than through
+# tauri-plugin-notification, which drops the handle a click is reported on.
+# Already in the lock at 4.18.2 with these default features (the plugin pulled
+# it in), so this only adds an edge.
+[target.'cfg(all(unix, not(any(target_os = "android", target_os = "ios"))))'.dependencies]
+notify-rust = "4"
+
+# OS-native notifications on Windows (src/notify/windows.rs): WinRT toasts,
+# with a click callback; the HKCU entry that makes a portable build's AUMID
+# known to Windows; and the toast notifier's per-app switch, read through the
+# `windows` crate's `UI_Notifications`, which tauri-winrt-notification already
+# enables. All three were already in the lock (winreg through embed-resource),
+# so this only adds edges.
+[target.'cfg(windows)'.dependencies]
+tauri-winrt-notification = "0.8"
+winreg = "0.55"
+windows = { version = "0.62", features = ["UI_Notifications"] }
+
+# macOS notification permission and delivery (src/notify/macos.rs). A bundled
+# macOS app uses UNUserNotificationCenter for the permission and the posts,
+# because usernoted refuses to mix the modern and the legacy kind of client for
+# one bundle. All of these were already in the lock (objc2-user-notifications
+# through objc2-ui-kit), so this only adds edges.
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6"
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSError", "NSDictionary", "NSObject"] }
+objc2-user-notifications = { version = "0.3", default-features = false, features = ["std", "block2", "UNUserNotificationCenter", "UNNotificationSettings", "UNNotification", "UNNotificationContent", "UNNotificationRequest", "UNNotificationResponse", "UNNotificationTrigger"] }

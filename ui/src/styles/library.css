@@ -1025,6 +1025,19 @@
   color: var(--ink-soft);
 }
 
+/* A live-region hint that is empty most of the time (the notifications
+   "blocked" line): it must stay in the DOM to be announced when it fills, but an
+   empty one should not add a row's gap under the control. */
+.settings-status:empty {
+  margin-top: -6px;
+}
+
+/* The notifications "blocked" line's button: its own row under the line, at its
+   natural width rather than stretched across the column. */
+.settings-notification-help {
+  display: flex;
+}
+
 .settings-field textarea {
   resize: vertical;
   font-size: 14px;
