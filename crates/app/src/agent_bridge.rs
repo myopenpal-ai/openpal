@@ -195,7 +195,7 @@ pub async fn build_web_search_deps(
         search_service_url.clone(),
         http.clone(),
     )));
-    registry.register(Arc::new(FetchUrlTool::new(http.clone())));
+    registry.register(Arc::new(FetchUrlTool));
     registry.register(Arc::new(AskUserTool));
 
     Ok(Some(AgentDeps {

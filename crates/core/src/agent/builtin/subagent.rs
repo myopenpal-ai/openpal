@@ -115,7 +115,7 @@ impl SpawnSubagentTool {
             "web-research" => {
                 let base = self.ensure_search_service(on_event).await?;
                 registry.register(Arc::new(WebSearchTool::new(base, deps.http.clone())));
-                registry.register(Arc::new(FetchUrlTool::new(deps.http.clone())));
+                registry.register(Arc::new(FetchUrlTool));
             }
             "math" => {
                 // The parent's own run_code tool, sandboxed the same way.

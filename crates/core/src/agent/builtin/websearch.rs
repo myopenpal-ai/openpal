@@ -5,8 +5,9 @@
 //! and extracts readable text from it. Both are plain HTTP calls, not
 //! sandboxed subprocesses, but `fetch_url`'s target ultimately comes from the
 //! model (a search result, or any page it has read) — indirect prompt
-//! injection can steer it — so every request (and every redirect hop) is
-//! blocked from touching a loopback/private/link-local/CGNAT host, mirroring
+//! injection can steer it — so every request (and every redirect hop, which
+//! is why it has its own non-following client) is blocked from touching a
+//! loopback/private/link-local/CGNAT host, mirroring
 //! `crate::favicon`'s guard for the identical threat model, plus a DNS-resolve
 //! check `favicon` doesn't need (a fetched page's text is echoed straight back
 //! into the model's context, so a domain that merely *resolves* to an
@@ -17,6 +18,7 @@ use crate::types::ChatEvent;
 use kuchiki::{iter::NodeEdge, NodeData, NodeRef};
 use readable_readability::Readability;
 use serde_json::Value;
+use std::sync::OnceLock;
 use std::time::Duration;
 
 const SEARCH_TIMEOUT: Duration = Duration::from_secs(20);
@@ -237,11 +239,39 @@ fn split_oversized(para: &str, max_len: usize) -> Vec<&str> {
     pieces
 }
 
+/// `fetch_url`'s own HTTP client. The app's shared client follows redirects
+/// itself (downloads and Hugging Face need that), which would hand
+/// [`guarded_get`] the final page without it ever seeing a `3xx` to check —
+/// so this one follows none, and `guarded_get` walks every hop.
+fn fetch_client() -> Option<&'static reqwest::Client> {
+    static CLIENT: OnceLock<Option<reqwest::Client>> = OnceLock::new();
+    CLIENT
+        .get_or_init(|| {
+            reqwest::Client::builder()
+                .user_agent(concat!("OpenPal/", env!("CARGO_PKG_VERSION")))
+                .connect_timeout(Duration::from_secs(20))
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .ok()
+        })
+        .as_ref()
+}
+
 async fn guarded_get(client: &reqwest::Client, url: &str) -> Result<String, String> {
+    guarded_get_with(client, url, url_is_blocked).await
+}
+
+/// [`guarded_get`] with the block check passed in, so a test can treat one
+/// local server as public and another as internal.
+async fn guarded_get_with(
+    client: &reqwest::Client,
+    url: &str,
+    is_blocked: impl Fn(&reqwest::Url) -> bool,
+) -> Result<String, String> {
     let mut current =
         reqwest::Url::parse(url).map_err(|_| "That doesn't look like a valid URL.".to_string())?;
     for _ in 0..=MAX_REDIRECTS {
-        if url_is_blocked(&current) {
+        if is_blocked(&current) {
             return Err("That address can't be reached from here.".to_string());
         }
         let resp = client
@@ -427,16 +457,10 @@ impl Tool for WebSearchTool {
     }
 }
 
-/// Fetch one URL and return its extracted readable text.
-pub struct FetchUrlTool {
-    http: reqwest::Client,
-}
-
-impl FetchUrlTool {
-    pub fn new(http: reqwest::Client) -> Self {
-        Self { http }
-    }
-}
+/// Fetch one URL and return its extracted readable text. Takes no client: it
+/// always uses [`fetch_client`], so nobody can hand it one that follows
+/// redirects past the per-hop check.
+pub struct FetchUrlTool;
 
 #[async_trait::async_trait]
 impl Tool for FetchUrlTool {
@@ -510,7 +534,9 @@ impl Tool for FetchUrlTool {
         (ctx.on_event)(ChatEvent::Fetching {
             url: url.to_string(),
         });
-        let html = guarded_get(&self.http, url)
+        let client = fetch_client()
+            .ok_or_else(|| ToolError::ExecutionFailed("Couldn't reach that page.".to_string()))?;
+        let html = guarded_get(client, url)
             .await
             .map_err(ToolError::ExecutionFailed)?;
         let text = extract_text(&html);
@@ -656,5 +682,109 @@ mod tests {
     #[test]
     fn chunk_text_of_empty_input_is_empty() {
         assert!(chunk_text("").is_empty());
+    }
+
+    /// A local HTTP server answering every request with `respond(path)` (a
+    /// full raw response). Returns its port and how many connections it took.
+    fn serve(
+        respond: impl Fn(&str) -> String + Send + 'static,
+    ) -> (u16, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let hits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = hits.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { break };
+                counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let mut request = Vec::new();
+                let mut buf = [0u8; 1024];
+                loop {
+                    let n = stream.read(&mut buf).unwrap_or(0);
+                    request.extend_from_slice(&buf[..n]);
+                    if n == 0 || request.windows(4).any(|w| w == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                let request = String::from_utf8_lossy(&request);
+                let path = request.split_whitespace().nth(1).unwrap_or("/");
+                let _ = stream.write_all(respond(path).as_bytes());
+            }
+        });
+        (port, hits)
+    }
+
+    fn ok_page(body: &str) -> String {
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+    }
+
+    fn redirect_to(location: &str) -> String {
+        format!("HTTP/1.1 302 Found\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+    }
+
+    #[tokio::test]
+    async fn redirect_to_a_blocked_host_is_refused_before_any_request() {
+        let (internal, internal_hits) = serve(|_| ok_page("internal secret"));
+        let (public, _) = serve(move |_| redirect_to(&format!("http://127.0.0.1:{internal}/")));
+        let blocked = move |u: &reqwest::Url| u.port() == Some(internal);
+
+        let client = fetch_client().unwrap();
+        let result =
+            guarded_get_with(client, &format!("http://127.0.0.1:{public}/"), blocked).await;
+
+        assert_eq!(
+            result,
+            Err("That address can't be reached from here.".to_string())
+        );
+        assert_eq!(
+            internal_hits.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "the redirect target must never be contacted"
+        );
+    }
+
+    /// `/hop/N` redirects to `/hop/N-1`; `/hop/0` is the page.
+    fn hop_server() -> u16 {
+        serve(
+            |path| match path.strip_prefix("/hop/").map(str::parse::<usize>) {
+                Some(Ok(0)) => ok_page("landed"),
+                Some(Ok(n)) => redirect_to(&format!("/hop/{}", n - 1)),
+                _ => "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n".to_string(),
+            },
+        )
+        .0
+    }
+
+    #[tokio::test]
+    async fn redirects_between_public_hosts_follow_up_to_the_limit() {
+        let port = hop_server();
+        let client = fetch_client().unwrap();
+        let result = guarded_get_with(
+            client,
+            &format!("http://127.0.0.1:{port}/hop/{MAX_REDIRECTS}"),
+            |_| false,
+        )
+        .await;
+        assert_eq!(result, Ok("landed".to_string()));
+    }
+
+    #[tokio::test]
+    async fn one_redirect_past_the_limit_is_refused() {
+        let port = hop_server();
+        let client = fetch_client().unwrap();
+        let result = guarded_get_with(
+            client,
+            &format!("http://127.0.0.1:{port}/hop/{}", MAX_REDIRECTS + 1),
+            |_| false,
+        )
+        .await;
+        assert_eq!(
+            result,
+            Err("That page redirected too many times.".to_string())
+        );
     }
 }
