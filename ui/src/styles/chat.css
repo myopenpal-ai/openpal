@@ -2375,6 +2375,172 @@
   justify-content: flex-end;
 }
 
+/* Prompt-injection review card. The consent card's shell with a warning
+   edge: this one does gate something — whether text the detector flagged
+   reaches the model at all. Every text value inside, the excerpt above all,
+   is rendered as a plain React text child (see InjectionReviewCard.tsx's
+   doc comment) — this file only styles the shell around it. */
+
+.injection-review-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 6px 0 10px 0;
+  padding: 14px 16px;
+  border: 1px solid var(--warn);
+  border-radius: 14px;
+  background: var(--accent-soft);
+}
+
+/* --badge-warn-ink rather than --warn: see the .auto-unload-tooltip-text
+   note above — light mode's --warn is under AA for text on a tint. */
+.injection-review-title {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--badge-warn-ink);
+}
+
+.injection-review-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* Several texts on one card (they share one request): a hairline between
+   them, so each one's sentence reads as the head of its own block. */
+.injection-review-item + .injection-review-item {
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+}
+
+.injection-review-found {
+  font-size: 13.5px;
+  color: var(--ink);
+  word-break: break-word;
+}
+
+.injection-review-name {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 12.5px;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.injection-review-excerpt-label,
+.injection-review-note,
+.injection-review-via {
+  font-size: 12.5px;
+  color: var(--ink-soft);
+}
+
+/* `unicode-bidi: plaintext` so right-to-left override characters an
+   attacker slipped in (shown as ▯ by the backend anyway) can't reorder the
+   rest of the excerpt; `overflow-wrap: anywhere` so one endless token can't
+   widen the card past the chat column. */
+.injection-review-excerpt {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--paper-raised);
+  border: 1px solid var(--line);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 12.5px;
+  color: var(--ink);
+  max-height: 220px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  unicode-bidi: plaintext;
+}
+
+.injection-review-why,
+.injection-review-advice {
+  margin: 0;
+  font-size: 13px;
+  color: var(--ink);
+}
+
+.injection-review-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.injection-review-primary {
+  background: var(--accent);
+  color: var(--accent-ink);
+  border: none;
+  border-radius: 999px;
+  font-weight: 600;
+}
+
+.injection-review-primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+/* One line per flagged text on a reply, kept after the turn. --badge-warn-ink
+   on --warn-soft, not --warn: that pairing is 3.8:1 in light mode (see the
+   .auto-unload-tooltip-text note above). */
+
+.injection-notices {
+  list-style: none;
+  margin: 2px 0 6px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.injection-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--badge-warn-ink);
+  background: var(--warn-soft);
+  border-radius: 6px;
+  padding: 4px 8px;
+}
+
+.injection-notice svg {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  margin-top: 2px;
+}
+
+/* A quoted file name has no break of its own (underscores, dots), and
+   .chat-scroll clips what overflows: let it wrap anywhere. `anywhere`, not
+   `break-word`, so the row's min-content width shrinks too. */
+.injection-notice-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* A user message whose flagged text was stopped at a review card: still in
+   the transcript, but drawn as an outline and labeled, since the model no
+   longer sees it. */
+.msg-user-withheld .msg-user {
+  border-style: dashed;
+  border-color: var(--ink-faint);
+  background: transparent;
+  color: var(--ink-soft);
+}
+
+.msg-user-withheld .attachment-doc,
+.msg-user-withheld .attachment-thumb {
+  border-style: dashed;
+  border-color: var(--ink-faint);
+}
+
+.msg-withheld-tag {
+  font-size: 12px;
+  color: var(--ink-soft);
+}
+
 /* Markdown */
 
 .md > * + * {

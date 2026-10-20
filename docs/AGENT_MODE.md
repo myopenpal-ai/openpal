@@ -57,10 +57,11 @@ untouched — the orchestrator parses its own SSE stream so it can see
   consultation" below).
 - `consent.rs` — `ConsentBroker`: pending per-call approval (a
   `oneshot::Receiver` per in-flight request) plus the persisted "Always
-  allow" grant store, one mutex guarding both.
-- `audit.rs` — `AuditLog`: an append-only, hash-chained NDJSON lifecycle
-  trail (see "Audit log" below for exactly what this does and doesn't
-  guarantee).
+  allow" grant store, one mutex guarding both. It also brokers `ask_user`
+  answers and the prompt-injection review card's Continue/Stop.
+- `audit.rs` — `AuditLog`: an append-only, hash-chained lifecycle trail in
+  the app database's `agent_audit` table (see "Audit log" below for exactly
+  what this does and doesn't guarantee).
 - `fetch_allowlist.rs` — `FetchAllowlist`: which URLs `fetch_url` may open
   this turn, and its 10-fetch budget (see "Where the web tools may send
   requests" below).
@@ -133,7 +134,11 @@ goes through `dispatch_call` in `orchestrator.rs`:
    no prompt.
 3. A miss registers a pending oneshot and emits
    `ChatEvent::ToolConsentRequested` with the summary, detail,
-   resolved paths, and any heuristic danger flags.
+   resolved paths, and any heuristic danger flags — plus
+   `PromptInjectionSuspected` when something earlier in the same turn was
+   flagged by the prompt-injection detector (see below). For that line the
+   card waits on scans still in flight for at most 10 seconds. The flag
+   never decides the call; the three buttons do.
 4. The frontend's three-button card resolves it via `respond_tool_consent`:
    **Allow once**, **Always allow** (persists a grant — see below), or
    **Deny** (with an optional note that becomes the `tool`-role message
@@ -141,7 +146,11 @@ goes through `dispatch_call` in `orchestrator.rs`:
    retrying).
 5. Execution goes through the sandboxed/jailed path per tool; the result
    (or denial note, or rejection reason) is always what's fed back to the
-   model — a call is never left unanswered.
+   model — a call is never left unanswered. Before a result goes back it
+   is checked for prompt injection (which results: see below), whichever
+   way the call was approved: prompt, grant or no consent needed. A
+   flagged result waits on a review card, and Stop ends the turn before
+   the model reads it (see "Review before the model reads" below).
 
 **Grant keys are deliberately narrow.** `write_file`'s grant key includes a
 hash of the content being written, not just the path+mode: a path-only key
@@ -153,6 +162,292 @@ behave like "Allow once" whenever the content actually changes.
 `read_file`/`run_shell`/`run_code` grants outside the configured workspace
 expire after 30 days; workspace-relative grants don't (their key is already
 narrow).
+
+## Prompt-injection detection (`crates/core/src/injection/`)
+
+Text the model reads can carry orders the user never gave: a web page telling
+"AI assistants" to send `~/.ssh` somewhere, a README comment, a CV in white
+text, a skill with one bad step. An always-on classifier looks at that text
+on its way in and **flags** what reads like instructions aimed at the model.
+When the flagged text is something the user didn't write (an attachment, a
+skill, a tool result), the turn **pauses before the model reads it** and asks
+the user to Continue or Stop. Nothing is ever rewritten, redacted or partly
+withheld: the model reads the text exactly as it was, or not at all. A
+detection never decides a tool call either. Every call still goes through the
+same three-button prompt, and granted or consent-free calls still run without
+one.
+
+**Only turns that use tools are checked:** agent mode and the web-search turn.
+That's where injected text can act without the user, by calling a tool or by
+sending the conversation somewhere with `fetch_url`. Plain chat, cloud chat
+and Writing Tools give the model no tools, so whatever injected text does
+there (a slanted answer, a persuasive request, a link) still needs the user to
+act on the reply. Checking them would cost every message a 3–15 s classifier
+load, about 1 GB of RAM and false-positive pauses, so they aren't checked, by
+design. Nothing they carried escapes the check: a tool turn re-checks the
+conversation's whole model-bound history, so a file attached in plain chat is
+reviewed the first time the conversation reaches a tool.
+
+**A knowing exception to mono-model first.** This is a second, dedicated
+model on every machine's default path, and there is no setting that turns it
+off. See ARCHITECTURE.md → Design philosophy for why that trade was made
+(issue #9).
+
+**The model.**
+- [Horizon-Labs/prompt-injection-guard-small](https://huggingface.co/Horizon-Labs/prompt-injection-guard-small):
+  an mmBERT-small classifier (141M parameters, Apache-2.0, multilingual,
+  French included) labelled `SAFE` / `INJECTION`.
+- `injection/model.rs` pins one revision of two files: the publisher's own
+  int8-embedding ONNX export (268 MB) and its `tokenizer.json` (34 MB), each
+  checked by size and sha256. The tokenizer also carries the model's
+  obfuscation normalizer: NFKC, and stripping invisible and tag characters.
+- It runs in-process with `tract-onnx`, which is pure Rust with no runtime
+  library to bundle or sign.
+- Text is cut into 512-token windows overlapping by 64 tokens, and the text's
+  score is its highest window score. It is flagged at P(injection) ≥ 0.5,
+  the model's own decision boundary, deliberately not tuned on our samples.
+- Conversation transcripts lose their `user:` / `assistant:` prefixes before
+  scoring, because they look exactly like the forged turns injected text
+  fakes.
+
+**What is scanned, and where.**
+1. **The start of every turn that uses tools** (`commands::chat_stream`).
+   The turn's route (`TurnRoute`) is decided first, and only agent and
+   web-search turns (`TurnRoute::scans`) go through the gate; plain and cloud
+   turns are routed straight away.
+   - What's scanned: each user message's typed text, the body of an invoked
+     `/<skill>`, and attached documents. A document is scanned with its file
+     name, exactly as the model receives it.
+   - Documents and skill bodies are checked before the turn is routed, and
+     the turn waits for them. Typed text is checked in the background once
+     that check is through.
+   - The whole history is re-sent every turn, so all of it is in scope,
+     including messages sent earlier in plain chat. It is scanned newest
+     first. Messages the user withheld from the model (see below) are neither
+     sent nor scanned.
+   - Text already scored this run is answered from a cache without waiting
+     behind a scan in progress.
+2. **Every tool result** (`orchestrator::run_and_report`), including those
+   in a subagent's nested loop, after the tool ran and before the result
+   goes back to the model:
+   - `fetch_url` pages and `web_search` snippets;
+   - `read_file`;
+   - `run_shell` / `run_code` output;
+   - `read_project_conversation` and `list_project_conversations`;
+   - `ask_user` answers, which are the user's own words and are handled like
+     typed text;
+   - any tool this list doesn't know yet.
+
+   Skipped: `write_file` and `create_artifact`, whose results are the app's
+   own fixed confirmations, and `spawn_subagent`, whose result is the helper
+   model's answer (its own tool results were scanned inside its loop).
+
+Not scanned: plain and cloud chat turns, Writing Tools and the Message
+improver; the model's own earlier replies; the system prompt (the user's own
+setting); images; and tool error messages.
+
+**What a detection does.** It depends on who chose the text.
+- **A pause, for text the user didn't write.** An attached document, an
+  invoked skill's body or a tool result waits on a review card before the
+  model reads any of it: Continue sends it unchanged, Stop ends the reply
+  without the model reading it. This holds in agent and web-search turns,
+  for attachments, skills and tool results, granted and consent-free calls
+  included. See "Review before the model reads" below.
+- **A notice, for text the user typed or pasted.** The message being sent
+  and an `ask_user` answer go to the model as written, since pressing Send
+  was the decision. The reply gets a notice line instead: "Possible hidden
+  instructions for the AI in your message. It was sent as you wrote it. If
+  you copied it from somewhere, double-check this answer." Typed text in
+  older messages only flags the consent card.
+- **One app-log line** under the `prompt_injection` target, for example:
+  `WARN prompt_injection: possible prompt injection in text sent to the model source="web_page" score=0.97 chars=18342`.
+  - It records the route, the score and the length, never the text: the log
+    is meant to be shared for support.
+  - A given text is logged the first time it is flagged in a run. If it
+    reappears in later turns it still flags those turns, but isn't logged
+    again.
+  - `logging::level_filter` always lets this target through, so even
+    Settings → Advanced → Logs → "Errors only" doesn't hide a detection.
+  - Each answer to a review card adds one line per item, again with the
+    route and never the text or a name:
+    `WARN prompt_injection: user decision on possible prompt injection source="attachment" decision="stopped" unchecked=false`.
+- **A consent-card flag.** `AgentDeps.injection` (a `TurnGuard`, shared with
+  subagents) remembers that the turn saw a detection. `dispatch_call` adds
+  `DangerFlag::PromptInjectionSuspected` to the next consent card, after
+  waiting up to 10 s for scans still in flight. The card shows one more
+  warning line: "Something the AI read earlier looked like hidden
+  instructions aimed at it. Double-check this is what you actually want."
+  The line appears even when the user already chose Continue for that text.
+
+**Review before the model reads** (`injection/review.rs`).
+- **Two gates, one card.**
+  - `TurnGuard::gate_user_side` runs once per agent or web-search turn,
+    before routing. `commands::chat_stream` goes through
+    `injection::run_guarded`, which only routes the turn after Continue, or
+    when nothing needed asking. It covers the documents and skill bodies of
+    every message that will be sent, and one card lists every flagged item,
+    since they all go out in one request.
+  - `TurnGuard::gate_tool_result` runs in `run_and_report`, after the tool
+    ran and before its result goes back. Each flagged result gets its own
+    card, in call order. A helper's result says which helper found it.
+- **Events and the answer.**
+  - `InjectionCheckStarted` / `InjectionCheckFinished` drive a "Checking…"
+    status line, shown only when a check takes longer than 700 ms.
+  - `InjectionReviewRequested` brings up the card. For each item it gives
+    the route, a name (the file, the `/skill`, or the URL, query, path or
+    command of the tool call) and an excerpt: the part of the text that
+    tripped the check, shown as plain text, with invisible characters shown
+    as `▯`. Only the first four items of a card carry an excerpt.
+    - The excerpt is at most 1,500 characters. The classifier's most
+      suspicious window is 510 tokens, about 2,000 characters of prose, so
+      when a flagged window is longer than that, `review::locate` scores
+      half-overlapping 1,500-character stretches of it and keeps the
+      highest. That runs once per flagged text, right after it was scored,
+      and the cached verdict keeps the result.
+    - An attached file's name is cut at 160 characters on the card. A name
+      cut that way stays in the excerpt whole, as the
+      `[Attached file: …]` line the model reads, since an instruction can
+      hide in a long name too.
+  - The frontend answers with `respond_injection_review` (`continue` or
+    `stop`). `ConsentBroker` brokers it the same way it brokers a consent
+    card.
+  - Each answer leaves one `InjectionNotice` per item, saved on the reply as
+    `injectionNotices`. A notice holds the route, the name, the outcome and,
+    for user-side text, the message's id. It never holds the excerpt.
+    Excerpts are never stored or logged.
+- **Continue.** The text reaches the model byte-for-byte unchanged. The
+  choice is remembered in memory for this conversation and this run of the
+  app, keyed by conversation, route and the text's hash, so the re-sent
+  history doesn't ask again. It is never saved, because an approval stored
+  with the conversation could be forged by importing or syncing one. After a
+  restart the user is asked once more.
+- **Stop on an attachment or skill.** No request is sent and the reply keeps
+  only its "stopped" notice. The user messages that carried the text are
+  saved with `withheldFromModel: true` and tagged "Not sent to the AI" in
+  the chat. From then on they, and the replies after them, are left out of
+  every request (`engine::model_bound`) and are never asked about again.
+  The flag can only take text out of a request, so a forged one is
+  harmless. Retry clears it and asks again, and Edit sends a new message,
+  which is checked again.
+- **An item from an earlier message.** The usual way a file attached in plain
+  chat meets the card is a later tool turn, after the model already read it
+  in earlier replies. When an item's `messageId` isn't the turn's own user
+  message, the card says so instead of promising the AI won't read it: "The
+  AI read this earlier. Check it before the AI uses tools." and "Stop keeps
+  it out of everything the AI reads from now on, and this reply ends." The
+  "stopped" notice words it the same way. Stop works as above: the earlier
+  message and the replies after it are withheld from then on.
+- **Stop on a tool result.** The turn's cancel flag is set. The rest of that
+  round's calls are denied as "stopped", the loop ends with `Done`, and no
+  further request is made. Because a helper shares the turn's cancel flag,
+  this also ends the turn when the result came from a helper's loop.
+- **Audit.** A tool result's review adds an `injectionReview` entry for the
+  call to the audit trail (the hash-chained `agent_audit` table in the
+  encrypted app database, see "Audit log" below), with the decision
+  `continued` or `stopped`, after the call's usual `finished` entry. The
+  entry records an answer to a card, so it is written only when a card was
+  shown. A Stop pressed while the tool ran or while its result was being
+  checked ends the turn the same way, but adds no entry
+  (`review::Review::Interrupted`).
+- **Dismissing never lets text through.** Escape means Stop. The card
+  focuses itself, never a button, so a stray Space or Enter answers
+  nothing; and it doesn't take the focus at all while another dialog or
+  preview is open or the user is typing a message, so a key meant for
+  those can't answer it either. The Stop button counts as Stop while a
+  check is running or a card is up; a notice is written only if a card was
+  showing. The turn claims the generation slot before the gate, which is
+  why the Stop button can reach it. A reload of the window (F5 stays live
+  in WebView2) stops the running turn the same way, since nothing on the
+  new page could answer its card. The gate also runs inside its own
+  `begin_generation` / `end_generation` bracket (every checked turn is
+  local), so auto-unload can't fire under an open card.
+
+**Lifecycle and cost.**
+- **Download.** The two files download silently in the background after
+  unlock (`Detector::download_until_present`) into `<data>/prompt-guard/`, on
+  every desktop install, so they're there the moment someone turns agent
+  mode or web search on. Not on Android, where no turn uses tools. The
+  download is resumable, refuses to start without 1 GB of free disk to spare,
+  and retries with backoff (30 s, 2 min, 10 min, then hourly).
+- **Load and unload.** The classifier is in memory only around tool turns.
+  Nothing loads it ahead of time: the first scan of an agent or web-search
+  turn does, and that turn holds it (`TurnGuard::for_tool_turn`, a
+  `ClassifierHold`) until it ends, so a card left open or a long tool run
+  never sees it unloaded halfway. Once no turn holds it, the app's idle loop
+  drops it after 5 minutes without a scan, counted from the later of its
+  last scan and the end of the last turn that held it, whatever the chat
+  model is doing. Unload, auto-unload and deleting the running model drop it
+  too. On an Apple M4 a load takes 3.2–3.7 s, or about 14.5 s once from a
+  cold disk, so the first tool turn after 5 idle minutes shows "Checking…"
+  for that long, well inside the gate's 60 s wait. With its tokenizer it
+  uses about 0.8–1 GB of RAM on top of the chat model while it's loaded.
+  Model recommendations (`selection.rs`) don't reserve room for it.
+- **Speed.** Scans run one at a time, on at most half the CPU cores (4 at
+  most). On an M4 that is about 0.3 s per 512-token window: 3.4 s for a
+  20,000-character page, about 34 s for a 200 KB tool result (the
+  `MAX_TOOL_OUTPUT_BYTES` cap), and well under a second for a short message.
+- **Who waits.** Attachments, skills and tool results are checked in the
+  foreground: the turn waits for their verdict.
+  - A check that takes longer than 700 ms (`CHECKING_STATUS_AFTER`) shows
+    "Checking…" in the reply's status line.
+  - A gate waits at most 60 s (`GATE_SCAN_WAIT`) for a verdict. On the user
+    side that covers all of the turn's attachments and skills together.
+    After that the user is asked, with the item marked as not checked. The
+    scan carries on, so its verdict is still cached and logged.
+  - Typed text is checked while the reply is written. Once the reply is
+    done, the turn gives its notice up to 2 s more to arrive
+    (`NOTICE_GRACE`); a verdict that comes later only flags and logs.
+- **Pre-scoring at pick time.** In a chat with agent tools or web search on,
+  `pick_attachments` (with `prescan`) starts scoring each picked document in
+  the background, in the same form the gate checks it. The verdict is then
+  usually cached before Send is pressed, and the pick loads the classifier
+  while the user is still typing. One side effect: a detection's log line is
+  written when the file is picked, not when it's sent. Plain chat and
+  Writing Tools don't pre-score.
+- **When unavailable.** While the files are missing, scans are skipped and
+  one warning per run says detection is unavailable. If they fail to load,
+  each attempt logs its reason and loading is retried every 10 minutes.
+  Either way, text goes through unchecked, with no pause and no notice. A
+  classifier that is there but fails on one particular text, or has no
+  verdict within 60 s, is different: the user is asked, with a "Couldn't
+  finish checking" item, so a text crafted to make the check fail can't
+  slip through.
+
+**How well it works.** It was measured on the documented sample sets in
+`crates/core/tests/fixtures/prompt_injection/`: 163 English and French
+samples across all eight routes. That folder's README has the full
+breakdown, and `tests/prompt_injection_corpus.rs` re-checks it against the
+real model.
+- 73 of 75 benign samples pass. The 2 false positives are raw chat-completion
+  JSON in command output, and one email-drafting transcript.
+- 69 of 76 injection samples are flagged, including the text from issue
+  #9's own report, attached as a file.
+- **Known blind spot: skills.** 7 of 9 skills with a hidden malicious step
+  are missed. A skill is the user's own instructions to the model by design,
+  so a bad instruction inside one reads like a legitimate request. Blatant
+  payloads in skills are still caught.
+- A page that merely *quotes* an injection payload, for example a security
+  write-up, may be flagged. That is accepted, but it isn't free: a false
+  positive on anything the user didn't write (a page, a file, an attachment,
+  a skill) costs a pause until the user answers the card, and one on a typed
+  message costs a notice line. Continue keeps it from asking again in the
+  same conversation.
+
+**Not in this design.**
+- Checking plain chat, cloud chat, Writing Tools or the Message improver.
+  Their model has no tools; a file they carried is checked once the
+  conversation reaches a tool turn.
+- Pausing on typed or pasted text, or on `ask_user` answers: those get a
+  notice only.
+- Redacting flagged text, withholding one attachment out of a message, or a
+  third "skip this and keep going" answer.
+- Saving Continue choices or the score cache to disk.
+- Holding text back while the classifier is missing or still downloading.
+- Showing scores, or a setting that turns detection off.
+- Scanning tool error messages.
+- Checking what a paired device sends through the Remote Access gateway
+  (`remote/gateway.rs`), which goes straight to the engine.
+- Wiring up `heuristics::derived_from_recent_output`, which is still unused.
 
 ## Where the web tools may send requests
 
@@ -318,12 +613,14 @@ OpenPal's own update notes are the one place links open without asking.
 
 ## Audit log
 
-`logs/agent-audit.log` is a lightweight, hash-chained lifecycle trail (each
-line's `prevHash` is the SHA-256 of the previous line's exact bytes) —
-honest about its limits: it **detects** a retroactive edit to an
-already-written line; it does **not** prevent an attacker with filesystem
-write access from truncating the file and starting a fresh, internally
-consistent chain from a fabricated genesis (real non-repudiation would need
+The audit log is a lightweight, hash-chained lifecycle trail kept as rows
+of the `agent_audit` table in the app-wide, SQLCipher-encrypted database —
+not a standalone file (`agent/audit.rs`). Each row's `prevHash` is the
+SHA-256 of the previous row's exact `line` bytes. Honest about its limits:
+it **detects** a retroactive edit to an already-written row and pinpoints
+where history diverges; it does **not** stop someone holding the database
+key from rewriting the whole chain from a fabricated genesis, nor a
+rollback to a stale-but-valid backup (real non-repudiation would need
 external signing/timestamping — out of scope). It also doesn't carry full
 argument/output content — that's the (deletable) conversation transcript's
 job; the audit log only ever sees a short, already-capped preview.

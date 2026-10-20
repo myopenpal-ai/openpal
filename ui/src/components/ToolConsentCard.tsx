@@ -163,5 +163,7 @@ function dangerFlagText(flag: DangerFlag, tFull: ReturnType<typeof useTranslatio
       return t("chatView.toolConsent.dangerFlags.sudoOrPrivEsc");
     case "derivedFromRecentOutput":
       return t("chatView.toolConsent.dangerFlags.derivedFromRecentOutput");
+    case "promptInjectionSuspected":
+      return t("chatView.toolConsent.dangerFlags.promptInjectionSuspected");
   }
 }

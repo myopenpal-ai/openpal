@@ -385,11 +385,36 @@ impl EngineManager {
 /// extra fields (model, thinking, citations, steps, display_content) are
 /// dropped — llama-server doesn't use them.
 ///
+/// Messages the user withheld from the model are left out (see
+/// [`model_bound`]).
+///
 /// Public so the plugin chat path (web search) can fold attachments the same
 /// way before handing messages to its sidecar — otherwise attachments would be
 /// silently lost whenever a tool plugin drives the turn.
 pub fn build_api_messages(messages: &[ChatMessage]) -> Vec<serde_json::Value> {
-    messages.iter().map(build_api_message).collect()
+    model_bound(messages).map(build_api_message).collect()
+}
+
+/// The messages that may reach the model, in order: everything except a user
+/// message marked [`ChatMessage::withheld_from_model`] (the user stopped a
+/// review of text it carried) and the assistant replies that follow it, up to
+/// the next user message. System messages always pass. Dropping the replies
+/// too keeps user/assistant turns alternating, and a reply written from the
+/// withheld text could repeat it. Every request builder goes through this
+/// ([`build_api_messages`]), and so do the prompt-injection scan
+/// (`injection::TurnGuard::user_side_parts`): withheld text is never sent,
+/// so it's never asked about again either — and `read_project_conversation`,
+/// so another conversation's model can't read it either.
+pub fn model_bound(messages: &[ChatMessage]) -> impl Iterator<Item = &ChatMessage> {
+    let mut skipping = false;
+    messages.iter().filter(move |m| match m.role.as_str() {
+        "user" => {
+            skipping = m.withheld_from_model == Some(true);
+            !skipping
+        }
+        "assistant" => !skipping,
+        _ => true,
+    })
 }
 
 fn build_api_message(m: &ChatMessage) -> serde_json::Value {
@@ -515,6 +540,8 @@ mod tests {
             artifacts: None,
             stats: None,
             display_content: None,
+            injection_notices: None,
+            withheld_from_model: None,
         }
     }
 
@@ -523,6 +550,52 @@ mod tests {
         let body = build_api_message(&user_msg("hello", None));
         assert_eq!(body["role"], "user");
         assert_eq!(body["content"], "hello");
+    }
+
+    #[test]
+    fn model_bound_skips_a_withheld_turn_and_its_replies() {
+        let mut system = user_msg("You are OpenPal.", None);
+        system.role = "system".to_string();
+        let first = user_msg("first question", None);
+        let reply = |content: &str| {
+            let mut m = user_msg(content, None);
+            m.role = "assistant".to_string();
+            m
+        };
+        let mut withheld = user_msg("summarize the attached file", None);
+        withheld.withheld_from_model = Some(true);
+        let mut kept = user_msg("next question", None);
+        kept.withheld_from_model = Some(false);
+        let messages = vec![
+            system,
+            first,
+            reply("first answer"),
+            withheld,
+            reply(""),
+            reply("an answer written from the withheld file"),
+            kept,
+            reply("next answer"),
+        ];
+
+        let contents: Vec<&str> = model_bound(&messages).map(|m| m.content.as_str()).collect();
+        assert_eq!(
+            contents,
+            vec![
+                "You are OpenPal.",
+                "first question",
+                "first answer",
+                "next question",
+                "next answer",
+            ]
+        );
+        // Every request is built from the same filtered list.
+        let wire = build_api_messages(&messages);
+        let roles: Vec<&str> = wire.iter().map(|m| m["role"].as_str().unwrap()).collect();
+        assert_eq!(
+            roles,
+            vec!["system", "user", "assistant", "user", "assistant"]
+        );
+        assert!(!serde_json::to_string(&wire).unwrap().contains("withheld"));
     }
 
     #[test]

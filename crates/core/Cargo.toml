@@ -78,6 +78,21 @@ mdns-sd = "0.21"
 # feature deliberately doesn't install one itself, and rustls panics
 # without one installed.
 rustls = { version = "0.23", default-features = false, features = ["ring", "tls12", "std"] }
+# Prompt-injection detection (`crate::injection`): the classifier is a
+# quantized ONNX file run in-process. tract is pure Rust — its linalg crate
+# only assembles its own SIMD kernels through `cc`, with no cmake, no C++ and
+# no runtime library to bundle or codesign — which is why it was picked over
+# `ort` (ONNX Runtime ships no Intel-Mac build and needs macOS 14) and
+# `candle` (it needs the fp32 weights, twice the download, and published
+# candle-core pulls in a C regex library). `multithread-mm` lets one scan use
+# more than one core. 0.23.9 is the floor: 0.23.8 mis-shapes this model's
+# attention mask (`Where_1`) whenever the sequence length is symbolic.
+tract-onnx = "0.23.9"
+tract-linalg = { version = "0.23.9", features = ["multithread-mm"] }
+# The classifier's own `tokenizer.json`. `fancy-regex` instead of the default
+# `onig` (a C library), and no `esaxx_fast` (C++): same no-native-toolchain
+# stance as `rcgen`/`axum-server` above.
+tokenizers = { version = "0.23.2", default-features = false, features = ["fancy-regex"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
@@ -99,3 +114,6 @@ rusqlite = { version = "0.40.1", features = ["bundled-sqlcipher-vendored-openssl
 http-body-util = "0.1.5"
 tempfile = "3"
 tower = { version = "0.5.3", features = ["util"] }
+# Captures `tracing` output in tests that assert on app-log entries
+# (`crate::injection`). Already in the lockfile through `openpal-app`.
+tracing-subscriber = "0.3"

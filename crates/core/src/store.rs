@@ -493,6 +493,8 @@ mod tests {
                 artifacts: None,
                 stats: None,
                 display_content: None,
+                injection_notices: None,
+                withheld_from_model: None,
             }],
             sampling: SamplingParams::default(),
             context_length: 8192,
@@ -655,6 +657,8 @@ mod tests {
                 artifacts: None,
                 stats: None,
                 display_content: None,
+                injection_notices: None,
+                withheld_from_model: None,
             }],
             ..conversation(id, updated_at_ms)
         }

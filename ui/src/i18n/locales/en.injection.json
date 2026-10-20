@@ -1,0 +1,51 @@
+{
+  "review": {
+    "title": "Check this before the AI reads it",
+    "titleMany": "Check these before the AI reads them",
+    "why": "Text like this can trick the AI into doing things you didn't ask for, like revealing private information or ignoring your request.",
+    "excerptLabel": "The part that looks suspicious:",
+    "excerptTruncated": "(shortened)",
+    "hiddenChars": "It also contains invisible characters, shown here as ▯.",
+    "foundBy": "Found by: {{helper}}",
+    "advice": "If you're not sure, stop. The AI won't read any of it, and this reply ends.",
+    "stop": "Stop here",
+    "continue": "Continue anyway",
+    "titleEarlier": "The AI read this earlier. Check it before the AI uses tools.",
+    "titleEarlierMany": "The AI read these earlier. Check them before the AI uses tools.",
+    "adviceEarlier": "Stop keeps it out of everything the AI reads from now on, and this reply ends.",
+    "readEarlier": "The AI already read this earlier in the conversation."
+  },
+  "found": "Possible hidden instructions for the AI in {{where}}.",
+  "unchecked": "Couldn't finish checking {{where}} for hidden instructions in time.",
+  "where": {
+    "attachment": "the file “{{name}}”",
+    "skill": "the skill {{name}}",
+    "webPage": "a web page the AI opened",
+    "webSearch": "web search results",
+    "file": "a file the AI read",
+    "commandOutput": "the result of a command the AI ran",
+    "projectConversation": "another conversation in this project",
+    "toolOutput": "the result of a tool the AI used",
+    "composer": "your message",
+    "unknown": "something the AI was about to read",
+    "named": "{{where}} ({{name}})"
+  },
+  "outcome": {
+    "continued": "You chose to continue anyway. Double-check this answer.",
+    "stopped": "You stopped here, so the AI didn't read any of it.",
+    "sent": "It was sent as you wrote it. If you copied it from somewhere, double-check this answer.",
+    "stoppedEarlier": "You stopped here. The AI had already read it earlier, but won't read it again."
+  },
+  "activity": {
+    "checking": "Checking what the AI is about to read…",
+    "checkingNamed": "Checking “{{name}}” before the AI reads it…",
+    "waitingReview": "Waiting for you to check something"
+  },
+  "notice": {
+    "srPrefix": "Warning:",
+    "listLabel": "Safety notices for this reply"
+  },
+  "message": {
+    "withheld": "Not sent to the AI"
+  }
+}

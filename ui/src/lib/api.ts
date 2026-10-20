@@ -35,6 +35,7 @@ import type {
   HfSearchPage,
   HfSearchQuery,
   ImportSummary,
+  InjectionReviewDecision,
   ModelInfo,
   NotificationClick,
   NotificationPermission,
@@ -160,9 +161,11 @@ export const api = {
    * Open a native picker for chat attachments. Images are offered only when
    * `allowImages` (a vision model is active); documents (PDF/text/code) always.
    * Resolves to the attachments that could be read (empty if cancelled).
+   * `prescan` starts the prompt-injection check of the documents right away —
+   * only for a chat whose next turn is checked (agent tools or web search on).
    */
-  pickAttachments: (allowImages: boolean) =>
-    invoke<Attachment[]>("pick_attachments", { allowImages }),
+  pickAttachments: (allowImages: boolean, prescan: boolean) =>
+    invoke<Attachment[]>("pick_attachments", { allowImages, prescan }),
   openModelsFolder: () => invoke<void>("open_models_folder"),
   openLink: (url: string) => invoke<void>("open_link", { url }),
   /**
@@ -322,6 +325,12 @@ export const api = {
    * empty when the user dismissed the question without one. */
   respondClarifyingQuestion: (requestId: string, answer: string) =>
     invoke<void>("respond_clarifying_question", { requestId, answer }),
+  /** Reply to a pending `injectionReviewRequested` event (agent mode or a
+   * web-search turn, the only turns checked): "continue" lets the held-back
+   * text reach the model unchanged, "stop" keeps it from the model and ends
+   * the turn. */
+  respondInjectionReview: (requestId: string, decision: InjectionReviewDecision) =>
+    invoke<void>("respond_injection_review", { requestId, decision }),
   listToolGrants: () => invoke<ToolGrant[]>("list_tool_grants"),
   revokeToolGrant: (grantKey: string) => invoke<void>("revoke_tool_grant", { grantKey }),
   /** The full content of a `create_artifact`-created file, fetched when the

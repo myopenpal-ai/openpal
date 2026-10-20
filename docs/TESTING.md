@@ -12,6 +12,7 @@ Rust core, a Python-sidecar plugin system, and no server to deploy.
 |---|---|---|
 | Rust unit tests | `crates/core/src/*.rs`, `crates/app/src/*.rs`, `bundler/src/*.rs` (inline `#[cfg(test)]`) | `cargo test -p <crate>` |
 | Rust real-engine e2e | `crates/core/tests/{engine,writing_tools,prompt_enhancer}_e2e.rs` (`#[ignore]`) | `cargo test -p openpal-core -- --ignored` |
+| Rust real-model prompt-injection detector | `crates/core/tests/prompt_injection_corpus.rs` (`#[ignore]`) | `cargo test -p openpal-core --test prompt_injection_corpus -- --ignored --nocapture` |
 | Frontend unit/component tests | `ui/src/**/*.test.ts(x)` (Vitest) | `npm test` (in `ui/`) |
 | Frontend mocked-IPC e2e | `ui/tests/e2e/**` (Playwright) | `npm run test:e2e` (in `ui/`) |
 | Python plugin tests | `plugins/web-search/tests/`, `plugins/speech/tests/` (pytest) | `python -m pytest` (in each plugin dir) |
@@ -24,13 +25,15 @@ Rust core, a Python-sidecar plugin system, and no server to deploy.
 | `.github/workflows/ci.yml` | every PR, push to `main` | **yes** (required) | `cargo fmt --check`, `cargo clippy --workspace -- -D warnings`, `cargo test` per crate, `ui` typecheck + `vite build`, Vitest, Playwright mocked-IPC e2e |
 | `.github/workflows/plugin-tests.yml` | PR/push touching `plugins/web-search/**` or `plugins/speech/**` | yes, scoped | pytest for whichever plugin(s) changed |
 | `.github/workflows/engine-e2e.yml` | PR/push touching `crates/core/src/engine/**`, `download.rs`, `sse.rs`, `writing_tools.rs`, `prompt_enhancer.rs`, or any file under `crates/core/tests/` | yes, scoped | the real llama-server engine tests (stages the engine via the bundler, downloads the ~140MB SmolLM2 test model, runs a real chat round-trip for plain chat, Writing Tools Translate/Correct, and the Message improver) |
+| `.github/workflows/injection-e2e.yml` | PR/push touching `crates/core/src/injection/**`, `crates/core/tests/prompt_injection_corpus.rs`, `crates/core/tests/fixtures/prompt_injection/**` or `Cargo.lock` | scoped | the real prompt-injection classifier (downloads the pinned ~300MB model, cached by its sha256) over the documented benign/injection sample sets, one known payload per route, a buried payload's most suspicious window, and a review card's excerpt holding a payload at the end of a window longer than the card shows |
 | `.github/workflows/notify-platforms.yml` | PR/push touching `crates/app/src/notify/**`, `crates/app/src/lib.rs`, `crates/app/Cargo.toml` or `Cargo.lock` | yes, scoped | `cargo clippy -p openpal-app --all-targets -- -D warnings` and `cargo test -p openpal-app notify` on macOS and Windows runners, and `cargo clippy -p openpal-app` for `aarch64-linux-android` with the runner's NDK — the platform-gated notification backends `ci.yml`'s Linux job never compiles. Not the Kotlin half (no Gradle build), and nothing that shows a notification |
 | `.github/workflows/portable.yml` (pre-existing, unchanged) | manual dispatch, `v*` tags | no (release pipeline, not a test gate) | cross-platform Portable builds + signed draft release |
 
-Path-filtered workflows (`plugin-tests.yml`, `engine-e2e.yml`, `notify-platforms.yml`) simply don't
-run at all on a PR that doesn't touch their paths — GitHub treats a required
-check from a workflow that wasn't triggered as satisfied, so they're safe to
-mark as required status checks without blocking unrelated PRs.
+Path-filtered workflows (`plugin-tests.yml`, `engine-e2e.yml`,
+`injection-e2e.yml`, `notify-platforms.yml`) simply don't run at all on a
+PR that doesn't touch their paths — GitHub treats a required check from a
+workflow that wasn't triggered as satisfied, so they're safe to mark as
+required status checks without blocking unrelated PRs.
 
 ### Why these boundaries
 
@@ -69,6 +72,31 @@ never applied), the latter had ~11 real violations across `crates/core`,
 `crates/app`, and `bundler`. Both are now clean workspace-wide; this had to
 happen before either could be a meaningful CI gate rather than one that's red
 from the moment it's turned on.
+
+**The prompt-injection review is covered by unit tests, with no model.**
+They run a fake classifier (`Detector::with_classifier`), so the bare
+`cargo test` covers them:
+- `injection::review`'s tests cover the pause, Continue reaching the model
+  byte-identical, Stop, the Stop button while checking or while the card is
+  up, "unchecked" on a classifier error or timeout, and per-conversation
+  memory.
+- `agent::orchestrator`'s tests record every request the fake model server
+  gets (`fake_server_capturing`). That proves the model saw nothing of a
+  flagged result before Continue, and nothing at all after Stop.
+- The glue every checked turn goes through, `injection::run_guarded`, lives
+  in core so it can be tested there; the app crate has no Tauri test harness.
+- Which turns are checked at all is one pure function,
+  `TurnRoute::decide` / `TurnRoute::scans` in `commands.rs`, pinned by
+  `turn_route_follows_route_turns_order`: only agent and web-search turns.
+  That table is the only guard on the mapping. `injection-review.spec.ts`
+  plays the backend's part, so it can't show that plain chat doesn't pause.
+- `injection`'s own tests load a stand-in classifier over sparse
+  placeholder files (`model::fake_download`): loaded by the first scan,
+  never ahead of it; kept while a tool turn holds it (`ClassifierHold`), with
+  the idle clock restarting when the last hold drops; unloaded with the
+  engine; and never dropped mid-scan by the idle timer. The app-side calls
+  (`commands::unload_classifier`, `idle.rs`) have no test, for the reason
+  above.
 
 ### Known gaps (prioritized backlog, not yet implemented)
 
@@ -109,12 +137,14 @@ already-passing suite, not failures. Pick them up incrementally.
 ### What CI runs vs. what stays manual
 
 `cargo test -p <crate>` (bare, `--ignored` excluded) is what `ci.yml` runs.
-The `#[ignore]`d tests — `engine_e2e.rs`/`writing_tools_e2e.rs`/`prompt_enhancer_e2e.rs`'s real llama-server runs and
+The `#[ignore]`d tests — `engine_e2e.rs`/`writing_tools_e2e.rs`/`prompt_enhancer_e2e.rs`'s real llama-server runs,
+`prompt_injection_corpus.rs`'s real-classifier runs (sample sets and their
+README in `crates/core/tests/fixtures/prompt_injection/`), and
 `huggingface.rs`'s 3 live-network tests — download real resources and hit
 live services, so they're deliberately excluded from the default run and only
-reachable via `engine-e2e.yml`'s path-filtered job or a manual
-`-- --ignored` invocation. A failure there means "investigate," not "the PR
-that triggered it broke something."
+reachable via `engine-e2e.yml`'s or `injection-e2e.yml`'s path-filtered jobs
+or a manual `-- --ignored` invocation. A failure there means "investigate,"
+not "the PR that triggered it broke something."
 
 ## Frontend (`ui/`)
 
@@ -139,6 +169,18 @@ for the interactive runner). Currently covers:
   ordering (`"M4 Max"` must not fall through to bare `"M4"`), MoE vs. dense.
 - `state/store.ts` — the exported pure predicates `modelBrowserAvailable`
   and `cloudModelsAvailable`.
+- `state/store.ts`'s prompt-injection review handling (the
+  `"prompt-injection review"` block in `store.test.ts`): a review held until
+  answered, the notices and `withheldFromModel` saved at settle, the
+  "Checking…" status, and Retry. It mocks `../lib/api`, and its `chatStream`
+  mock plays the turn by calling `onEvent` with `ChatEvent`s.
+- `components/InjectionReviewCard.tsx` — an alertdialog named by its title,
+  focus on the card itself (never a button, and not taken from a draft being
+  typed or from an open preview, whose Escape stays its own), Escape means
+  Stop, excerpts and names rendered as literal
+  text (never Markdown), the "unchecked" and invisible-characters lines, and
+  French. `components/InjectionNotices.tsx` — every route × outcome gives a
+  real sentence, with a fallback for a value from a newer version.
 - The in-app alerts and the native-notification rules (the settings side is
   the next bullet):
   - `lib/engineEvents.test.ts` and `state/storeAlerts.test.ts` — "model loaded" and
@@ -241,12 +283,17 @@ middle tier — and the one every PR now runs — is Playwright against the
 plain Vite dev server with the Tauri IPC layer mocked:
 
 - `ui/playwright.config.ts` boots `npm run dev` and points Chromium at it.
+- Playwright reuses a dev server already on :5173 outside CI
+  (`reuseExistingServer`). If another checkout's `npm run dev` holds that
+  port, the run silently tests that checkout's code: stop it first, or run
+  with a config that uses another port.
 - `ui/tests/e2e/support/tauriMock.ts` injects a minimal
   `window.__TAURI_INTERNALS__.invoke` shim via `page.addInitScript` — every
   registered command resolves to a canned fixture. Deliberately doesn't
   implement the real `Channel` wire protocol (see the note in that file);
   flows that stream (chat, downloads, plugin setup) need their own
-  purpose-built mock, same caveat as the Vitest side.
+  purpose-built mock, same caveat as the Vitest side
+  (`injection-review.spec.ts`, below, has one for `chat_stream`).
 - `ui/tests/e2e/onboarding.spec.ts` is the first (smoke) spec: a fresh
   install's `boot()` sequence resolves against fixtures and the app renders
   the onboarding welcome screen, with zero browser console errors.
@@ -276,6 +323,23 @@ plain Vite dev server with the Tauri IPC layer mocked:
   OS. It never touches a real window: the OS-drawn frame, how a webview paints
   select popups and scrollbars, a real OS appearance change reaching
   WKWebView/WebView2 and the production stylesheet stay manual checks.
+- `ui/tests/e2e/injection-review.spec.ts` drives the prompt-injection review
+  card: attach a file, send, the card, Stop / Continue / Escape, the notice
+  line, the "Not sent to the AI" tag, and what `save_conversation` gets;
+  also that a card showing up under an open preview or a message being
+  typed leaves their keys alone, and that a long file name in a notice
+  wraps inside the narrowest chat column. Its
+  `openStreamingChat` is the streaming mock to copy for `chat_stream`:
+  - On top of `mockTauriIpc`, an init script replaces
+    `__TAURI_INTERNALS__.transformCallback` so each Channel callback is kept
+    by id, and stubs `unregisterCallback`, which a Channel calls when its
+    end frame arrives.
+  - It wraps `invoke` so `chat_stream` returns a promise that stays pending.
+    The test then plays the backend: it delivers `{ index, message }`
+    frames, each `message` a `ChatEvent`, to the callback of the `onEvent`
+    Channel's id, and finally `{ index, end: true }` before resolving.
+  - Every command is recorded with its arguments, so a test can assert what
+    the UI sent, e.g. `respond_injection_review { requestId, decision }`.
 - `ui/tests/e2e/alerts.spec.ts` drives the alerts by changing what the mocked
   `get_engine_status` answers while the page polls it on a fake clock: one "Model
   ready" per load however many times Running is read, an unload, a swap, and the

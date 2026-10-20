@@ -55,7 +55,15 @@ pub enum DangerFlag {
     RawDeviceIo,
     NetworkFetchPipeShell,
     SudoOrPrivEsc,
-    DerivedFromRecentOutput { step: u32 },
+    DerivedFromRecentOutput {
+        step: u32,
+    },
+    /// Something read earlier in this same turn — a page, a file, command
+    /// output, an attachment, the user's own message — was flagged by the
+    /// prompt-injection detector (`crate::injection`). Added by the
+    /// orchestrator, not by the tool: the card's tool may be innocent, but the
+    /// model asking for it may have been steered.
+    PromptInjectionSuspected,
 }
 
 /// What the consent prompt shows the user, built by the tool itself before

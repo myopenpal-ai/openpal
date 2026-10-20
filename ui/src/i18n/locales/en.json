@@ -1039,7 +1039,8 @@
         "rawDeviceIo": "Looks like it reads or writes a raw disk device.",
         "networkFetchPipeShell": "Looks like it downloads something and runs it immediately.",
         "sudoOrPrivEsc": "Looks like it tries to run as another user or gain more access.",
-        "derivedFromRecentOutput": "This looks copied from something a tool just returned. Double-check it wasn't slipped in by a file or page it read."
+        "derivedFromRecentOutput": "This looks copied from something a tool just returned. Double-check it wasn't slipped in by a file or page it read.",
+        "promptInjectionSuspected": "Something the AI read earlier looked like hidden instructions aimed at it. Double-check this is what you actually want."
       },
       "allowOnce": "Allow once",
       "alwaysAllow": "Always allow",

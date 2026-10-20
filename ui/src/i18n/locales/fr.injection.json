@@ -1,0 +1,51 @@
+{
+  "review": {
+    "title": "Vérifiez ceci avant que l'IA le lise",
+    "titleMany": "Vérifiez ces éléments avant que l'IA les lise",
+    "why": "Ce genre de texte peut pousser l'IA à faire des choses que vous n'avez pas demandées, comme révéler des informations privées ou ignorer votre demande.",
+    "excerptLabel": "Le passage qui semble suspect :",
+    "excerptTruncated": "(raccourci)",
+    "hiddenChars": "Il contient aussi des caractères invisibles, affichés ici comme ▯.",
+    "foundBy": "Trouvé par : {{helper}}",
+    "advice": "En cas de doute, arrêtez : l'IA n'en lira rien et cette réponse s'arrête là.",
+    "stop": "Arrêter ici",
+    "continue": "Continuer quand même",
+    "titleEarlier": "L'IA a déjà lu ceci. Vérifiez-le avant qu'elle utilise des outils.",
+    "titleEarlierMany": "L'IA a déjà lu ces éléments. Vérifiez-les avant qu'elle utilise des outils.",
+    "adviceEarlier": "Arrêter l'exclut de tout ce que l'IA lira désormais, et cette réponse s'arrête.",
+    "readEarlier": "L'IA a déjà lu ceci plus tôt dans la conversation."
+  },
+  "found": "Instructions cachées possibles pour l'IA dans {{where}}.",
+  "unchecked": "La recherche d'instructions cachées dans {{where}} n'a pas pu se terminer à temps.",
+  "where": {
+    "attachment": "le fichier « {{name}} »",
+    "skill": "la compétence {{name}}",
+    "webPage": "une page web ouverte par l'IA",
+    "webSearch": "des résultats de recherche web",
+    "file": "un fichier lu par l'IA",
+    "commandOutput": "le résultat d'une commande lancée par l'IA",
+    "projectConversation": "une autre conversation de ce projet",
+    "toolOutput": "le résultat d'un outil utilisé par l'IA",
+    "composer": "votre message",
+    "unknown": "un contenu que l'IA allait lire",
+    "named": "{{where}} ({{name}})"
+  },
+  "outcome": {
+    "continued": "Vous avez choisi de continuer quand même. Vérifiez bien cette réponse.",
+    "stopped": "Vous avez arrêté ici : l'IA n'en a rien lu.",
+    "sent": "Il a été envoyé tel que vous l'avez écrit. Si vous l'avez copié d'ailleurs, vérifiez bien cette réponse.",
+    "stoppedEarlier": "Vous avez arrêté ici. L'IA l'avait déjà lu, mais ne le lira plus."
+  },
+  "activity": {
+    "checking": "Vérification de ce que l'IA s'apprête à lire…",
+    "checkingNamed": "Vérification de « {{name}} » avant que l'IA le lise…",
+    "waitingReview": "En attente de votre vérification"
+  },
+  "notice": {
+    "srPrefix": "Avertissement :",
+    "listLabel": "Avertissements de sécurité pour cette réponse"
+  },
+  "message": {
+    "withheld": "Non envoyé à l'IA"
+  }
+}

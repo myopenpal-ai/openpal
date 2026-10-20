@@ -421,7 +421,12 @@ pub fn finish_unlock(
             }
         })
         .unwrap_or_else(relay_base_url);
+    let injection = Arc::new(openpal_core::injection::Detector::new(
+        paths.data_dir.join("prompt-guard"),
+    ));
+    let injection_http = http.clone();
     app.manage(AppState {
+        injection: injection.clone(),
         engine,
         remote,
         remote_backend,
@@ -466,6 +471,13 @@ pub fn finish_unlock(
 
     tauri::async_runtime::spawn(crate::idle::run(app.clone()));
     tauri::async_runtime::spawn(crate::parental::run(app.clone()));
+    // Downloads the classifier if it's missing (silently, retrying until it
+    // works) on every desktop install, so it's there the moment someone
+    // turns agent mode or web search on. The first tool turn loads it
+    // (`commands::chat_stream`); `crate::idle` releases it.
+    if wants_classifier(std::env::consts::OS) {
+        tauri::async_runtime::spawn(injection.download_until_present(injection_http));
+    }
     tauri::async_runtime::spawn(crate::sync_loop::run(app.clone()));
     // Resume Remote Access if it was left on — mirrors how an already-
     // enabled plugin service resumes on launch (`plugins/PLUGINS.md` §4).
@@ -547,10 +559,19 @@ pub struct AppState {
     /// turn) because grants and in-flight prompts must survive across
     /// turns and be reachable from the Settings "standing permissions" UI.
     /// `Arc`-wrapped so a turn's `AgentDeps` can hold its own cheap clone
-    /// without borrowing `AppState` for the duration of the turn.
+    /// without borrowing `AppState` for the duration of the turn. Also holds
+    /// the prompt-injection review cards of agent and web-search turns
+    /// (`respond_injection_review`).
     pub agent_consent: Arc<ConsentBroker>,
     /// Agent mode's hash-chained tool-call lifecycle log.
     pub agent_audit: Arc<AuditLog>,
+    /// The always-on prompt-injection detector (`openpal_core::injection`) —
+    /// a knowing exception to mono-model first, with no setting to turn it
+    /// off. Its classifier downloads in the background after unlock on
+    /// desktop (see `finish_unlock`), loads on the first scan of a turn that
+    /// uses tools, and is released once idle or with the local chat model;
+    /// each such turn wraps it in its own `TurnGuard`, which holds it loaded.
+    pub injection: Arc<openpal_core::injection::Detector>,
     /// model_id -> cancel flag for in-flight downloads.
     pub downloads: tokio::sync::Mutex<HashMap<String, Arc<AtomicBool>>>,
     /// Cancel flag for the in-flight chat generation, if any.
@@ -639,6 +660,14 @@ pub struct AppState {
 /// `.app` on macOS). Its presence — or the `OPENPAL_PORTABLE` env var, handy for
 /// dev testing — switches the app into portable mode.
 const PORTABLE_MARKER: &str = "openpal-portable";
+
+/// Whether this OS downloads the prompt-injection classifier (302 MB): every
+/// desktop one, not Android, where no turn uses tools — the only turns it
+/// checks. Takes the OS name (`std::env::consts::OS`) so both answers are
+/// testable on a desktop build.
+fn wants_classifier(os: &str) -> bool {
+    os != "android"
+}
 
 /// Resolve the data directory and whether this is a Portable build. Portable
 /// mode keeps everything (models, conversations, settings, logs, plugin data) in
@@ -853,6 +882,14 @@ fn resolve_plugin_dirs(app: &AppHandle, data_dir: &Path, portable: bool) -> Vec<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_classifier_downloads_on_desktop_but_not_android() {
+        for os in ["macos", "windows", "linux"] {
+            assert!(wants_classifier(os), "{os}");
+        }
+        assert!(!wants_classifier("android"));
+    }
 
     /// `engine_override_binary` reads the process-global `OPENPAL_ENGINE_DIR`,
     /// so the branches are exercised sequentially inside a single `#[test]`

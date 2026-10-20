@@ -48,9 +48,11 @@ impl FetchAllowlist {
 
     /// Allow the URLs the turn's history carries: everything in the user's
     /// and system messages (attachment text included), and the citations of
-    /// earlier answers — never an answer's own text.
+    /// earlier answers — never an answer's own text. Only the messages the
+    /// model reads count: one the user withheld after a prompt-injection
+    /// review, and the replies after it, add nothing (`engine::model_bound`).
     pub fn allow_history(&self, messages: &[ChatMessage]) {
-        for message in messages {
+        for message in crate::engine::model_bound(messages) {
             match message.role.as_str() {
                 "user" | "system" => {
                     self.allow_text(&message.content);
@@ -170,6 +172,8 @@ mod tests {
             artifacts: None,
             stats: None,
             display_content: None,
+            injection_notices: None,
+            withheld_from_model: None,
         }
     }
 
@@ -264,6 +268,28 @@ mod tests {
             );
         }
         assert!(!list.is_allowed("https://example.com/written"));
+    }
+
+    #[test]
+    fn a_withheld_message_and_its_replies_allow_nothing() {
+        let mut withheld = message("user", "Read https://example.com/withheld");
+        withheld.withheld_from_model = Some(true);
+        let mut answer = message("assistant", "Done.");
+        answer.citations = Some(vec![Citation {
+            id: 1,
+            url: "https://example.com/cited".into(),
+            title: "Cited".into(),
+        }]);
+        let list = FetchAllowlist::new();
+        list.allow_history(&[
+            withheld,
+            answer,
+            message("user", "Now https://example.com/kept"),
+        ]);
+
+        assert!(!list.is_allowed("https://example.com/withheld"));
+        assert!(!list.is_allowed("https://example.com/cited"));
+        assert!(list.is_allowed("https://example.com/kept"));
     }
 
     #[test]

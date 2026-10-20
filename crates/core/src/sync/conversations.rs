@@ -496,6 +496,8 @@ mod tests {
             artifacts: None,
             stats: None,
             display_content: None,
+            injection_notices: None,
+            withheld_from_model: None,
         }
     }
 

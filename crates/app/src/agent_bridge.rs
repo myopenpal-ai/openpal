@@ -16,6 +16,7 @@ use openpal_core::agent::{
     ToolRegistry,
 };
 use openpal_core::engine::EngineEndpoint;
+use openpal_core::injection::TurnGuard;
 use openpal_core::plugin::PluginManager;
 use openpal_core::types::{ChatEvent, ChatMessage, SamplingParams};
 use rusqlite::Connection;
@@ -50,6 +51,14 @@ use std::sync::{Arc, Mutex};
 ///
 /// `conn`/`conversation_id` are also what `create_artifact` is scoped to —
 /// see `openpal_core::artifacts`.
+///
+/// `injection` is the turn's prompt-injection guard, made by `chat_stream`
+/// for this conversation (which has already checked the user's side of the
+/// turn with it, holding it for review if anything was flagged) — passed in,
+/// not built here, so the tool loop flags the same turn and shares the
+/// conversation's Continue memory: a flagged tool result pauses for review
+/// before the model reads it, and a result the user already continued with
+/// in this conversation isn't asked about again.
 #[allow(clippy::too_many_arguments)]
 pub async fn build_deps(
     workspace_dir: &Path,
@@ -62,6 +71,7 @@ pub async fn build_deps(
     plugins: &Arc<PluginManager>,
     endpoint: EngineEndpoint,
     sampling: SamplingParams,
+    injection: Arc<TurnGuard>,
 ) -> Result<AgentDeps, String> {
     let home = std::env::var("HOME")
         .map(PathBuf::from)
@@ -105,6 +115,7 @@ pub async fn build_deps(
         // Not used by anything in this registry — see the doc comment above.
         search_service_url: None,
         citations: Arc::new(CitationRegistry::new()),
+        injection,
         fetch_allowlist: Arc::new(FetchAllowlist::new()),
     };
     subagent_tool.bind_deps(deps.clone());
@@ -161,6 +172,11 @@ pub const ASK_USER_FRAMING: &str =
 /// off or is still setting up, or the service won't start), so the caller
 /// can fall back to a plain answer — but not silently: the reason is sent
 /// through `on_event` first, as the same `SearchSetupProgress` status line.
+///
+/// `injection` is the turn's prompt-injection guard, as in [`build_deps`]: a
+/// flagged search result or fetched page pauses for review before the model
+/// reads it.
+#[allow(clippy::too_many_arguments)]
 pub async fn build_web_search_deps(
     workspace_dir: &Path,
     data_dir: &Path,
@@ -168,6 +184,7 @@ pub async fn build_web_search_deps(
     consent: Arc<ConsentBroker>,
     audit: Arc<AuditLog>,
     plugins: &PluginManager,
+    injection: Arc<TurnGuard>,
     on_event: &(impl Fn(ChatEvent) + Send + Sync),
 ) -> Result<Option<AgentDeps>, String> {
     let port = match plugins
@@ -206,6 +223,7 @@ pub async fn build_web_search_deps(
         http,
         search_service_url: Some(search_service_url),
         citations: Arc::new(CitationRegistry::new()),
+        injection,
         fetch_allowlist: Arc::new(FetchAllowlist::new()),
     }))
 }

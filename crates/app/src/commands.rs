@@ -14,15 +14,16 @@ use crate::parental;
 use crate::state::{AppState, BootState};
 use openpal_core::account::{Account, AccountEvent};
 use openpal_core::agent::consent::ConsentDecision;
-use openpal_core::agent::ToolGrant;
+use openpal_core::agent::{EventSink, ReviewDecision, ToolGrant};
 use openpal_core::cloud::CloudModelInfo;
 use openpal_core::engine::{self, STARTUP_TIMEOUT};
+use openpal_core::injection::{self, Source, TurnGuard};
 use openpal_core::plugin::{PluginEvent, PluginInfo, PluginManager};
 use openpal_core::remote::client::{Browser, DiscoveredHost, RemotePairingRecord};
 use openpal_core::remote::{PairedDeviceInfo, PairingEvent, RemoteAccessStatusInfo, WolStatus};
 use openpal_core::types::{
-    AppLockPinCheckResult, AppLockState, AppLockStatusView, Artifact, Attachment, ChatBackend,
-    ChatEvent, ChatMessage, Conversation, ConversationMeta, ConversationSearchResult,
+    AppLockPinCheckResult, AppLockState, AppLockStatusView, Artifact, Attachment, AttachmentKind,
+    ChatBackend, ChatEvent, ChatMessage, Conversation, ConversationMeta, ConversationSearchResult,
     DiskSpeedInfo, DownloadEvent, EngineConfig, EngineStatus, HfListing, HfModelDetails,
     HfQuantOption, HfQuantPicker, HfSearchPage, HfSearchQuery, ModelInfo, ModelSource, ModelSpec,
     ModelStatus, ParentalConfigInput, ParentalSettingsView, ParentalStatus, PinCheckResult,
@@ -690,6 +691,7 @@ pub async fn delete_model(state: State<'_, AppState>, model_id: String) -> Resul
             model_id: active, ..
         } if active == model_id => {
             state.engine.stop().await.map_err(friendly)?;
+            unload_classifier(&state);
         }
         _ => {}
     }
@@ -1251,10 +1253,19 @@ pub async fn add_local_model(
 /// that could be read; `Ok(vec![])` means the user closed the picker. Returns
 /// an error only when files were chosen but none could be read, so the UI can
 /// say why.
+///
+/// With `prescan` — the chat has agent tools or web search on, so its next
+/// turn will be checked — each document is also checked for prompt
+/// injection in the background right away (see [`prescan_attachments`]), so
+/// the check at send time usually finds its verdict ready. Without it
+/// (plain chat, Writing Tools) nothing is scored, and the classifier isn't
+/// loaded for a turn that won't use it.
 #[tauri::command]
 pub async fn pick_attachments(
     app: tauri::AppHandle,
+    state: State<'_, AppState>,
     allow_images: bool,
+    prescan: bool,
 ) -> Result<Vec<Attachment>, String> {
     use tauri_plugin_dialog::DialogExt;
 
@@ -1324,7 +1335,48 @@ pub async fn pick_attachments(
         return Err(first_error
             .unwrap_or_else(|| "Those files couldn't be added. Please try again.".to_string()));
     }
+    prescan_attachments(&state, prescan, &attachments);
     Ok(attachments)
+}
+
+/// Score just-picked documents for prompt injection in the background, in
+/// the exact form `chat_stream`'s review gate checks them
+/// ([`injection::attachment_scan_text`]), so the gate finds the verdict in
+/// the detector's cache instead of holding the turn for it — and the first
+/// pick of a run loads the classifier while the user is still typing.
+/// Nothing is shown here: the review, if any, happens at send. One side
+/// effect: a detection's log line is written now rather than at send.
+fn prescan_attachments(state: &AppState, prescan: bool, attachments: &[Attachment]) {
+    let texts = prescan_texts_if(prescan, attachments);
+    if texts.is_empty() {
+        return;
+    }
+    let detector = state.injection.clone();
+    // One after another: the detector scores one text at a time anyway.
+    tauri::async_runtime::spawn(async move {
+        for text in texts {
+            detector.score(Source::Attachment, &text).await;
+        }
+    });
+}
+
+/// What [`prescan_attachments`] scores: nothing unless `prescan`, else each
+/// document's text, in the form the turn will check it in (images carry
+/// nothing to read). Factored out so it's unit-testable without a live
+/// `AppState` (same reasoning as [`claim_generation_slot`]).
+fn prescan_texts_if(prescan: bool, attachments: &[Attachment]) -> Vec<String> {
+    if !prescan {
+        return Vec::new();
+    }
+    attachments
+        .iter()
+        .filter_map(|a| match (a.kind, a.text.as_deref()) {
+            (AttachmentKind::Document, Some(text)) => {
+                Some(injection::attachment_scan_text(&a.name, text))
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 #[tauri::command]
@@ -1682,7 +1734,19 @@ pub async fn start_engine(
 
 #[tauri::command]
 pub async fn stop_engine(state: State<'_, AppState>) -> Result<(), String> {
-    state.engine.stop().await.map_err(friendly)
+    state.engine.stop().await.map_err(friendly)?;
+    unload_classifier(&state);
+    Ok(())
+}
+
+/// The prompt-injection classifier leaves memory with the local chat model —
+/// on Unload, on auto-unload (`crate::idle`) and when the running model is
+/// deleted — besides its own idle timer. It's never loaded ahead of time:
+/// the first scan of a turn that uses tools loads it (`chat_stream`). In the
+/// background: a scan in progress finishes first.
+pub(crate) fn unload_classifier(state: &AppState) {
+    let detector = state.injection.clone();
+    tauri::async_runtime::spawn(async move { detector.unload().await });
 }
 
 #[tauri::command]
@@ -1841,22 +1905,37 @@ pub async fn list_cloud_models(state: State<'_, AppState>) -> Result<Vec<CloudMo
 // Chat
 // ---------------------------------------------------------------------------
 
-/// One chat turn. Routing, in order:
-/// 1. `settings.chat_backend == Cloud` → a signed-in account's cloud model
-///    (`cloud_chat_turn`). Takes over the whole turn; `web_search` is ignored
-///    (there's no local engine endpoint to search/fetch against in this mode
-///    — the composer hides web search while a cloud model is selected).
-/// 2. Otherwise, when `web_search` is set and the experimental `web-search`
-///    add-on is on: a `run_agent_turn` loop scoped to just
-///    `web_search`/`fetch_url` (`web_search_chat_turn`), starting its SearXNG
-///    service if it isn't running (see `agent_bridge::build_web_search_deps`).
-/// 3. Otherwise — including `web_search` on with the add-on off or its
-///    service failing to start — the plain local engine. `web_search` is the
-///    composer's per-conversation toggle; the add-on's own switch in Plugins
-///    is the global gate, enforced here too.
+/// One chat turn: decide its [`TurnRoute`], then — for a turn that uses
+/// tools — the prompt-injection review gate, then [`route_turn`].
 ///
-/// Every path shares the `chat_cancel` flag, so `stop_generation` interrupts
-/// whichever one is running.
+/// The turn claims the app's generation slot first, before anything else
+/// can wait, and releases it once at the very end, whichever way the turn
+/// ends — so `stop_generation` reaches it from the first moment, including
+/// while it's paused on a review card, and every route shares that one
+/// cancel flag instead of claiming its own.
+///
+/// Only agent and web-search turns are checked for prompt injection
+/// ([`TurnRoute::scans`]): their model has tools, so injected text could act
+/// without the user. Plain and cloud chat go straight to [`route_turn`] —
+/// no classifier, no card. A checked turn's user-side text goes to a fresh
+/// `TurnGuard` for this conversation (see `openpal_core::injection`) through
+/// `injection::run_guarded`:
+/// - Attached documents and invoked skills' bodies — from every model-bound
+///   message, so a file attached in plain chat is reviewed the first time the
+///   conversation reaches a tool — are checked first, and if any is flagged
+///   the turn waits for the user to Continue or Stop
+///   (`ChatEvent::InjectionReviewRequested`, answered by
+///   [`respond_injection_review`]) before the model reads any of it. Stop
+///   ends the turn with no request sent. The text that's sent is never
+///   changed.
+/// - Typed words are checked in the background and only ever get a notice.
+///
+/// The guard holds the classifier in memory for the turn
+/// (`TurnGuard::for_tool_turn`) and rides into the tool loop, where a
+/// flagged tool result pauses the same way, and a detection can flag a
+/// consent card later in the turn. The gate runs inside a
+/// begin/end_generation bracket of its own (the routes keep theirs), so
+/// auto-unload can't fire under an open card.
 #[tauri::command]
 pub async fn chat_stream(
     state: State<'_, AppState>,
@@ -1870,39 +1949,189 @@ pub async fn chat_stream(
     parental::enforce_send(&state).await?;
 
     let settings = state.settings.lock().await.clone();
+    let state = state.inner();
 
-    if settings.chat_backend == ChatBackend::Cloud {
-        return cloud_chat_turn(&state, &settings, messages, &sampling, on_event).await;
-    }
+    with_generation_slot(&state.chat_cancel, |cancel| async move {
+        let route = TurnRoute::for_turn(state, &settings, web_search, agent_tools).await;
+        if !route.scans() {
+            return route_turn(
+                state,
+                &settings,
+                route,
+                &conversation_id,
+                messages,
+                &sampling,
+                None,
+                cancel,
+                on_event,
+            )
+            .await;
+        }
 
-    if agent_tools && settings.agent_mode_enabled {
-        return agent_chat_turn(
-            &state,
-            &settings,
+        let sink: EventSink = {
+            let channel = on_event.clone();
+            Arc::new(move |event| {
+                let _ = channel.send(event);
+            })
+        };
+        let guard = Arc::new(TurnGuard::for_tool_turn(
+            state.injection.clone(),
             &conversation_id,
+        ));
+        // Every route that scans runs on the local engine.
+        state.engine.begin_generation().await;
+        let result = injection::run_guarded(
+            &guard,
             messages,
-            &sampling,
-            on_event,
+            &state.agent_consent,
+            &cancel,
+            &sink,
+            |messages| {
+                route_turn(
+                    state,
+                    &settings,
+                    route,
+                    &conversation_id,
+                    messages,
+                    &sampling,
+                    Some(guard.clone()),
+                    cancel.clone(),
+                    on_event,
+                )
+            },
         )
         .await;
+        state.engine.end_generation().await;
+        result
+    })
+    .await
+}
+
+/// Where a chat turn goes, decided once in [`chat_stream`] before the review
+/// gate, so the gate and [`route_turn`] can't disagree. In order:
+/// 1. `settings.chat_backend == Cloud` → a signed-in account's cloud model
+///    (`cloud_chat_turn`). Takes over the whole turn; `web_search` is ignored
+///    (there's no local engine endpoint to search/fetch against in this mode
+///    — the composer hides web search while a cloud model is selected).
+/// 2. Otherwise, when `agent_tools` is set and agent mode is on: a full
+///    agent-mode turn (`agent_chat_turn`).
+/// 3. Otherwise, when `web_search` is set and the experimental `web-search`
+///    add-on is on: a `run_agent_turn` loop scoped to just
+///    `web_search`/`fetch_url` (`web_search_chat_turn`), starting its SearXNG
+///    service if it isn't running (see `agent_bridge::build_web_search_deps`).
+/// 4. Otherwise — including `web_search` on with the add-on off — the plain
+///    local engine. `web_search` is the composer's per-conversation toggle;
+///    the add-on's own switch in Plugins is the global gate, enforced here
+///    too.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TurnRoute {
+    Cloud,
+    Agent,
+    WebSearch,
+    Plain,
+}
+
+impl TurnRoute {
+    /// The route for this turn's settings and composer toggles. `search_on`
+    /// is whether the `web-search` add-on is on; it only matters for step 3.
+    fn decide(settings: &Settings, web_search: bool, agent_tools: bool, search_on: bool) -> Self {
+        if settings.chat_backend == ChatBackend::Cloud {
+            Self::Cloud
+        } else if agent_tools && settings.agent_mode_enabled {
+            Self::Agent
+        } else if web_search && search_on {
+            Self::WebSearch
+        } else {
+            Self::Plain
+        }
     }
 
-    // The composer hides its globe while the add-on is off, so this only
-    // catches a race with turning it off. `web_search_chat_turn` starts the
-    // search service and falls back to a plain answer itself if that fails.
-    if web_search && state.plugins.capability_enabled("search").await {
-        return web_search_chat_turn(
-            &state,
-            &settings,
-            &conversation_id,
-            messages,
-            &sampling,
-            on_event,
-        )
-        .await;
+    /// [`TurnRoute::decide`], asking the plugin manager whether the
+    /// `web-search` add-on is on only when the answer could change the route.
+    async fn for_turn(
+        state: &AppState,
+        settings: &Settings,
+        web_search: bool,
+        agent_tools: bool,
+    ) -> Self {
+        let route = Self::decide(settings, web_search, agent_tools, true);
+        if route != Self::WebSearch {
+            return route;
+        }
+        let search_on = state.plugins.capability_enabled("search").await;
+        Self::decide(settings, web_search, agent_tools, search_on)
     }
 
-    plain_chat(&state, &settings, messages, &sampling, on_event).await
+    /// Whether this turn is checked for prompt injection: only the routes
+    /// whose model has tools. Plain and cloud chat aren't — injected text
+    /// there can't act without the user acting on the reply.
+    fn scans(self) -> bool {
+        match self {
+            Self::Agent | Self::WebSearch => true,
+            Self::Cloud | Self::Plain => false,
+        }
+    }
+}
+
+/// Run a chat turn down its [`TurnRoute`]. `injection` is the turn's guard,
+/// which [`chat_stream`] creates for exactly the routes that
+/// [`TurnRoute::scans`].
+///
+/// `web_search_chat_turn` can still fall back to a plain answer if the
+/// search service won't start; that turn was already checked as a tool turn.
+///
+/// Every route runs under `cancel`, the flag `chat_stream` claimed, so
+/// `stop_generation` interrupts whichever one is running. No route claims or
+/// releases the generation slot itself.
+#[allow(clippy::too_many_arguments)]
+async fn route_turn(
+    state: &AppState,
+    settings: &Settings,
+    route: TurnRoute,
+    conversation_id: &str,
+    messages: Vec<ChatMessage>,
+    sampling: &SamplingParams,
+    injection: Option<Arc<TurnGuard>>,
+    cancel: Arc<AtomicBool>,
+    on_event: Channel<ChatEvent>,
+) -> Result<(), String> {
+    let guard = || {
+        injection
+            .clone()
+            .expect("chat_stream guards every route that scans")
+    };
+    match route {
+        TurnRoute::Cloud => {
+            cloud_chat_turn(state, settings, messages, sampling, cancel, on_event).await
+        }
+        TurnRoute::Agent => {
+            agent_chat_turn(
+                state,
+                settings,
+                conversation_id,
+                messages,
+                sampling,
+                guard(),
+                cancel,
+                on_event,
+            )
+            .await
+        }
+        TurnRoute::WebSearch => {
+            web_search_chat_turn(
+                state,
+                settings,
+                conversation_id,
+                messages,
+                sampling,
+                guard(),
+                cancel,
+                on_event,
+            )
+            .await
+        }
+        TurnRoute::Plain => plain_chat(state, settings, messages, sampling, cancel, on_event).await,
+    }
 }
 
 /// Classify `text` (the composer's in-progress draft) into a [`TaskType`]
@@ -1966,19 +2195,23 @@ pub async fn classify_risk(
 /// system-managed, per-conversation workspace folder + the long-lived
 /// consent/audit state in `AppState`, then hand off to
 /// `agent_bridge::run_turn`. Mirrors `plugin_chat_turn`'s shape (engine
-/// endpoint, shared `chat_cancel`, begin/end_generation bracketing the
-/// auto-unload idle timer).
+/// endpoint, the turn's `cancel` from `chat_stream`'s claim of
+/// `chat_cancel`, begin/end_generation bracketing the auto-unload idle
+/// timer).
 ///
 /// The workspace is never user-configurable: it's always
 /// `<data_dir>/agent-workspaces/<conversation_id>`, created on demand. Each
 /// conversation gets its own folder so one agent call's files are never
 /// visible to another conversation's tool calls.
+#[allow(clippy::too_many_arguments)]
 async fn agent_chat_turn(
     state: &AppState,
     settings: &Settings,
     conversation_id: &str,
     mut messages: Vec<ChatMessage>,
     sampling: &SamplingParams,
+    injection: Arc<TurnGuard>,
+    cancel: Arc<AtomicBool>,
     on_event: Channel<ChatEvent>,
 ) -> Result<(), String> {
     let safe_id: String = conversation_id
@@ -2022,6 +2255,8 @@ async fn agent_chat_turn(
                 artifacts: None,
                 stats: None,
                 display_content: None,
+                injection_notices: None,
+                withheld_from_model: None,
             },
         ),
     }
@@ -2037,13 +2272,13 @@ async fn agent_chat_turn(
         &state.plugins,
         endpoint.clone(),
         *sampling,
+        injection,
     )
     .await
     .inspect_err(|e| {
         let _ = on_event.send(ChatEvent::Error { message: e.clone() });
     })?;
 
-    let cancel = try_claim_generation_slot(state).await?;
     state.engine.begin_generation().await;
 
     let event_sink = on_event.clone();
@@ -2054,7 +2289,6 @@ async fn agent_chat_turn(
         .await;
 
     state.engine.end_generation().await;
-    *state.chat_cancel.lock().await = None;
     result
 }
 
@@ -2081,6 +2315,24 @@ pub async fn respond_clarifying_question(
     state
         .agent_consent
         .resolve_clarification(&request_id, answer)
+        .await;
+    Ok(())
+}
+
+/// Answer a prompt-injection review card (`ChatEvent::InjectionReviewRequested`)
+/// in an agent or web-search turn: `Continue` lets the held-back text reach the model
+/// unchanged, `Stop` ends the turn without the model reading it. An answer
+/// for a review that's no longer pending (the turn was already stopped) is
+/// ignored.
+#[tauri::command]
+pub async fn respond_injection_review(
+    state: State<'_, AppState>,
+    request_id: String,
+    decision: ReviewDecision,
+) -> Result<(), String> {
+    state
+        .agent_consent
+        .resolve_review(&request_id, decision)
         .await;
     Ok(())
 }
@@ -2136,12 +2388,12 @@ async fn resolve_cloud_access(
 
 /// Atomically claim the app's single foreground-generation slot, or return a
 /// friendly busy error if something else already holds it. Every turn-runner
-/// (chat, agent, web-search, Writing Tools, and the Message improver) goes
-/// through this instead of assigning `state.chat_cancel` directly, so a
-/// Translate/Correct/Improve request and an ordinary chat turn started
-/// concurrently can never silently clobber each other's cancel handle — the
-/// loser gets a friendly error up front instead of a stuck Stop button or a
-/// leaked idle-timer bracket.
+/// (a chat turn via [`with_generation_slot`], Writing Tools, and the Message
+/// improver) goes through this instead of assigning `state.chat_cancel`
+/// directly, so a Translate/Correct/Improve request and an ordinary chat
+/// turn started concurrently can never silently clobber each other's cancel
+/// handle — the loser gets a friendly error up front instead of a stuck Stop
+/// button or a leaked idle-timer bracket.
 async fn try_claim_generation_slot(state: &AppState) -> Result<Arc<AtomicBool>, String> {
     claim_generation_slot(&state.chat_cancel).await
 }
@@ -2165,13 +2417,33 @@ async fn claim_generation_slot(
     Ok(cancel)
 }
 
-/// Drive one chat turn against a signed-in account's cloud model. Shares
-/// `chat_cancel` with the other chat paths via `try_claim_generation_slot`.
+/// Claim `slot` ([`claim_generation_slot`]), run `turn` with the claimed
+/// cancel flag, and release the slot once `turn` is done — whether it
+/// returned `Ok` or `Err`. The one claim and the one release of a chat turn
+/// (`chat_stream`): nothing `turn` calls may claim or release it again. A
+/// busy slot returns its error without running `turn`.
+async fn with_generation_slot<T, F, Fut>(
+    slot: &tokio::sync::Mutex<Option<Arc<AtomicBool>>>,
+    turn: F,
+) -> Result<T, String>
+where
+    F: FnOnce(Arc<AtomicBool>) -> Fut,
+    Fut: std::future::Future<Output = Result<T, String>>,
+{
+    let cancel = claim_generation_slot(slot).await?;
+    let result = turn(cancel).await;
+    *slot.lock().await = None;
+    result
+}
+
+/// Drive one chat turn against a signed-in account's cloud model, under the
+/// turn's `cancel` from `chat_stream`'s claim of `chat_cancel`.
 async fn cloud_chat_turn(
     state: &AppState,
     settings: &Settings,
     mut messages: Vec<ChatMessage>,
     sampling: &SamplingParams,
+    cancel: Arc<AtomicBool>,
     on_event: Channel<ChatEvent>,
 ) -> Result<(), String> {
     let (model_id, access_token) = resolve_cloud_access(state, settings).await?;
@@ -2192,11 +2464,11 @@ async fn cloud_chat_turn(
                 artifacts: None,
                 stats: None,
                 display_content: None,
+                injection_notices: None,
+                withheld_from_model: None,
             },
         );
     }
-
-    let cancel = try_claim_generation_slot(state).await?;
 
     let result = openpal_core::cloud::chat_stream(
         &state.http,
@@ -2211,7 +2483,6 @@ async fn cloud_chat_turn(
     )
     .await;
 
-    *state.chat_cancel.lock().await = None;
     result.map_err(friendly)
 }
 
@@ -2220,13 +2491,16 @@ async fn cloud_chat_turn(
 /// `agent_bridge::build_web_search_deps`), replacing the old Python-sidecar
 /// path (`plugin_chat_turn`/`plugin_chat.rs`, kept for now but no longer
 /// called). Mirrors `agent_chat_turn`'s shape (per-conversation workspace
-/// dir, cancel flag, begin/end_generation bracketing).
+/// dir, the turn's cancel flag, begin/end_generation bracketing).
+#[allow(clippy::too_many_arguments)]
 async fn web_search_chat_turn(
     state: &AppState,
     settings: &Settings,
     conversation_id: &str,
     mut messages: Vec<ChatMessage>,
     sampling: &SamplingParams,
+    injection: Arc<TurnGuard>,
+    cancel: Arc<AtomicBool>,
     on_event: Channel<ChatEvent>,
 ) -> Result<(), String> {
     let safe_id: String = conversation_id
@@ -2251,6 +2525,7 @@ async fn web_search_chat_turn(
         state.agent_consent.clone(),
         state.agent_audit.clone(),
         &state.plugins,
+        injection,
         &on_progress,
     )
     .await
@@ -2263,7 +2538,7 @@ async fn web_search_chat_turn(
         // setting up, or its service won't start) — same graceful fallback
         // `chat_stream` already falls into for any other reason web search
         // isn't available this turn.
-        return plain_chat(state, settings, messages, sampling, on_event).await;
+        return plain_chat(state, settings, messages, sampling, cancel, on_event).await;
     };
 
     let endpoint = state
@@ -2297,11 +2572,12 @@ async fn web_search_chat_turn(
                 artifacts: None,
                 stats: None,
                 display_content: None,
+                injection_notices: None,
+                withheld_from_model: None,
             },
         ),
     }
 
-    let cancel = try_claim_generation_slot(state).await?;
     state.engine.begin_generation().await;
 
     let event_sink = on_event.clone();
@@ -2312,16 +2588,16 @@ async fn web_search_chat_turn(
         .await;
 
     state.engine.end_generation().await;
-    *state.chat_cancel.lock().await = None;
     result
 }
 
-/// Plain engine completion (no plugin).
+/// Plain engine completion (no plugin), under the turn's `cancel`.
 async fn plain_chat(
     state: &AppState,
     settings: &Settings,
     mut messages: Vec<ChatMessage>,
     sampling: &SamplingParams,
+    cancel: Arc<AtomicBool>,
     on_event: Channel<ChatEvent>,
 ) -> Result<(), String> {
     if !messages.iter().any(|m| m.role == "system") {
@@ -2340,11 +2616,12 @@ async fn plain_chat(
                 artifacts: None,
                 stats: None,
                 display_content: None,
+                injection_notices: None,
+                withheld_from_model: None,
             },
         );
     }
 
-    let cancel = try_claim_generation_slot(state).await?;
     state.engine.begin_generation().await;
 
     let result = state
@@ -2355,16 +2632,27 @@ async fn plain_chat(
         .await;
 
     state.engine.end_generation().await;
-    *state.chat_cancel.lock().await = None;
     result.map_err(friendly)
 }
 
 #[tauri::command]
 pub async fn stop_generation(state: State<'_, AppState>) -> Result<(), String> {
-    if let Some(cancel) = state.chat_cancel.lock().await.as_ref() {
+    stop_current_turn(&state.chat_cancel).await;
+    Ok(())
+}
+
+/// Set the cancel flag of whatever holds the generation slot, if anything:
+/// the Stop button ([`stop_generation`]), and a (re)load of the main window
+/// (`lib.rs`'s `create_main_window`). A reload drops the page a running turn
+/// streams to — and with it the card a paused turn waits on and the Stop
+/// button that could end it — so a turn waiting on a review, consent or
+/// `ask_user` answer would otherwise hold the slot (every later Send
+/// "busy") until the app restarts. Every such wait also listens for this
+/// flag, so the turn ends as if Stop had been pressed and frees the slot.
+pub(crate) async fn stop_current_turn(slot: &tokio::sync::Mutex<Option<Arc<AtomicBool>>>) {
+    if let Some(cancel) = slot.lock().await.as_ref() {
         cancel.store(true, Ordering::SeqCst);
     }
-    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -2392,6 +2680,8 @@ fn system_message(content: String) -> ChatMessage {
         artifacts: None,
         stats: None,
         display_content: None,
+        injection_notices: None,
+        withheld_from_model: None,
     }
 }
 
@@ -2409,6 +2699,8 @@ fn user_message(content: String) -> ChatMessage {
         artifacts: None,
         stats: None,
         display_content: None,
+        injection_notices: None,
+        withheld_from_model: None,
     }
 }
 
@@ -5226,6 +5518,229 @@ mod tests {
         claim_generation_slot(&slot)
             .await
             .expect("a claim must succeed again once the slot is released");
+    }
+
+    #[tokio::test]
+    async fn with_generation_slot_releases_the_slot_however_the_turn_ends() {
+        let slot: tokio::sync::Mutex<Option<Arc<AtomicBool>>> = tokio::sync::Mutex::new(None);
+
+        let ok = with_generation_slot(&slot, |_| async { Ok(7) }).await;
+        assert_eq!(ok, Ok(7));
+        assert!(slot.lock().await.is_none(), "released after Ok");
+
+        let err: Result<(), String> =
+            with_generation_slot(&slot, |_| async { Err("no model".to_string()) }).await;
+        assert_eq!(err, Err("no model".to_string()));
+        assert!(slot.lock().await.is_none(), "released after Err");
+    }
+
+    #[tokio::test]
+    async fn with_generation_slot_holds_the_flag_stop_generation_sets_for_the_whole_turn() {
+        let slot: tokio::sync::Mutex<Option<Arc<AtomicBool>>> = tokio::sync::Mutex::new(None);
+
+        let result = with_generation_slot(&slot, |cancel| {
+            let slot = &slot;
+            async move {
+                // What `stop_generation` does while the turn is waiting —
+                // e.g. on a review card, before any route has run.
+                let held = slot.lock().await.clone().expect("held while running");
+                assert!(Arc::ptr_eq(&held, &cancel));
+                held.store(true, Ordering::SeqCst);
+                assert!(
+                    claim_generation_slot(slot).await.is_err(),
+                    "nothing else may claim it mid-turn"
+                );
+                Ok(cancel.load(Ordering::SeqCst))
+            }
+        })
+        .await;
+
+        assert_eq!(result, Ok(true), "the turn sees the stop");
+        assert!(slot.lock().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn stop_current_turn_frees_the_slot_a_turn_waiting_on_an_answer_holds() {
+        let slot: Arc<tokio::sync::Mutex<Option<Arc<AtomicBool>>>> =
+            Arc::new(tokio::sync::Mutex::new(None));
+        stop_current_turn(&slot).await; // nothing running: a no-op
+
+        let (waiting_tx, waiting) = tokio::sync::oneshot::channel();
+        let turn = tokio::spawn({
+            let slot = slot.clone();
+            async move {
+                with_generation_slot(&slot, |cancel| async move {
+                    // Like a review card nobody can answer any more (the
+                    // page that showed it reloaded): only the flag ends it.
+                    let _ = waiting_tx.send(());
+                    while !cancel.load(Ordering::SeqCst) {
+                        tokio::time::sleep(Duration::from_millis(5)).await;
+                    }
+                    Ok(())
+                })
+                .await
+            }
+        });
+        waiting.await.unwrap();
+        assert!(
+            claim_generation_slot(&slot).await.is_err(),
+            "the waiting turn holds the slot"
+        );
+
+        // What the reloaded window's page-load hook does.
+        stop_current_turn(&slot).await;
+        tokio::time::timeout(Duration::from_secs(5), turn)
+            .await
+            .expect("the turn ends once stopped")
+            .unwrap()
+            .unwrap();
+        claim_generation_slot(&slot)
+            .await
+            .expect("a new Send can claim the slot again");
+    }
+
+    #[tokio::test]
+    async fn with_generation_slot_runs_nothing_and_releases_nothing_when_busy() {
+        let slot: tokio::sync::Mutex<Option<Arc<AtomicBool>>> = tokio::sync::Mutex::new(None);
+        let other = claim_generation_slot(&slot).await.unwrap();
+
+        let mut ran = false;
+        let result = with_generation_slot(&slot, |_| {
+            ran = true;
+            async { Ok(()) }
+        })
+        .await;
+
+        assert!(result.is_err());
+        assert!(!ran);
+        let held = slot.lock().await.clone().expect("the other claim is kept");
+        assert!(Arc::ptr_eq(&held, &other));
+    }
+
+    fn document(name: &str, text: Option<&str>) -> Attachment {
+        Attachment {
+            kind: AttachmentKind::Document,
+            name: name.to_string(),
+            data_uri: None,
+            text: text.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn prescan_texts_are_the_documents_in_the_form_the_turn_checks() {
+        let image = Attachment {
+            kind: AttachmentKind::Image,
+            name: "photo.png".to_string(),
+            data_uri: Some("data:image/png;base64,AAAA".to_string()),
+            text: None,
+        };
+        let texts = prescan_texts_if(
+            true,
+            &[
+                document("report.txt", Some("Quarterly figures.")),
+                image,
+                document("empty.pdf", None),
+            ],
+        );
+        assert_eq!(
+            texts,
+            vec![injection::attachment_scan_text(
+                "report.txt",
+                "Quarterly figures."
+            )]
+        );
+    }
+
+    #[test]
+    fn prescan_only_when_asked() {
+        let attachments = [document("report.txt", Some("Quarterly figures."))];
+        assert!(prescan_texts_if(false, &attachments).is_empty());
+        assert_eq!(prescan_texts_if(true, &attachments).len(), 1);
+    }
+
+    /// The security-relevant mapping: which turns are checked for prompt
+    /// injection. The app crate has no Tauri harness to drive `chat_stream`,
+    /// so this table is the only guard on it.
+    #[test]
+    fn turn_route_follows_route_turns_order() {
+        let cloud = Settings {
+            chat_backend: ChatBackend::Cloud,
+            agent_mode_enabled: true,
+            ..Settings::default()
+        };
+        let agent_mode = Settings {
+            agent_mode_enabled: true,
+            ..Settings::default()
+        };
+        let local = Settings {
+            agent_mode_enabled: false,
+            ..Settings::default()
+        };
+        // (settings, web_search, agent_tools, search add-on on) → route, scans
+        let cases = [
+            (&cloud, true, true, true, TurnRoute::Cloud, false),
+            (&agent_mode, true, true, true, TurnRoute::Agent, true),
+            (&agent_mode, false, true, false, TurnRoute::Agent, true),
+            (&local, true, true, true, TurnRoute::WebSearch, true),
+            (&local, true, false, false, TurnRoute::Plain, false),
+            (&agent_mode, false, false, true, TurnRoute::Plain, false),
+            (&local, false, false, false, TurnRoute::Plain, false),
+        ];
+        for (settings, web_search, agent_tools, search_on, route, scans) in cases {
+            let decided = TurnRoute::decide(settings, web_search, agent_tools, search_on);
+            assert_eq!(
+                decided, route,
+                "web_search={web_search} agent_tools={agent_tools} search_on={search_on}"
+            );
+            assert_eq!(decided.scans(), scans, "{route:?}");
+        }
+    }
+
+    /// Records every text it's asked to score; flags none.
+    struct Recording(std::sync::Mutex<Vec<String>>);
+
+    impl injection::Classify for Recording {
+        fn p_injection(&self, text: &str) -> Result<f32, String> {
+            self.0.lock().unwrap().push(text.to_string());
+            Ok(0.0)
+        }
+    }
+
+    #[tokio::test]
+    async fn a_prescanned_document_is_not_scored_again_when_the_turn_is_checked() {
+        let classifier = Arc::new(Recording(Default::default()));
+        let detector = Arc::new(injection::Detector::with_classifier(classifier.clone()));
+        let attachments = vec![document("test.txt", Some("Meeting notes."))];
+
+        // What `pick_attachments` leaves in the detector's cache.
+        for text in prescan_texts_if(true, &attachments) {
+            detector.score(Source::Attachment, &text).await;
+        }
+        assert_eq!(classifier.0.lock().unwrap().len(), 1);
+
+        // The turn that sends it: no typed text, so the only check is the
+        // review gate's — which must find the pick-time verdict.
+        let mut message = user_message(String::new());
+        message.attachments = Some(attachments);
+        let tmp = tempfile::tempdir().unwrap();
+        let broker = openpal_core::agent::ConsentBroker::new(tmp.path().join("grants.json"));
+        let cancel = Arc::new(AtomicBool::new(false));
+        let sink: EventSink = Arc::new(|_| {});
+        let guard = TurnGuard::for_chat(detector, "chat-1");
+        let mut routed = 0;
+        let result = injection::run_guarded(&guard, vec![message], &broker, &cancel, &sink, |_| {
+            routed += 1;
+            async { Ok(()) }
+        })
+        .await;
+
+        assert_eq!(result, Ok(()));
+        assert_eq!(routed, 1);
+        assert_eq!(
+            classifier.0.lock().unwrap().len(),
+            1,
+            "the gate scored the attachment again: the pick-time form differs"
+        );
     }
 
     fn args(strs: &[&str]) -> Vec<String> {

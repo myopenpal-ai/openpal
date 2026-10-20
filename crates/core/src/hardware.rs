@@ -87,7 +87,7 @@ fn command_output(program: &str, args: &[&str]) -> Option<String> {
 /// Free space on the volume holding `models_dir`: the disk whose mount point
 /// is the longest path-prefix of the (canonicalized) directory, then the
 /// usual macOS data volume, then "/", then the largest disk.
-fn free_disk_bytes(models_dir: &Path) -> u64 {
+pub(crate) fn free_disk_bytes(models_dir: &Path) -> u64 {
     let disks = Disks::new_with_refreshed_list();
     let canonical = canonicalize_nearest_existing(models_dir);
 

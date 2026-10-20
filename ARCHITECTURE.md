@@ -60,6 +60,31 @@ reaching for another one — and if a second model is truly unavoidable, it
 belongs behind an explicit opt-in (Advanced settings or a plugin), never the
 default path.
 
+**The one knowing exception: the prompt-injection detector.** Every desktop
+install also downloads and runs a second, dedicated model: a small classifier
+(`crates/core/src/injection/`, ~300 MB on disk, ~0.8–1 GB of RAM while it is
+loaded) that watches text on its way to the chat model — web pages, files,
+command output, attachments, other conversations, skills, the composer — for
+instructions aimed at the AI, in the turns where that model has tools (agent
+mode and web search). Plain chat, cloud chat and Writing Tools aren't
+checked: with no tools, injected text there can't act without the user. When
+it flags text the user didn't write, the
+turn pauses before the model reads it and asks the user to Continue or Stop;
+text the user typed is sent as written, with a notice in the reply. Both also
+flag the agent's consent card and write a line in the app log. It is on the
+default path and **has no off switch**, not even under Settings → Advanced.
+That breaks both rules above, deliberately: the call was made for security in
+issue #9, and the loaded model can't do this job anyway (an agent turn holds
+llama-server's only inference slot for the whole turn, and cloud chat has no
+local engine). The beginner-first cost is kept as small as it can be: a
+review card only before flagged third-party text is read, plus a one-line
+notice in the reply, a silent background download, and loading it only for
+turns that use tools, then dropping it once it has sat idle for 5 minutes or
+the chat model is unloaded. Design and limits:
+`docs/AGENT_MODE.md` → "Prompt-injection detection". This is not a
+precedent: the next feature that wants a second model starts from
+mono-model first again.
+
 **Unfinished work sits behind one switch.** Anything still being tested is
 gated on Settings → Advanced → Experimental features
 (`Settings.experimental_features`, off by default), so a beginner never meets

@@ -1039,7 +1039,8 @@
         "rawDeviceIo": "On dirait que ça lit ou écrit directement sur un disque.",
         "networkFetchPipeShell": "On dirait que ça télécharge quelque chose et l'exécute immédiatement.",
         "sudoOrPrivEsc": "On dirait que ça essaie de s'exécuter en tant qu'un autre utilisateur ou d'obtenir plus d'accès.",
-        "derivedFromRecentOutput": "Ce texte semble copié depuis ce qu'un outil vient de renvoyer. Vérifiez qu'il n'a pas été glissé dans un fichier ou une page lue."
+        "derivedFromRecentOutput": "Ce texte semble copié depuis ce qu'un outil vient de renvoyer. Vérifiez qu'il n'a pas été glissé dans un fichier ou une page lue.",
+        "promptInjectionSuspected": "Quelque chose que l'IA a lu plus tôt ressemblait à des instructions cachées qui lui étaient destinées. Vérifiez que c'est bien ce que vous voulez."
       },
       "allowOnce": "Autoriser une fois",
       "alwaysAllow": "Toujours autoriser",

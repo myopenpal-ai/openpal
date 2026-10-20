@@ -235,6 +235,7 @@ pub fn run() {
             commands::set_plugin_enabled,
             commands::respond_tool_consent,
             commands::respond_clarifying_question,
+            commands::respond_injection_review,
             commands::list_tool_grants,
             commands::revoke_tool_grant,
             commands::list_conversations,
@@ -345,6 +346,11 @@ pub fn run() {
 /// handler, not through webview-native navigation UI). External links are
 /// meant to always open in the system browser via `open_link`, which shells
 /// out to the OS opener and never navigates this webview at all.
+///
+/// It also stops a turn left running by a reload (F5/Ctrl+R stay live in
+/// WebView2): see `commands::stop_current_turn`. `Started` fires once a load
+/// is committed — never for a navigation the guard above blocks — and on the
+/// first load too, when no turn is running yet.
 fn create_main_window(app: &tauri::App) -> tauri::Result<()> {
     let window_config = app
         .config()
@@ -364,6 +370,18 @@ fn create_main_window(app: &tauri::App) -> tauri::Result<()> {
                 // vite dev server
             }
             _ => false,
+        })
+        .on_page_load(|window, payload| {
+            if payload.event() != tauri::webview::PageLoadEvent::Started {
+                return;
+            }
+            let app = window.app_handle().clone();
+            tauri::async_runtime::spawn(async move {
+                // Not managed yet before unlock — and then nothing runs.
+                if let Some(state) = app.try_state::<AppState>() {
+                    commands::stop_current_turn(&state.chat_cancel).await;
+                }
+            });
         })
         .build()?;
     Ok(())

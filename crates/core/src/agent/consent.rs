@@ -3,14 +3,17 @@
 //! never race an in-flight orchestrator's save and silently lose either
 //! side.
 //!
-//! Also brokers a second, unrelated kind of pending round-trip: `ask_user`'s
+//! Also brokers two other kinds of pending round-trip: `ask_user`'s
 //! clarifying-question answers (see `register_clarification`/
-//! `resolve_clarification` below). It lives here rather than in its own
-//! struct because it's the same shape (a oneshot per in-flight `call_id`,
-//! drained by `cancel_all` when a turn stops) and every place an `AgentDeps`
-//! is built already carries a `ConsentBroker` — a second broker type would
-//! mean threading a second `Arc` field through every one of those call sites
-//! for no real benefit.
+//! `resolve_clarification` below), and the prompt-injection review card's
+//! Continue/Stop (`register_review`/`resolve_review`, asked by
+//! `injection::review` before the model reads flagged text — in every turn
+//! type, not just agent mode). They live here rather than in their own
+//! structs because they're the same shape (a oneshot per pending id, drained
+//! by `cancel_all` when a turn stops) and every place an `AgentDeps` is built
+//! already carries a `ConsentBroker` — a second broker type would mean
+//! threading a second `Arc` field through every one of those call sites for
+//! no real benefit.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -23,6 +26,16 @@ pub enum ConsentDecision {
     AllowOnce,
     AlwaysAllow,
     Deny,
+}
+
+/// The user's answer to a prompt-injection review card (the
+/// `respond_injection_review` command). Two-valued on purpose: dismissing the
+/// card any other way — Escape, the Stop button, the turn ending — is `Stop`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ReviewDecision {
+    Continue,
+    Stop,
 }
 
 /// A persisted "Always allow" grant.
@@ -61,6 +74,8 @@ struct State {
     /// (mirrors `pending`'s keying by `request_id` — a clarifying question
     /// has no separate request/decision split, so one id does both jobs).
     clarifications: HashMap<String, oneshot::Sender<String>>,
+    /// Pending prompt-injection reviews, keyed by their `request_id`.
+    reviews: HashMap<String, oneshot::Sender<ReviewDecision>>,
 }
 
 pub struct ConsentBroker {
@@ -76,6 +91,7 @@ impl ConsentBroker {
                 pending: HashMap::new(),
                 grants,
                 clarifications: HashMap::new(),
+                reviews: HashMap::new(),
             }),
             grants_path,
         }
@@ -117,8 +133,9 @@ impl ConsentBroker {
 
     /// Resolve every still-pending request as a denial (the turn was
     /// stopped/ended) so no orchestrator await hangs forever. Also resolves
-    /// every pending clarifying question with `note` as its answer, for the
-    /// same reason.
+    /// every pending clarifying question with `note` as its answer, and every
+    /// pending injection review as [`ReviewDecision::Stop`], for the same
+    /// reason.
     pub async fn cancel_all(&self, note: &str) {
         let mut state = self.state.lock().await;
         for (_, pending) in state.pending.drain() {
@@ -128,6 +145,9 @@ impl ConsentBroker {
         }
         for (_, sender) in state.clarifications.drain() {
             let _ = sender.send(note.to_string());
+        }
+        for (_, sender) in state.reviews.drain() {
+            let _ = sender.send(ReviewDecision::Stop);
         }
     }
 
@@ -152,6 +172,37 @@ impl ConsentBroker {
             }
             None => false,
         }
+    }
+
+    /// Register a pending injection review *before* the corresponding
+    /// `ChatEvent::InjectionReviewRequested` is emitted — same ordering
+    /// requirement as [`Self::register`], for the same reason.
+    pub async fn register_review(&self, request_id: &str) -> oneshot::Receiver<ReviewDecision> {
+        let (tx, rx) = oneshot::channel();
+        let mut state = self.state.lock().await;
+        state.reviews.insert(request_id.to_string(), tx);
+        rx
+    }
+
+    /// Resolve a pending injection review (the `respond_injection_review`
+    /// command). `false` if nothing was pending with this id (already
+    /// answered, or stale — the turn ended first).
+    pub async fn resolve_review(&self, request_id: &str, decision: ReviewDecision) -> bool {
+        let mut state = self.state.lock().await;
+        match state.reviews.remove(request_id) {
+            Some(sender) => {
+                let _ = sender.send(decision);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Forget a pending injection review without answering it — its waiter
+    /// gave up (the turn was stopped while the card was up), so a late
+    /// answer must find nothing to resolve.
+    pub async fn drop_review(&self, request_id: &str) {
+        self.state.lock().await.reviews.remove(request_id);
     }
 
     pub async fn find_grant(&self, grant_key: &str) -> Option<ToolGrant> {
@@ -332,6 +383,69 @@ mod tests {
             !broker
                 .resolve_clarification("call1", "too late".to_string())
                 .await
+        );
+    }
+
+    #[tokio::test]
+    async fn cancel_all_stops_pending_reviews() {
+        let tmp = tempfile::tempdir().unwrap();
+        let broker = ConsentBroker::new(tmp.path().join("grants.json"));
+        let rx1 = broker.register_review("review-1").await;
+        let rx2 = broker.register_review("review-2").await;
+        broker.cancel_all("The user stopped this turn.").await;
+        assert_eq!(rx1.await.unwrap(), ReviewDecision::Stop);
+        assert_eq!(rx2.await.unwrap(), ReviewDecision::Stop);
+        assert!(
+            !broker
+                .resolve_review("review-1", ReviewDecision::Continue)
+                .await
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_review_is_false_when_stale() {
+        let tmp = tempfile::tempdir().unwrap();
+        let broker = ConsentBroker::new(tmp.path().join("grants.json"));
+        assert!(!broker.resolve_review("nope", ReviewDecision::Stop).await);
+        let rx = broker.register_review("review-1").await;
+        assert!(
+            broker
+                .resolve_review("review-1", ReviewDecision::Continue)
+                .await
+        );
+        assert_eq!(rx.await.unwrap(), ReviewDecision::Continue);
+        // Answered once: a second answer (a double click) changes nothing.
+        assert!(
+            !broker
+                .resolve_review("review-1", ReviewDecision::Stop)
+                .await
+        );
+    }
+
+    #[tokio::test]
+    async fn drop_review_removes_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let broker = ConsentBroker::new(tmp.path().join("grants.json"));
+        let rx = broker.register_review("review-1").await;
+        broker.drop_review("review-1").await;
+        assert!(
+            !broker
+                .resolve_review("review-1", ReviewDecision::Continue)
+                .await
+        );
+        // Its waiter sees the sender gone, not a decision.
+        assert!(rx.await.is_err());
+    }
+
+    #[test]
+    fn review_decisions_use_the_frontends_names() {
+        assert_eq!(
+            serde_json::to_value(ReviewDecision::Continue).unwrap(),
+            "continue"
+        );
+        assert_eq!(
+            serde_json::from_str::<ReviewDecision>("\"stop\"").unwrap(),
+            ReviewDecision::Stop
         );
     }
 

@@ -35,7 +35,11 @@ concurrency:
 jobs:
   engine-e2e:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # A cold build cache (every new stable Rust changes the cache key) spends
+    # about 12 minutes compiling openpal-core's tests, now that they include
+    # the prompt-injection classifier's runtime. 15 minutes ran out while the
+    # cache was being saved.
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
 

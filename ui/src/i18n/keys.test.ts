@@ -7,6 +7,8 @@ import enRemoteAccess from "./locales/en.remoteAccess.json";
 import frRemoteAccess from "./locales/fr.remoteAccess.json";
 import enRemoteClient from "./locales/en.remoteClient.json";
 import frRemoteClient from "./locales/fr.remoteClient.json";
+import enInjection from "./locales/en.injection.json";
+import frInjection from "./locales/fr.injection.json";
 
 /** Recursively flattens a locale JSON object into dot-path keys, e.g.
  * `{ a: { b: "x", c: "y" } }` -> `["a.b", "a.c"]`. Leaf values (translation
@@ -32,6 +34,7 @@ describe.each([
   { label: "recovery", en: enRecovery, fr: frRecovery },
   { label: "remoteAccess", en: enRemoteAccess, fr: frRemoteAccess },
   { label: "remoteClient", en: enRemoteClient, fr: frRemoteClient },
+  { label: "injection", en: enInjection, fr: frInjection },
 ])("locale key parity ($label)", ({ en, fr }) => {
   it("en and fr declare exactly the same set of keys", () => {
     const enKeys = new Set(flattenKeys(en));

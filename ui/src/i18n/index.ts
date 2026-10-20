@@ -8,6 +8,8 @@ import enRemoteAccess from "./locales/en.remoteAccess.json";
 import frRemoteAccess from "./locales/fr.remoteAccess.json";
 import enRemoteClient from "./locales/en.remoteClient.json";
 import frRemoteClient from "./locales/fr.remoteClient.json";
+import enInjection from "./locales/en.injection.json";
+import frInjection from "./locales/fr.injection.json";
 
 /** The only two UI languages OpenPal ships. Single source of truth for
  * anything that needs to enumerate or validate them. */
@@ -26,18 +28,21 @@ void i18next.use(initReactI18next).init({
     // when its ~25 keys were added directly to `translation` and follows
     // the same fix. `remoteClient` (RemoteClientSection, Android-only)
     // follows the same precedent from the start rather than waiting to
-    // hit the limit.
+    // hit the limit, and so does `injection` (the prompt-injection review
+    // card and notices, InjectionReviewCard/InjectionNotices).
     en: {
       translation: en,
       recovery: enRecovery,
       remoteAccess: enRemoteAccess,
       remoteClient: enRemoteClient,
+      injection: enInjection,
     },
     fr: {
       translation: fr,
       recovery: frRecovery,
       remoteAccess: frRemoteAccess,
       remoteClient: frRemoteClient,
+      injection: frInjection,
     },
   },
   lng: "en",

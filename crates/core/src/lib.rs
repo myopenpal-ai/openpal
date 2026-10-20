@@ -42,6 +42,12 @@
 //!   for the Portable SKU (Full uses Tauri's own updater plugin instead).
 //! - [`engine_update`] — download, verify, and stage a newer llama.cpp
 //!   engine build on its own signed channel, independent of app releases.
+//! - [`injection`] — prompt-injection detection: a dedicated, always-on
+//!   classifier (a knowing exception to mono-model first) that catches text
+//!   trying to give the model orders. Flagged attachments, skills and tool
+//!   results wait on a review card (Continue or Stop) before the model reads
+//!   them; typed text gets a notice in the reply; both flag the next consent
+//!   card and write one app-log line.
 //! - [`writing_tools`] — fixed system prompts + sampling for the Writing
 //!   Tools plugin's Translate/Correct commands, run against the already-
 //!   loaded model (never a second, translation-specialized one).
@@ -69,6 +75,7 @@ pub mod gpu;
 pub mod hardware;
 pub mod huggingface;
 pub mod import;
+pub mod injection;
 pub mod parental;
 pub mod plugin;
 pub mod projects;

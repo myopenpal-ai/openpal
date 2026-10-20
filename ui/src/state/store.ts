@@ -33,6 +33,10 @@ import {
   type DangerFlag,
   type EngineStatus,
   type EngineUpdateInfo,
+  type FlaggedItem,
+  type InjectionNotice,
+  type InjectionReviewDecision,
+  type InjectionSource,
   type ModelInfo,
   type NotificationClick,
   type NotificationPermission,
@@ -118,6 +122,26 @@ export interface PendingClarifyingQuestion {
   options: string[];
 }
 
+/** Flagged text the backend is holding back until the user answers — the
+ * live `injectionReviewRequested` event, held in state so
+ * `InjectionReviewCard` can render it. Only turns that use tools are checked
+ * (agent mode and web search): an attachment or skill pauses before such a
+ * turn too, and `toolCallId` is null for those user-side texts. At most one
+ * at a time: the backend asks about one request's user-side texts together,
+ * then each tool result in call order, waiting on each answer before the
+ * next. */
+export interface PendingInjectionReview {
+  requestId: string;
+  toolCallId: string | null;
+  /** The subagent kind whose tool returned the text, if any. */
+  via: string | null;
+  items: FlaggedItem[];
+  /** The turn's own user message. A user-side item from any other message
+   * came from earlier in the conversation, which the AI already read in a
+   * chat that wasn't checked — the card words it that way. */
+  newestMessageId: string | null;
+}
+
 /** What the user just answered for a pending clarifying question, kept
  * around just long enough for the matching `toolCallResult` event (which
  * doesn't repeat the answer) to build this turn's `ChatStep.askedQuestion`
@@ -139,7 +163,10 @@ export type LiveActivity =
   | { kind: "reading"; host: string }
   | { kind: "tool"; toolId: string }
   /** A `spawn_subagent` helper is running; `helper` is its kind. */
-  | { kind: "subagent"; helper: string };
+  | { kind: "subagent"; helper: string }
+  /** The prompt-injection check of text the model is about to read is
+   * taking a noticeable while; `name` is that text's label, if it has one. */
+  | { kind: "checking"; source: InjectionSource; name: string | null };
 
 /** What the main pane shows. Deliberately only the surfaces where the user
  * talks to their model — everything else opens over it in a dialog instead
@@ -380,6 +407,9 @@ interface Store {
   /** Bridges `respondClarifyingQuestion` to the later `toolCallResult` event —
    * see `RespondedToolConsent`'s doc comment for why this exists. */
   lastRespondedClarifyingQuestion: RespondedClarifyingQuestion | null;
+  /** Flagged text awaiting the user's Continue/Stop, or null when none is
+   * pending. See `PendingInjectionReview`. */
+  pendingInjectionReview: PendingInjectionReview | null;
   /** A short, friendly note shown as a passing toast (e.g. a failed action).
    * Nothing renders it today, and the in-app alerts below deliberately don't
    * use it: it is written by about thirty failure paths with raw error text. */
@@ -492,6 +522,10 @@ interface Store {
    * or typed answer (empty string to skip/dismiss). A no-op if nothing is
    * pending. */
   respondClarifyingQuestion: (answer: string) => Promise<void>;
+  /** Reply to the pending `injectionReviewRequested` card: "continue" lets
+   * the flagged text reach the model unchanged, "stop" keeps it from the
+   * model and ends the turn. A no-op if nothing is pending. */
+  respondInjectionReview: (decision: InjectionReviewDecision) => Promise<void>;
 
   newChat: () => void;
   /** Start a fresh conversation with `text` pre-filled in the composer
@@ -693,6 +727,15 @@ function newConversation(): Conversation {
     pinned: false,
     branches: {},
   };
+}
+
+/** `message` without its `withheldFromModel` flag — the key removed, not
+ * set to false, so the saved message looks like one that was never
+ * stopped. */
+function withoutWithheldFlag(message: ChatMessage): ChatMessage {
+  const copy = { ...message };
+  delete copy.withheldFromModel;
+  return copy;
 }
 
 /** Pushes `tail` as a new sibling variant onto `branches[anchorKey]`
@@ -932,6 +975,16 @@ async function runGeneration(
     steps: ChatStep[];
     stepRef: Extract<ChatStep, { type: "subagentRun" }>;
   } | null = null;
+  // One line per text the prompt-injection detector flagged this turn, in
+  // the order the backend reported them — persisted on the reply.
+  const injectionNotices: InjectionNotice[] = [];
+  // User messages whose flagged text the user stopped this turn — marked
+  // `withheldFromModel` at settle, in the same save as the reply, so the
+  // backend leaves them out of every later request.
+  const withheldIds = new Set<string>();
+  // The user message this turn answers, to tell a review of it from one of
+  // an earlier message (see `PendingInjectionReview.newestMessageId`).
+  const newestMessageId = [...history].reverse().find((m) => m.role === "user")?.id ?? null;
   // Snapshot the streamed assistant message from the locally-tracked turn.
   const assistantMessage = (): ChatMessage => ({
     id: assistantId,
@@ -944,6 +997,7 @@ async function runGeneration(
     steps: steps.length ? [...steps] : undefined,
     artifacts: artifacts.length ? [...artifacts] : undefined,
     stats,
+    injectionNotices: injectionNotices.length ? [...injectionNotices] : undefined,
   });
   // Write the in-progress reply (text, thinking, steps, sources gathered so
   // far) into the streaming placeholder, but only while `active` still shows
@@ -1192,6 +1246,45 @@ async function runGeneration(
           });
           patchAssistant();
           break;
+        case "injectionCheckStarted":
+          set({
+            liveActivity: {
+              kind: "checking",
+              source: event.data.source,
+              name: event.data.name,
+            },
+          });
+          patchAssistant();
+          break;
+        case "injectionCheckFinished":
+          // Its own "finished" event, not the first token: the check ends
+          // before the model starts, and a slow model would otherwise keep
+          // saying "Checking…" while it really is thinking.
+          if (get().liveActivity?.kind === "checking") set({ liveActivity: null });
+          break;
+        case "injectionReviewRequested":
+          set({
+            pendingInjectionReview: {
+              requestId: event.data.requestId,
+              toolCallId: event.data.toolCallId,
+              via: event.data.via,
+              items: event.data.items,
+              newestMessageId,
+            },
+            liveActivity: null,
+          });
+          break;
+        case "injectionNotice": {
+          const notice = event.data.notice;
+          injectionNotices.push(notice);
+          if (notice.outcome === "stopped" && notice.messageId) withheldIds.add(notice.messageId);
+          // A decision notice means the card it answers is settled. Not a
+          // "sent" one: those come from a background check of typed text and
+          // can land while a tool result's card is still waiting.
+          if (notice.outcome !== "sent") set({ pendingInjectionReview: null });
+          patchAssistant();
+          break;
+        }
         case "error":
           sawError = true;
           set({ chatError: event.data.message });
@@ -1219,12 +1312,22 @@ async function runGeneration(
 
   // Settle from the locally tracked turn — never from `active`. Drop the
   // placeholder only if truly nothing arrived (no answer, and no thinking,
-  // tool steps, or created artifacts worth keeping); otherwise persist what
-  // was generated. In practice `create_artifact` is itself a tool call, so
-  // an artifact never arrives without a matching step — this check is just
-  // a defensive belt-and-suspenders against a bare `artifactCreated`.
-  const messages = [...conversation.messages];
-  if (reply === "" && thinking === "" && steps.length === 0 && artifacts.length === 0) {
+  // tool steps, created artifacts or injection notices worth keeping);
+  // otherwise persist what was generated. In practice `create_artifact` is
+  // itself a tool call, so an artifact never arrives without a matching
+  // step — this check is just a defensive belt-and-suspenders against a
+  // bare `artifactCreated`. A reply stopped at a review card has no text at
+  // all, only its "stopped" notice, and is kept for that notice.
+  const messages = conversation.messages.map((m) =>
+    m.role === "user" && withheldIds.has(m.id) ? { ...m, withheldFromModel: true } : m,
+  );
+  if (
+    reply === "" &&
+    thinking === "" &&
+    steps.length === 0 &&
+    artifacts.length === 0 &&
+    injectionNotices.length === 0
+  ) {
     messages.pop();
   } else {
     messages[messages.length - 1] = assistantMessage();
@@ -1243,6 +1346,7 @@ async function runGeneration(
     // defensively so a card can never linger past its own turn.
     pendingToolConsent: null,
     pendingClarifyingQuestion: null,
+    pendingInjectionReview: null,
     active: s.active?.id === conversation.id ? settled : s.active,
   }));
 
@@ -1540,6 +1644,7 @@ export const useStore = create<Store>()((set, get) => ({
   lastRespondedToolConsent: null,
   pendingClarifyingQuestion: null,
   lastRespondedClarifyingQuestion: null,
+  pendingInjectionReview: null,
   notice: null,
   appAlerts: [],
   // The webview can only say whether it has focus; `App.tsx` keeps this in
@@ -2176,6 +2281,21 @@ export const useStore = create<Store>()((set, get) => ({
     }
   },
 
+  respondInjectionReview: async (decision) => {
+    const pending = get().pendingInjectionReview;
+    if (!pending) return;
+    set({ pendingInjectionReview: null });
+    // Stopping here ends the turn with a normal `done`, just like the Stop
+    // button, so it's a stopped reply and not an answer to announce.
+    if (decision === "stop") stopRequestedForTurn = true;
+    try {
+      await api.respondInjectionReview(pending.requestId, decision);
+    } catch (err: unknown) {
+      if (decision === "stop") stopRequestedForTurn = false;
+      set({ chatError: String(err) });
+    }
+  },
+
   newChat: () => {
     // While a reply is streaming the sidebar is disabled; this guard keeps
     // the in-flight turn safe even if a stray call slips through.
@@ -2645,8 +2765,23 @@ export const useStore = create<Store>()((set, get) => ({
     const anchorKey = branchAnchorKey(base.messages, index);
     const branchesWithOldTail = pushVariant(base.branches, anchorKey, base.messages.slice(index));
     // Unlike `send`, no new user message — regenerating a reply for the
-    // same, unchanged preceding turn.
-    const history = base.messages.slice(0, index);
+    // same, unchanged preceding turn. Retrying a reply the user stopped at
+    // a review card asks again: the turn's own user message, and any
+    // earlier one that reply's "stopped" notices name, go back to the model
+    // (and so back through the check) instead of staying withheld.
+    const stoppedIds = new Set(
+      (base.messages[index].injectionNotices ?? []).flatMap((n) =>
+        n.outcome === "stopped" && n.messageId ? [n.messageId] : [],
+      ),
+    );
+    const lastUserIndex = base.messages.slice(0, index).map((m) => m.role).lastIndexOf("user");
+    const history = base.messages
+      .slice(0, index)
+      .map((m, i) =>
+        m.withheldFromModel && (i === lastUserIndex || stoppedIds.has(m.id))
+          ? withoutWithheldFlag(m)
+          : m,
+      );
 
     const engine = get().engine;
     const settingsNow = get().settings;
@@ -2687,10 +2822,13 @@ export const useStore = create<Store>()((set, get) => ({
         // with no message row left for the arrow nav to attach to. Splice
         // the old tail (already recorded in `branchesWithOldTail` above)
         // back in rather than leaving that gap; any stream error is still
-        // surfaced separately via `chatError`.
+        // surfaced separately via `chatError`. The whole of `base`'s
+        // messages, not `settled`'s: a stopped turn whose retry never got
+        // as far as asking again stays withheld, matching the reply that
+        // comes back with it.
         return {
           ...settled,
-          messages: [...settled.messages, ...base.messages.slice(index)],
+          messages: [...base.messages],
           branches: branchesWithOldTail,
         };
       }

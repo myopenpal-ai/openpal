@@ -303,11 +303,22 @@ fn make_filter(level: &str) -> EnvFilter {
     if let Ok(filter) = EnvFilter::try_from_default_env() {
         return filter;
     }
+    level_filter(level)
+}
+
+/// The user's level, plus one fixed directive: prompt-injection detections
+/// (`openpal_core::injection::LOG_TARGET`) are always written, even at
+/// "Errors only". The log is where a detection is recorded, and a log level
+/// mustn't double as a way to turn detection off.
+fn level_filter(level: &str) -> EnvFilter {
     let level = match level.trim().to_ascii_lowercase().as_str() {
         l @ ("error" | "warn" | "info" | "debug" | "trace") => l.to_string(),
         _ => "info".to_string(),
     };
-    EnvFilter::new(level)
+    EnvFilter::new(format!(
+        "{level},{}=warn",
+        openpal_core::injection::LOG_TARGET
+    ))
 }
 
 /// One line at startup so every log opens with the version, OS and CPU — the
@@ -491,6 +502,54 @@ pub fn redact(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every line written under `level_filter(level)`.
+    fn lines_logged_at(level: &str) -> String {
+        use tracing_subscriber::fmt::MakeWriter;
+
+        #[derive(Clone, Default)]
+        struct Captured(Arc<Mutex<Vec<u8>>>);
+        impl std::io::Write for Captured {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(buf);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        impl<'a> MakeWriter<'a> for Captured {
+            type Writer = Captured;
+            fn make_writer(&'a self) -> Self::Writer {
+                self.clone()
+            }
+        }
+
+        let captured = Captured::default();
+        let subscriber = tracing_subscriber::registry()
+            .with(level_filter(level))
+            .with(fmt::layer().with_ansi(false).with_writer(captured.clone()));
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::warn!(target: openpal_core::injection::LOG_TARGET, "detection");
+            tracing::warn!("ordinary warning");
+            tracing::info!("ordinary info");
+        });
+        let bytes = captured.0.lock().unwrap().clone();
+        String::from_utf8(bytes).unwrap()
+    }
+
+    #[test]
+    fn injection_detections_are_logged_at_every_level() {
+        for level in ["error", "warn", "info", "debug", "trace", "nonsense"] {
+            let out = lines_logged_at(level);
+            assert!(out.contains("detection"), "{level}: {out}");
+        }
+        // ...while the level still does its job for everything else.
+        let out = lines_logged_at("error");
+        assert!(!out.contains("ordinary warning"), "{out}");
+        let out = lines_logged_at("info");
+        assert!(out.contains("ordinary info"), "{out}");
+    }
 
     #[test]
     fn redact_hides_keys_and_tokens() {

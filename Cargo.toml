@@ -24,3 +24,41 @@ axum = "0.8"
 lto = true
 codegen-units = 1
 strip = true
+
+# The prompt-injection classifier (`openpal_core::injection`) runs these on
+# every scan. Unoptimized they're roughly 10x slower — seconds per page in a
+# debug build of the app, and minutes for the real-model corpus test — so
+# they're optimized in dev (and test) builds too, while the app's own code
+# stays debuggable. Their debug info is dropped as well: it's gigabytes for
+# tract's generic-heavy crates, and it pushed CI's Linux runner out of disk
+# space while linking the test binaries.
+[profile.dev.package.tract-core]
+opt-level = 3
+debug = false
+[profile.dev.package.tract-data]
+opt-level = 3
+debug = false
+[profile.dev.package.tract-extra]
+opt-level = 3
+debug = false
+[profile.dev.package.tract-hir]
+opt-level = 3
+debug = false
+[profile.dev.package.tract-linalg]
+opt-level = 3
+debug = false
+[profile.dev.package.tract-nnef]
+opt-level = 3
+debug = false
+[profile.dev.package.tract-onnx]
+opt-level = 3
+debug = false
+[profile.dev.package.tract-onnx-opl]
+opt-level = 3
+debug = false
+[profile.dev.package.tract-transformers]
+opt-level = 3
+debug = false
+[profile.dev.package.tokenizers]
+opt-level = 3
+debug = false

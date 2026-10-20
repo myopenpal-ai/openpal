@@ -1,6 +1,7 @@
 //! Background loop that unloads the local engine after inactivity
-//! ("auto-unload"), per `Settings.auto_unload_*`. Spawned once for the app's
-//! lifetime from `lib.rs::run()`.
+//! ("auto-unload"), per `Settings.auto_unload_*`, and the prompt-injection
+//! classifier with it — or on its own once it sits idle (see
+//! `maybe_unload`). Spawned once for the app's lifetime from `lib.rs::run()`.
 //!
 //! Backend-authoritative by design: a pure JS timer in the webview can be
 //! throttled while the window is minimized/backgrounded, which would defeat
@@ -46,7 +47,11 @@ pub async fn run(app: AppHandle) {
     }
 }
 
+/// Also releases the prompt-injection classifier: on every tick once no
+/// tool turn holds it and it has sat idle (`Detector::unload_if_idle`),
+/// whatever the engine is doing, and with an auto-unloaded model.
 async fn maybe_unload(app: &AppHandle, state: &AppState) {
+    state.injection.unload_if_idle();
     let Some(info) = state.engine.activity().await else {
         return; // not Running
     };
@@ -75,7 +80,13 @@ async fn maybe_unload(app: &AppHandle, state: &AppState) {
             // stopped" (`stop_if_current` does not say which). Emitting then
             // is harmless: the nudge carries no status, so the UI re-reads
             // the real one and shows nothing new.
-            Ok(()) => emit_engine_status_changed(app),
+            Ok(()) => {
+                emit_engine_status_changed(app);
+                // Not when a newer model is already running in its place.
+                if state.engine.activity().await.is_none() {
+                    crate::commands::unload_classifier(state);
+                }
+            }
             Err(e) => tracing::warn!("auto-unload stop failed: {e}"),
         }
     }

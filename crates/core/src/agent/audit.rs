@@ -38,7 +38,10 @@ pub struct AuditEvent {
     pub turn_id: String,
     pub call_id: String,
     pub tool_id: String,
-    /// One of: "consentRequested" | "decided" | "started" | "finished" | "rejected".
+    /// One of: "consentRequested" | "decided" | "started" | "finished" |
+    /// "rejected" | "injectionReview" (the user's answer to a
+    /// prompt-injection review of the call's result: `decision` is
+    /// "continued" or "stopped").
     pub phase: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub decision: Option<String>,
@@ -115,6 +118,21 @@ impl AuditLog {
     /// doesn't match the hash of the row before it.
     pub fn verify(&self) -> (usize, bool) {
         verify_chain(&self.conn.lock().unwrap())
+    }
+
+    /// Every entry so far, oldest first.
+    #[cfg(test)]
+    pub(crate) fn entries(&self) -> Vec<serde_json::Value> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare("SELECT line FROM agent_audit ORDER BY id ASC")
+            .unwrap();
+        let lines = stmt
+            .query_map([], |r| r.get::<_, String>(0))
+            .unwrap()
+            .map(|line| serde_json::from_str(&line.unwrap()).unwrap())
+            .collect();
+        lines
     }
 }
 

@@ -112,7 +112,8 @@ export default function WritingToolsScreen({ mode }: { mode: WritingToolsMode })
     if (busy) return;
     let picked;
     try {
-      picked = await api.pickAttachments(false);
+      // No prompt-injection pre-check: Writing Tools give the model no tools.
+      picked = await api.pickAttachments(false, false);
     } catch (err: unknown) {
       setError(String(err));
       return;

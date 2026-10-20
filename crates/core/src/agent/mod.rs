@@ -20,7 +20,8 @@
 //! - [`sandbox`] — the `Sandbox` trait and the macOS Seatbelt implementation
 //!   used by `run_shell`/`run_code`.
 //! - [`builtin`] — the four v1 tools.
-//! - [`consent`] — `ConsentBroker`: pending per-call approval + the persisted
+//! - [`consent`] — `ConsentBroker`: pending per-call approval (and the
+//!   prompt-injection review card's Continue/Stop) + the persisted
 //!   "Always allow" grant store.
 //! - [`audit`] — the hash-chained tool-call lifecycle log.
 //! - [`fetch_allowlist`] — which URLs `fetch_url` may open this turn, and how
@@ -46,7 +47,7 @@ pub mod tool;
 pub mod workspace;
 
 pub use citations::CitationRegistry;
-pub use consent::{ConsentBroker, ConsentDecision, ToolGrant};
+pub use consent::{ConsentBroker, ConsentDecision, ReviewDecision, ToolGrant};
 pub use fetch_allowlist::FetchAllowlist;
 pub use orchestrator::{run_agent_turn, run_tool_loop, AgentDeps, LoopOutcome, MAX_AGENT_STEPS};
 pub use registry::ToolRegistry;

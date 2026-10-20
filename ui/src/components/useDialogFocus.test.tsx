@@ -260,4 +260,55 @@ describe("useDialogFocus", () => {
     // each render) and yank focus back to the dialog root.
     expect(inside).toHaveFocus();
   });
+  describe("unprompted", () => {
+    function Card({ show }: { show: boolean }) {
+      const ref = useDialogFocus<HTMLDivElement>(undefined, { unprompted: true });
+      return show ? (
+        <div ref={ref} tabIndex={-1} role="alertdialog" aria-label="card">
+          <button>answer</button>
+        </div>
+      ) : null;
+    }
+
+    it("takes focus when nothing else holds it, like any dialog", () => {
+      render(<Card show />);
+      expect(screen.getByRole("alertdialog")).toHaveFocus();
+    });
+
+    it("leaves focus in a draft, and leaves it there once it closes", async () => {
+      const user = userEvent.setup();
+      const { rerender } = render(
+        <>
+          <input aria-label="draft" defaultValue="half a sentence" />
+          <Card show={false} />
+        </>,
+      );
+      const draft = screen.getByLabelText("draft");
+      draft.focus();
+      rerender(
+        <>
+          <input aria-label="draft" defaultValue="half a sentence" />
+          <Card show />
+        </>,
+      );
+      expect(draft).toHaveFocus();
+      await user.type(draft, " more");
+      rerender(
+        <>
+          <input aria-label="draft" defaultValue="half a sentence" />
+          <Card show={false} />
+        </>,
+      );
+      expect(draft).toHaveFocus();
+      expect(draft).toHaveValue("half a sentence more");
+    });
+
+    it("leaves focus in another dialog", () => {
+      render(<Dialog />);
+      const other = screen.getByRole("dialog");
+      expect(other).toHaveFocus();
+      render(<Card show />);
+      expect(other).toHaveFocus();
+    });
+  });
 });

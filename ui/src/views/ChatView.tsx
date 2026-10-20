@@ -16,6 +16,12 @@ import FavoriteButton from "../components/FavoriteButton";
 import SafetyBanner from "../components/SafetyBanner";
 import { ToolConsentCard } from "../components/ToolConsentCard";
 import { AskUserCard } from "../components/AskUserCard";
+import { InjectionReviewCard } from "../components/InjectionReviewCard";
+import {
+  InjectionNotices,
+  injectionNoticeText,
+  injectionShortName,
+} from "../components/InjectionNotices";
 import { useComposerGlide } from "../components/useComposerGlide";
 import { useDialogFocus } from "../components/useDialogFocus";
 import { useStickToBottom } from "../components/useStickToBottom";
@@ -436,6 +442,7 @@ function StepLine({ step }: { step: ChatStep }) {
 /** The localized status line for what a streaming turn is doing right now. */
 function useLiveActivityLabel(activity: LiveActivity | null): string | null {
   const { t } = useTranslation();
+  const { t: tInjection } = useTranslation("injection");
   if (!activity) return null;
   switch (activity.kind) {
     case "setup":
@@ -452,6 +459,12 @@ function useLiveActivityLabel(activity: LiveActivity | null): string | null {
       return activity.helper === "web-research"
         ? t("chatView.activity.researching")
         : t("chatView.activity.workingItOut");
+    case "checking":
+      return activity.name
+        ? tInjection("activity.checkingNamed", {
+            name: injectionShortName(activity.source, activity.name),
+          })
+        : tInjection("activity.checking");
   }
 }
 
@@ -1257,6 +1270,8 @@ export default function ChatView() {
   const liveActivityLabel = useLiveActivityLabel(liveActivity);
   const pendingToolConsent = useStore((s) => s.pendingToolConsent);
   const pendingClarifyingQuestion = useStore((s) => s.pendingClarifyingQuestion);
+  const pendingInjectionReview = useStore((s) => s.pendingInjectionReview);
+  const { t: tInjection } = useTranslation("injection");
   const chatError = useStore((s) => s.chatError);
   const safetyAlertEntry = useStore((s) => (active ? s.safetyAlerts[active.id] : undefined));
   const dismissSafetyAlert = useStore((s) => s.dismissSafetyAlert);
@@ -1285,6 +1300,15 @@ export default function ChatView() {
   const isEmpty = messages.length === 0;
   const composerSlotRef = useComposerGlide<HTMLDivElement>(isEmpty);
   const streamAnnouncements = useStreamingAnnouncement(messages, streaming, liveActivityLabel);
+  // The streaming reply's newest "sent as typed" notice, for the status
+  // region below. The other outcomes follow the user's own answer on a
+  // review card (announced as an alertdialog), but this one shows up with
+  // nothing else to draw attention to it.
+  const lastMessage = messages[messages.length - 1];
+  const latestSentNotice =
+    streaming && lastMessage?.role === "assistant"
+      ? [...(lastMessage.injectionNotices ?? [])].reverse().find((n) => n.outcome === "sent")
+      : undefined;
   const activeId = active?.id;
   const { scrollRef, showJumpButton, follow, detach, scrollToBottom, scrollHandlers } =
     useStickToBottom<HTMLDivElement>();
@@ -1444,6 +1468,12 @@ export default function ChatView() {
               <p key={i}>{chunk}</p>
             ))}
           </div>
+          {/* Always mounted, so a screen reader is already listening when a
+              notice lands — a live region inserted along with its text is
+              often not announced. */}
+          <div className="sr-only" role="status">
+            {latestSentNotice ? injectionNoticeText(tInjection, latestSentNotice) : ""}
+          </div>
           {isEmpty ? (
             <div className="chat-empty">
               <h1 className="chat-hello">
@@ -1527,7 +1557,13 @@ export default function ChatView() {
                       ? parseSkillInvocationDisplay(shown, skills)
                       : null;
                   return (
-                    <div key={message.id} className="msg-user-row" role="listitem">
+                    <div
+                      key={message.id}
+                      className={
+                        message.withheldFromModel ? "msg-user-row msg-user-withheld" : "msg-user-row"
+                      }
+                      role="listitem"
+                    >
                       <span className="sr-only">{t("chatView.message.youSaid")}</span>
                       {message.attachments && message.attachments.length > 0 && (
                         <AttachmentList items={message.attachments} />
@@ -1545,6 +1581,12 @@ export default function ChatView() {
                             shown
                           )}
                         </div>
+                      )}
+                      {/* The user stopped this message's flagged text at a
+                          review card: it and the replies after it stay out
+                          of every request until a Retry asks again. */}
+                      {message.withheldFromModel && (
+                        <span className="msg-withheld-tag">{tInjection("message.withheld")}</span>
                       )}
                       {editBranch && (
                         <VariantNav
@@ -1588,18 +1630,23 @@ export default function ChatView() {
                 // not the live turn at all).
                 const liveStatus = !isStreamingReply
                   ? null
-                  : pendingToolConsent
-                    ? t("chatView.activity.waitingApproval")
-                    : pendingClarifyingQuestion
-                      ? t("chatView.activity.waitingAnswer")
-                      : (liveActivityLabel ?? (noBody ? t("chatView.thinking.live") : null));
+                  : pendingInjectionReview
+                    ? tInjection("activity.waitingReview")
+                    : pendingToolConsent
+                      ? t("chatView.activity.waitingApproval")
+                      : pendingClarifyingQuestion
+                        ? t("chatView.activity.waitingAnswer")
+                        : (liveActivityLabel ?? (noBody ? t("chatView.thinking.live") : null));
                 // A plain reply still waiting on its first token has nothing
                 // to fold away — it keeps the bare thinking dots instead.
                 const showActivity =
                   hasThinking ||
                   hasSteps ||
                   (isStreamingReply &&
-                    (liveActivity !== null || !!pendingToolConsent || !!pendingClarifyingQuestion));
+                    (liveActivity !== null ||
+                      !!pendingToolConsent ||
+                      !!pendingClarifyingQuestion ||
+                      !!pendingInjectionReview));
                 const retryAnchorKey = branchAnchorKey(messages, i);
                 const retryBranch = active?.branches[retryAnchorKey];
                 const forkOrigin =
@@ -1620,6 +1667,17 @@ export default function ChatView() {
                         liveStatus={liveStatus}
                       />
                     )}
+                    {message.injectionNotices?.length ? (
+                      <InjectionNotices
+                        notices={message.injectionNotices}
+                        turnMessageId={
+                          messages
+                            .slice(0, i)
+                            .reverse()
+                            .find((m) => m.role === "user")?.id
+                        }
+                      />
+                    ) : null}
                     {isStreamingReply && pendingToolConsent && (
                       // Keyed on requestId (not toolId, which is just the
                       // tool's name and can repeat across two different
@@ -1638,6 +1696,16 @@ export default function ChatView() {
                       <AskUserCard
                         key={pendingClarifyingQuestion.requestId}
                         question={pendingClarifyingQuestion}
+                      />
+                    )}
+                    {isStreamingReply && pendingInjectionReview && (
+                      // Keyed on requestId for the same reason as
+                      // `ToolConsentCard` above: one card per tool result,
+                      // each gets its own focus-in on mount (when the user
+                      // isn't busy elsewhere — see the card's doc comment).
+                      <InjectionReviewCard
+                        key={pendingInjectionReview.requestId}
+                        review={pendingInjectionReview}
                       />
                     )}
                     <div className="msg-assistant">
@@ -2359,10 +2427,12 @@ function Composer({ locked }: { locked: boolean }) {
   // The "+" menu's "Add files" item: pick images (vision models only) and/or
   // documents through a native dialog. Rust reads the files — images to
   // data: URIs, documents to extracted text. Works regardless of model
-  // loading state — only Send waits on `ready`.
+  // loading state — only Send waits on `ready`. Documents are pre-checked
+  // for prompt injection only in a chat whose turns are checked: one with
+  // agent tools or web search on.
   const addFiles = async () => {
     try {
-      const picked = await api.pickAttachments(visionOk);
+      const picked = await api.pickAttachments(visionOk, agentToolsOn || webSearchOn);
       if (picked.length) setAttachments((a) => [...a, ...picked]);
     } catch (err: unknown) {
       setNotice(String(err));

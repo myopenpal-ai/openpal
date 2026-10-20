@@ -518,6 +518,67 @@ export interface ChatMessage {
    * carries the skill's body folded in ahead of the user's words — see
    * `matchSkillInvocation` in `state/store.ts`). Absent for a plain turn. */
   displayContent?: string;
+  /** For assistant messages: one line per text the prompt-injection
+   * detector flagged this turn, and what happened to it (continued, stopped,
+   * or sent as typed). Never carries an excerpt. Absent when nothing was
+   * flagged. */
+  injectionNotices?: InjectionNotice[];
+  /** For user messages: the user pressed "Stop here" on a review card for
+   * text this message carried, so the backend leaves it — and the replies
+   * after it — out of every request. Only ever removes text from what the
+   * model sees. Retry clears it. Absent otherwise. */
+  withheldFromModel?: boolean;
+}
+
+/** Where a text the prompt-injection detector flagged came from. Mirrors
+ * Rust `injection::Source::id`. Persisted as a plain string, so a value from
+ * a newer build may be none of these — the UI renders it with a generic
+ * fallback phrase. */
+export type InjectionSource =
+  | "webPage"
+  | "webSearch"
+  | "file"
+  | "commandOutput"
+  | "attachment"
+  | "projectConversation"
+  | "skill"
+  | "composer"
+  | "toolOutput";
+
+/** What happened to a flagged text: the user continued anyway, stopped
+ * before the model read it, or (typed/pasted text only) it was sent as
+ * written with a notice. Same unknown-string fallback as `InjectionSource`. */
+export type InjectionOutcome = "continued" | "stopped" | "sent";
+
+/** The two answers to a review card. Mirrors Rust `ReviewDecision`. */
+export type InjectionReviewDecision = "continue" | "stop";
+
+/** One flagged text on a review card. `excerpt` is the part of the text
+ * that tripped the check (the classifier's most suspicious stretch, at most
+ * 1,500 characters), with invisible characters shown as ▯ (`hiddenChars`);
+ * an attached file's name too long for `name` (capped with "…") is in it
+ * whole. Empty when `unchecked` (the check errored or ran out of time, so
+ * there is nothing to point at) or past the first few items.
+ * `messageId` names the user message that carried it (user-side texts
+ * only). Mirrors Rust `FlaggedItem`. */
+export interface FlaggedItem {
+  source: InjectionSource;
+  name: string | null;
+  messageId: string | null;
+  excerpt: string;
+  excerptTruncated: boolean;
+  hiddenChars: boolean;
+  unchecked: boolean;
+}
+
+/** One persisted notice line on an assistant message — see
+ * `ChatMessage.injectionNotices`. Mirrors Rust `InjectionNotice`. */
+export interface InjectionNotice {
+  source: InjectionSource;
+  name?: string;
+  messageId?: string;
+  outcome: InjectionOutcome;
+  unchecked: boolean;
 }
 
 export interface ChatStats {
@@ -544,7 +605,10 @@ export type DangerFlag =
   | { type: "rawDeviceIo" }
   | { type: "networkFetchPipeShell" }
   | { type: "sudoOrPrivEsc" }
-  | { type: "derivedFromRecentOutput"; data: { step: number } };
+  | { type: "derivedFromRecentOutput"; data: { step: number } }
+  /** Something read earlier in the same turn was flagged by the
+   * prompt-injection detector (Rust `crate::injection`). */
+  | { type: "promptInjectionSuspected" };
 
 /** "Allow once" / "Always allow" / "Deny" — the three outcomes of an
  * agent-mode consent prompt. Mirrors Rust `ConsentDecision`. */
@@ -643,7 +707,29 @@ export type ChatEvent =
   /** The `create_artifact` agent-mode tool created a file this turn. Content
    * isn't streamed — the UI fetches it on demand via `api.getArtifact` when
    * the user opens the artifact's preview panel. */
-  | { type: "artifactCreated"; data: { id: string; filename: string; sizeBytes: number } };
+  | { type: "artifactCreated"; data: { id: string; filename: string; sizeBytes: number } }
+  // Prompt-injection review (any mode — see `crates/core/src/injection/`):
+  /** A check of text the model is about to read is taking noticeably long
+   * (cold classifier, long text); `source`/`name` describe the first item
+   * still pending. Followed by `injectionCheckFinished`. */
+  | { type: "injectionCheckStarted"; data: { source: InjectionSource; name: string | null } }
+  | { type: "injectionCheckFinished"; data: Record<string, never> }
+  /** Flagged text is held back until the user answers — reply via
+   * `api.respondInjectionReview` with this `requestId`. `toolCallId` is set
+   * for a tool result, `null` for user-side text (attachments, skills);
+   * `via` names the helper kind when a subagent's tool returned it. */
+  | {
+      type: "injectionReviewRequested";
+      data: {
+        requestId: string;
+        toolCallId: string | null;
+        via: string | null;
+        items: FlaggedItem[];
+      };
+    }
+  /** One notice line for the streaming reply — see
+   * `ChatMessage.injectionNotices`. */
+  | { type: "injectionNotice"; data: { notice: InjectionNotice } };
 
 /** A conversation's task type — selects which curated sampling defaults
  * apply (see `ModelSpec.taskDefaults` and `GENERAL_TASK_SAMPLING_DEFAULTS`).

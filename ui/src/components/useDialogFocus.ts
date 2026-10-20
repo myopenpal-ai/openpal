@@ -33,11 +33,49 @@ function currentOpener(): HTMLElement | null {
   return document.activeElement as HTMLElement | null;
 }
 
+// Every root this hook manages right now — dialogs, and ChatView's preview
+// panels, whose Escape a window-level listener handles — so a dialog that
+// opens on its own can tell something else is already up.
+const mountedRoots = new Set<HTMLElement>();
+
+const TEXT_INPUT_TYPES = new Set(["text", "search", "url", "email", "tel", "password", "number"]);
+
+/** Whether `el` is a text field the user has started typing in. */
+function holdsDraft(el: HTMLElement): boolean {
+  if (el instanceof HTMLTextAreaElement) return el.value !== "";
+  if (el instanceof HTMLInputElement) return TEXT_INPUT_TYPES.has(el.type) && el.value !== "";
+  return el.isContentEditable;
+}
+
+/** Whether taking focus into `root` now would take it from something the
+ * user is busy with: another dialog or panel (open at all, or holding focus)
+ * — its own Escape would then land on `root` instead — or a draft being
+ * typed, whose next keystrokes would. */
+function busyElsewhere(root: HTMLElement): boolean {
+  for (const other of mountedRoots) if (other !== root) return true;
+  const active = document.activeElement;
+  if (!(active instanceof HTMLElement) || root.contains(active)) return false;
+  if (active.closest('[role="dialog"], [role="alertdialog"], [aria-modal="true"]')) return true;
+  return holdsDraft(active);
+}
+
+export interface DialogFocusOptions {
+  /**
+   * For a dialog that appears on its own rather than because of something
+   * the user just did — a card a streaming reply raises. It doesn't take
+   * focus while the user is busy elsewhere ({@link busyElsewhere}); Tab and
+   * a click still reach it, and its Escape and Tab handling apply once focus
+   * is inside. If focus never went in, closing it leaves focus alone.
+   */
+  unprompted?: boolean;
+}
+
 /**
  * Full modal-dialog contract for a component its parent conditionally
  * mounts/unmounts (every dialog in this app works this way — mounting *is*
  * opening). On mount: moves focus into the dialog root, unless something
- * inside it already grabbed focus itself (e.g. a field's own `autoFocus`).
+ * inside it already grabbed focus itself (e.g. a field's own `autoFocus`),
+ * or — for an `unprompted` dialog — the user is busy elsewhere.
  * While mounted: keeps Tab/Shift+Tab cycling among the dialog's own
  * focusable descendants, and calls `onClose` on Escape if provided (omit
  * `onClose` for a dialog that must be dismissed via its own buttons only —
@@ -62,6 +100,7 @@ function currentOpener(): HTMLElement | null {
  */
 export function useDialogFocus<T extends HTMLElement>(
   onClose?: () => void,
+  { unprompted = false }: DialogFocusOptions = {},
 ): (node: T | null) => void {
   const [node, setNode] = useState<T | null>(null);
   // Read through a ref, not a direct effect dependency — several call sites
@@ -82,9 +121,15 @@ export function useDialogFocus<T extends HTMLElement>(
   useEffect(() => {
     if (!node) return;
     const previous = openerRef.current;
-    if (!node.contains(document.activeElement)) {
+    const yieldFocus = unprompted && busyElsewhere(node);
+    if (!yieldFocus && !node.contains(document.activeElement)) {
       node.focus({ preventScroll: true });
     }
+    mountedRoots.add(node);
+    // Whether focus has been inside, so closing may give it back.
+    let entered = !yieldFocus;
+    const onFocusIn = () => (entered = true);
+    node.addEventListener("focusin", onFocusIn);
 
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
@@ -125,11 +170,14 @@ export function useDialogFocus<T extends HTMLElement>(
     node.addEventListener("keydown", onKeyDown);
     return () => {
       node.removeEventListener("keydown", onKeyDown);
-      previous?.focus?.({ preventScroll: true });
+      node.removeEventListener("focusin", onFocusIn);
+      mountedRoots.delete(node);
+      if (entered) previous?.focus?.({ preventScroll: true });
     };
     // `onClose` intentionally omitted from deps — read via onCloseRef instead
-    // (see comment above); this effect only re-runs when `node` itself changes.
-  }, [node]);
+    // (see comment above); this effect only re-runs when `node` itself changes
+    // (`unprompted` is fixed per call site).
+  }, [node, unprompted]);
 
   return useCallback((n: T | null) => setNode(n), []);
 }
