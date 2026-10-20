@@ -266,6 +266,7 @@ mod tests {
             cancel: Arc::new(AtomicBool::new(false)),
             on_event: Arc::new(|_| {}),
             citations: Arc::new(crate::agent::CitationRegistry::new()),
+            fetch_allowlist: Arc::new(crate::agent::FetchAllowlist::new()),
             consent: Arc::new(crate::agent::ConsentBroker::new(dir.join("grants.json"))),
         }
     }

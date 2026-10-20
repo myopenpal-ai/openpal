@@ -91,15 +91,24 @@ impl Tool for AskUserTool {
             request_id: ctx.call_id.clone(),
             tool_call_id: ctx.call_id.clone(),
             question: question.clone(),
-            options,
+            options: options.clone(),
         });
 
         let answer = tokio::select! {
             biased;
             _ = wait_for_cancel(&ctx.cancel) => "The user stopped this turn.".to_string(),
-            answer = rx => answer.unwrap_or_else(|_| {
-                "The prompt was closed without an answer.".to_string()
-            }),
+            answer = rx => match answer {
+                Ok(answer) => {
+                    // A typed answer is the user's own text, so `fetch_url`
+                    // may open a URL in it. Picking one of the model's own
+                    // options adds nothing the model didn't write itself.
+                    if !options.iter().any(|option| option == answer.trim()) {
+                        ctx.fetch_allowlist.allow_text(&answer);
+                    }
+                    answer
+                }
+                Err(_) => "The prompt was closed without an answer.".to_string(),
+            },
         };
 
         Ok(ToolOutput {
@@ -173,6 +182,7 @@ mod tests {
             cancel: Arc::new(AtomicBool::new(false)),
             on_event: Arc::new(|_| {}),
             citations: Arc::new(crate::agent::CitationRegistry::new()),
+            fetch_allowlist: Arc::new(crate::agent::FetchAllowlist::new()),
             consent: Arc::new(ConsentBroker::new(tmp.join("grants.json"))),
         }
     }
@@ -247,6 +257,47 @@ mod tests {
         let output = call.await.unwrap().unwrap();
         assert!(output.ok);
         assert_eq!(output.content, "Paris");
+    }
+
+    /// Ask `options`, answer with `answer`, and return the call's context
+    /// so its fetch allowlist can be inspected.
+    async fn answered(options: &[&str], answer: &str) -> ToolContext {
+        let tmp = tempfile::tempdir().unwrap();
+        let ctx = Arc::new(ctx(tmp.path()));
+        let consent = ctx.consent.clone();
+        let args = serde_json::json!({"question": "Which page?", "options": options});
+        let call = {
+            let ctx = ctx.clone();
+            tokio::spawn(async move { AskUserTool.execute(&args, &ctx).await })
+        };
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        assert!(
+            consent
+                .resolve_clarification("c1", answer.to_string())
+                .await
+        );
+        call.await.unwrap().unwrap();
+        Arc::into_inner(ctx).unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_typed_answer_makes_its_url_fetchable() {
+        let ctx = answered(
+            &["https://example.com/a", "https://example.com/b"],
+            "use https://example.com/mine",
+        )
+        .await;
+        assert!(ctx.fetch_allowlist.is_allowed("https://example.com/mine"));
+    }
+
+    #[tokio::test]
+    async fn picking_one_of_the_models_options_does_not() {
+        let ctx = answered(
+            &["https://example.com/a", "https://example.com/b"],
+            "https://example.com/a",
+        )
+        .await;
+        assert!(!ctx.fetch_allowlist.is_allowed("https://example.com/a"));
     }
 
     #[tokio::test]

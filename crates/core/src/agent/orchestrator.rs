@@ -46,6 +46,10 @@ pub struct AgentDeps {
     /// Stable per-URL `[N]` numbering for this turn's citations — see
     /// [`ToolContext::citations`].
     pub citations: Arc<super::citations::CitationRegistry>,
+    /// The URLs `fetch_url` may open this turn, and its fetch budget. Fresh
+    /// per top-level turn and seeded by [`run_agent_turn`]; a helper's clone
+    /// shares it — see [`super::fetch_allowlist`].
+    pub fetch_allowlist: Arc<super::fetch_allowlist::FetchAllowlist>,
 }
 
 /// One nested or top-level tool-use loop's outcome: the final plain-text
@@ -74,6 +78,7 @@ pub async fn run_agent_turn(
     let started = Instant::now();
     let mut wire_messages = build_api_messages(messages);
     let tool_defs = deps.registry.openai_tool_defs();
+    deps.fetch_allowlist.allow_history(messages);
 
     let outcome = run_tool_loop(
         deps,
@@ -353,6 +358,7 @@ async fn dispatch_call(
         cancel: cancel.clone(),
         on_event: on_event.clone(),
         citations: deps.citations.clone(),
+        fetch_allowlist: deps.fetch_allowlist.clone(),
         consent: deps.consent.clone(),
     };
 
@@ -697,6 +703,7 @@ mod tests {
             http: reqwest::Client::new(),
             search_service_url: None,
             citations: Arc::new(crate::agent::CitationRegistry::new()),
+            fetch_allowlist: Arc::new(crate::agent::FetchAllowlist::new()),
         }
     }
 
@@ -750,13 +757,14 @@ mod tests {
     /// with the next body in `bodies`, in order — generalizes
     /// `fake_server_tool_then_answer` to the multi-round exchanges a nested
     /// (subagent) loop produces on top of the parent turn's own rounds.
-    async fn fake_server_with_bodies(
-        bodies: Vec<&'static str>,
+    async fn fake_server_with_bodies<B: AsRef<str> + Send + 'static>(
+        bodies: Vec<B>,
     ) -> (String, tokio::task::JoinHandle<()>) {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let handle = tokio::spawn(async move {
             for body in bodies {
+                let body = body.as_ref();
                 let (mut stream, _) = listener.accept().await.unwrap();
                 use tokio::io::{AsyncReadExt, AsyncWriteExt};
                 let mut buf = vec![0u8; 8192];
@@ -771,6 +779,231 @@ mod tests {
             }
         });
         (format!("http://{addr}"), handle)
+    }
+
+    /// One streamed round in which the model calls `name` once per entry of
+    /// `calls`, with those arguments.
+    fn tool_calls_body(name: &str, calls: &[Value]) -> String {
+        let tool_calls: Vec<Value> = calls
+            .iter()
+            .enumerate()
+            .map(|(i, args)| {
+                serde_json::json!({
+                    "index": i,
+                    "id": format!("call_{i}"),
+                    "function": { "name": name, "arguments": args.to_string() }
+                })
+            })
+            .collect();
+        let chunk = serde_json::json!({
+            "choices": [{ "delta": { "tool_calls": tool_calls }, "finish_reason": null }]
+        });
+        format!("data: {chunk}\n\ndata: [DONE]\n\n")
+    }
+
+    fn answer_body(text: &str) -> String {
+        let chunk = serde_json::json!({
+            "choices": [{ "delta": { "content": text }, "finish_reason": null }]
+        });
+        format!("data: {chunk}\n\ndata: [DONE]\n\n")
+    }
+
+    /// What a [`run_fetch_turn`] did: every event it emitted, and the audit
+    /// log's lines.
+    struct FetchTurn {
+        events: Vec<ChatEvent>,
+        audit: Vec<String>,
+    }
+
+    /// Run one turn in which the model fetches each URL of `rounds[0]`, then
+    /// of `rounds[1]`, and so on, then answers — against a `fetch_url` that
+    /// treats the local page server as public.
+    async fn run_fetch_turn(user_text: &str, rounds: &[Vec<String>]) -> FetchTurn {
+        use crate::agent::builtin::FetchUrlTool;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let d = deps(
+            tmp.path(),
+            vec![Arc::new(FetchUrlTool::with_block_check(|_| false))],
+        );
+        let mut bodies: Vec<String> = rounds
+            .iter()
+            .map(|urls| {
+                let calls: Vec<Value> = urls
+                    .iter()
+                    .map(|url| serde_json::json!({ "url": url }))
+                    .collect();
+                tool_calls_body("fetch_url", &calls)
+            })
+            .collect();
+        bodies.push(answer_body("done"));
+        let (base, _server) = fake_server_with_bodies(bodies).await;
+        let events = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let events_sink = events.clone();
+        run_agent_turn(
+            &d,
+            fake_endpoint(base),
+            &[user_msg(user_text)],
+            &SamplingParams::default(),
+            Arc::new(AtomicBool::new(false)),
+            move |e| events_sink.lock().unwrap().push(e),
+        )
+        .await
+        .unwrap();
+
+        let conn = crate::app_db::open(&tmp.path().join("app.sqlite"), None)
+            .unwrap()
+            .0;
+        let audit = conn
+            .prepare("SELECT line FROM agent_audit ORDER BY id")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        let events = events.lock().unwrap().clone();
+        FetchTurn { events, audit }
+    }
+
+    fn fetch_refusals(events: &[ChatEvent]) -> usize {
+        events
+            .iter()
+            .filter(|e| matches!(e, ChatEvent::ToolCallRejected { tool_id, .. } if tool_id == "fetch_url"))
+            .count()
+    }
+
+    const PAGE: &str =
+        "<html><body><article><p>Some page text about the topic.</p></article></body></html>";
+
+    /// The ticket's attack: injected text gets the model to put the user's
+    /// words into a URL of the attacker's choosing. Nothing may leave, and
+    /// the audit log mustn't keep the URL either.
+    #[tokio::test]
+    async fn an_injected_fetch_to_an_unknown_url_sends_nothing() {
+        use crate::agent::builtin::websearch::test_server;
+
+        let (port, requests) = test_server::serve(|_| test_server::ok_page(PAGE));
+        let url = format!("http://127.0.0.1:{port}/?d=my+secret+plans");
+
+        let turn = run_fetch_turn("my secret plans", &[vec![url]]).await;
+
+        assert!(requests.lock().unwrap().is_empty());
+        assert!(turn.events.iter().any(|e| matches!(
+            e,
+            ChatEvent::ToolCallRejected { tool_id, reason, .. }
+                if tool_id == "fetch_url" && reason.contains("web_search")
+        )));
+        assert!(!turn
+            .events
+            .iter()
+            .any(|e| matches!(e, ChatEvent::ToolConsentRequested { .. })));
+        assert!(turn.audit.iter().any(|line| line.contains("\"rejected\"")));
+        assert!(!turn.audit.iter().any(|line| line.contains("secret")));
+    }
+
+    #[tokio::test]
+    async fn a_url_from_the_users_message_is_fetched() {
+        use crate::agent::builtin::websearch::test_server;
+
+        let (port, requests) = test_server::serve(|_| test_server::ok_page(PAGE));
+        let url = format!("http://127.0.0.1:{port}/article?id=7");
+
+        let turn = run_fetch_turn(&format!("Summarize {url}."), &[vec![url]]).await;
+
+        assert_eq!(*requests.lock().unwrap(), vec!["/article?id=7".to_string()]);
+        assert!(turn
+            .events
+            .iter()
+            .any(|e| matches!(e, ChatEvent::ToolCallResult { ok: true, .. })));
+    }
+
+    /// A link the model read on a fetched page is tool output, not the
+    /// user's: opening it is refused even after the page itself was fetched.
+    #[tokio::test]
+    async fn a_link_on_a_fetched_page_is_not_fetchable() {
+        use crate::agent::builtin::websearch::test_server;
+        use std::sync::atomic::AtomicU16;
+
+        // The page links to its own server, whose port is known only once
+        // it's listening.
+        let own_port = Arc::new(AtomicU16::new(0));
+        let page_port = own_port.clone();
+        let (port, requests) = test_server::serve(move |_| {
+            let port = page_port.load(Ordering::SeqCst);
+            test_server::ok_page(&format!(
+                "<html><body><article><p>Read more at http://127.0.0.1:{port}/next \
+                 for the rest of this article.</p></article></body></html>"
+            ))
+        });
+        own_port.store(port, Ordering::SeqCst);
+        let url = format!("http://127.0.0.1:{port}/first");
+        let link = format!("http://127.0.0.1:{port}/next");
+
+        let turn = run_fetch_turn(&format!("Summarize {url}"), &[vec![url], vec![link]]).await;
+
+        assert_eq!(*requests.lock().unwrap(), vec!["/first".to_string()]);
+        assert_eq!(fetch_refusals(&turn.events), 1);
+    }
+
+    #[tokio::test]
+    async fn the_eleventh_fetch_in_a_turn_is_refused() {
+        use crate::agent::builtin::websearch::test_server;
+
+        let (port, requests) = test_server::serve(|_| test_server::ok_page(PAGE));
+        let url = format!("http://127.0.0.1:{port}/page");
+
+        let turn = run_fetch_turn(&format!("Read {url}"), &[vec![url; 11]]).await;
+
+        assert_eq!(requests.lock().unwrap().len(), 10);
+        assert_eq!(fetch_refusals(&turn.events), 1);
+    }
+
+    /// A `spawn_subagent` helper runs `run_tool_loop` with the parent model's
+    /// `task` as its only user message. That text is model-written, so a URL
+    /// in it must not become fetchable the way a real user message's does
+    /// in [`run_agent_turn`].
+    #[tokio::test]
+    async fn a_url_in_a_helpers_task_is_not_fetchable() {
+        use crate::agent::builtin::websearch::test_server;
+        use crate::agent::builtin::FetchUrlTool;
+
+        let (port, requests) = test_server::serve(|_| test_server::ok_page(PAGE));
+        let url = format!("http://127.0.0.1:{port}/?d=my+secret+plans");
+        let tmp = tempfile::tempdir().unwrap();
+        let d = deps(
+            tmp.path(),
+            vec![Arc::new(FetchUrlTool::with_block_check(|_| false))],
+        );
+        let (base, _server) = fake_server_with_bodies(vec![
+            tool_calls_body("fetch_url", &[serde_json::json!({ "url": url })]),
+            answer_body("done"),
+        ])
+        .await;
+        let mut wire_messages = vec![
+            serde_json::json!({ "role": "system", "content": "You are a research helper." }),
+            serde_json::json!({ "role": "user", "content": format!("Read {url}") }),
+        ];
+        let events = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let events_sink = events.clone();
+        let sink: EventSink = Arc::new(move |e| events_sink.lock().unwrap().push(e));
+
+        run_tool_loop(
+            &d,
+            &fake_endpoint(base),
+            &mut wire_messages,
+            &d.registry.openai_tool_defs(),
+            &SamplingParams::default(),
+            &Arc::new(AtomicBool::new(false)),
+            "turn-sub",
+            4,
+            Some("web-research"),
+            &sink,
+        )
+        .await
+        .unwrap();
+
+        assert!(requests.lock().unwrap().is_empty());
+        assert_eq!(fetch_refusals(&events.lock().unwrap()), 1);
     }
 
     fn fake_endpoint(base: String) -> EngineEndpoint {
@@ -1009,6 +1242,7 @@ mod tests {
             http: reqwest::Client::new(),
             search_service_url: None,
             citations: Arc::new(crate::agent::CitationRegistry::new()),
+            fetch_allowlist: Arc::new(crate::agent::FetchAllowlist::new()),
         };
         subagent_tool.bind_deps(d.clone());
 

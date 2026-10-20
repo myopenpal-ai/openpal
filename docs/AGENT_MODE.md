@@ -61,6 +61,9 @@ untouched — the orchestrator parses its own SSE stream so it can see
 - `audit.rs` — `AuditLog`: an append-only, hash-chained NDJSON lifecycle
   trail (see "Audit log" below for exactly what this does and doesn't
   guarantee).
+- `fetch_allowlist.rs` — `FetchAllowlist`: which URLs `fetch_url` may open
+  this turn, and its 10-fetch budget (see "Where the web tools may send
+  requests" below).
 - `heuristics.rs` — non-blocking danger-flag detectors (fork-bomb shape,
   raw device I/O, curl-pipe-shell, sudo, "does this look copied from a
   recent tool's own output") shown as warning badges on the consent card.
@@ -150,6 +153,54 @@ behave like "Allow once" whenever the content actually changes.
 `read_file`/`run_shell`/`run_code` grants outside the configured workspace
 expire after 30 days; workspace-relative grants don't (their key is already
 narrow).
+
+## Where the web tools may send requests
+
+`web_search` and `fetch_url` run with no consent card, in the plain-chat
+web-search turn and inside the `web-research` helper alike. They are the only
+tools that can reach the internet without one, so the rules that bound where
+a request may go live in code, not in a prompt:
+
+- **`web_search` reaches only the local SearXNG.** Its client follows no
+  redirect, so SearXNG's answer to an external bang (`!!g …`, which
+  redirects to the bang's site with the query in the URL) comes back as an
+  error. Every `!`-prefixed word is stripped from the model's query
+  before it is sent anyway.
+- **`fetch_url` opens only a URL from a trusted source.** The URL must
+  exactly match (fragment aside, compared in parsed form) one taken from:
+  - the user's own messages: typed text, invoked skill bodies, document
+    attachments;
+  - the user's system prompt;
+  - a free-typed `ask_user` answer (not one of the model's own options);
+  - a `web_search` result;
+  - an earlier answer's citations.
+
+  Anything the model or a tool wrote never counts: its own replies, a
+  fetched page's links, command output, a helper's `task`. Adding anything
+  to an allowed URL (a query parameter, a path segment, a subdomain, a
+  `user@`) breaks the match. `FetchAllowlist` lives on `AgentDeps`:
+  `run_agent_turn` seeds it from the history, and `WebSearchTool` and
+  `AskUserTool` add to it as the turn goes. A helper's clone of `AgentDeps`
+  shares it with the turn that spawned it.
+- **At most 10 fetches per top-level turn**, helpers included.
+- **Refusals happen in `consent_summary`, before any network or DNS
+  traffic.** `url_is_blocked` resolves the host, and a
+  `<secret>.attacker.example` name would leak through DNS alone. A refusal
+  is an ordinary `ToolCallRejected`: the steps panel shows "Blocked
+  automatically", and the reason tells the model to search first. There is
+  no consent card to fall back on. Only the host is logged, never the full
+  URL.
+
+What this doesn't close:
+
+- **Search queries reach third-party engines.** SearXNG passes the
+  model's query to the public engines it aggregates, and that query can
+  carry conversation text. Turning on web search is the consent to that.
+- **The choice of URL is a low-bandwidth channel.** Injected text can
+  encode data in which search result (or which URL in an attached file)
+  the model opens. The budget of 10 fetches bounds it. Page links stay
+  unfetchable for this reason: making them fetchable would widen the
+  channel.
 
 ## Asking a clarifying question (`agent/builtin/ask_user.rs`)
 

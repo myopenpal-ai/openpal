@@ -97,6 +97,9 @@ pub struct ToolContext {
     /// Stable per-URL `[N]` numbering for this turn — shared across every
     /// tool call in the turn so a URL searched, then fetched, keeps one id.
     pub citations: Arc<super::citations::CitationRegistry>,
+    /// The URLs `fetch_url` may open this turn and its fetch budget — see
+    /// [`super::fetch_allowlist`]. `web_search` and `ask_user` add to it.
+    pub fetch_allowlist: Arc<super::fetch_allowlist::FetchAllowlist>,
     /// The same broker `dispatch_call` uses for the consent gate, handed to
     /// every tool so one that needs its own interactive round-trip with the
     /// user beyond that gate can register one — see `builtin::AskUserTool`,

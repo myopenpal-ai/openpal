@@ -23,6 +23,8 @@
 //! - [`consent`] — `ConsentBroker`: pending per-call approval + the persisted
 //!   "Always allow" grant store.
 //! - [`audit`] — the hash-chained tool-call lifecycle log.
+//! - [`fetch_allowlist`] — which URLs `fetch_url` may open this turn, and how
+//!   many.
 //! - [`heuristics`] — non-blocking danger-flag detectors shown on the consent
 //!   card (never auto-blocking — every call still goes through consent).
 //! - [`llm_tools`] — reassembles a streamed `tool_calls` SSE round into
@@ -34,6 +36,7 @@ pub mod audit;
 pub mod builtin;
 pub mod citations;
 pub mod consent;
+pub mod fetch_allowlist;
 pub mod heuristics;
 pub mod llm_tools;
 pub mod orchestrator;
@@ -44,6 +47,7 @@ pub mod workspace;
 
 pub use citations::CitationRegistry;
 pub use consent::{ConsentBroker, ConsentDecision, ToolGrant};
+pub use fetch_allowlist::FetchAllowlist;
 pub use orchestrator::{run_agent_turn, run_tool_loop, AgentDeps, LoopOutcome, MAX_AGENT_STEPS};
 pub use registry::ToolRegistry;
 pub use tool::{

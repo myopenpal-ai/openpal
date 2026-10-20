@@ -250,6 +250,23 @@ UI's inline `[N]` source markers. Full agent mode reaches the same tools
 indirectly, through `spawn_subagent`'s `"web-research"` kind
 (`crates/core/src/agent/builtin/subagent.rs`).
 
+**Where the web tools may send requests.** Neither tool asks before it runs,
+so the bounds are hard rules in Rust, identical in both surfaces:
+
+- `web_search` talks only to the local SearXNG. Its client follows no
+  redirect, and `!` operators are stripped from the query, so an external
+  bang can't forward the query to another site.
+- `fetch_url` opens only a URL that exactly matches one the user wrote
+  (message, skill body, attachment, system prompt, a typed `ask_user`
+  answer), one a search returned, or an earlier answer's citation.
+  Anything else is refused before any DNS lookup.
+- `fetch_url` is limited to 10 fetches per turn, helpers included.
+
+Two residuals remain. Search queries still reach SearXNG's third-party
+engines. And which result the model opens is a low-bandwidth channel an
+injected page can steer. Details are in
+[docs/AGENT_MODE.md](docs/AGENT_MODE.md#where-the-web-tools-may-send-requests).
+
 `plugins/web-search/` ships `service.py` + `setup_plugin.py` and runs
 through `PluginManager` (`core/plugin.rs`) with the same one-time Python
 setup + managed-sidecar lifecycle every plugin gets: turning it on

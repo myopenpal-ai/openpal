@@ -12,7 +12,8 @@ use openpal_core::agent::builtin::{
 use openpal_core::agent::sandbox::{self, Sandbox};
 use openpal_core::agent::workspace::WorkspaceJail;
 use openpal_core::agent::{
-    audit::AuditLog, run_agent_turn, AgentDeps, CitationRegistry, ConsentBroker, ToolRegistry,
+    audit::AuditLog, run_agent_turn, AgentDeps, CitationRegistry, ConsentBroker, FetchAllowlist,
+    ToolRegistry,
 };
 use openpal_core::engine::EngineEndpoint;
 use openpal_core::plugin::PluginManager;
@@ -104,6 +105,7 @@ pub async fn build_deps(
         // Not used by anything in this registry — see the doc comment above.
         search_service_url: None,
         citations: Arc::new(CitationRegistry::new()),
+        fetch_allowlist: Arc::new(FetchAllowlist::new()),
     };
     subagent_tool.bind_deps(deps.clone());
     Ok(deps)
@@ -191,11 +193,8 @@ pub async fn build_web_search_deps(
         Arc::new(WorkspaceJail::new(workspace_dir, &home, data_dir).map_err(|e| e.to_string())?);
 
     let mut registry = ToolRegistry::new();
-    registry.register(Arc::new(WebSearchTool::new(
-        search_service_url.clone(),
-        http.clone(),
-    )));
-    registry.register(Arc::new(FetchUrlTool));
+    registry.register(Arc::new(WebSearchTool::new(search_service_url.clone())));
+    registry.register(Arc::new(FetchUrlTool::new()));
     registry.register(Arc::new(AskUserTool));
 
     Ok(Some(AgentDeps {
@@ -207,6 +206,7 @@ pub async fn build_web_search_deps(
         http,
         search_service_url: Some(search_service_url),
         citations: Arc::new(CitationRegistry::new()),
+        fetch_allowlist: Arc::new(FetchAllowlist::new()),
     }))
 }
 
