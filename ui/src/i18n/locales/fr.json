@@ -1284,6 +1284,21 @@
     "copy": "Copier",
     "copied": "Copié",
     "codeScrollable": "Code, défilable",
-    "tableScrollable": "Tableau, défilable"
+    "tableScrollable": "Tableau, défilable",
+    "link": {
+      "title": "Ouvrir ce lien ?",
+      "intro": "Ce lien s'ouvre dans votre navigateur et mène à :",
+      "fullAddress": "Adresse complète :",
+      "mismatch": "Le lien affiche {{shown}}, mais il mène en réalité à {{host}}.",
+      "local": "Cette adresse pointe vers cet ordinateur ou votre réseau local.",
+      "advice": "Un lien peut transmettre tout ce qui est écrit dans son adresse. Ne l'ouvrez que si vous connaissez ce site.",
+      "open": "Ouvrir le lien",
+      "copyAddress": "Copier l'adresse"
+    },
+    "image": {
+      "notShown": "Image non affichée",
+      "notShownNamed": "Image non affichée : {{alt}}",
+      "why": "Les images ne sont pas chargées ici : rien n'est envoyé à un autre site."
+    }
   }
 }

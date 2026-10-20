@@ -2432,10 +2432,93 @@
   color: var(--accent);
 }
 
-.md img {
+/* Web links carry no `href` (components/Markdown.tsx), so they need the
+   pointer and underline a real link gets for free. */
+.md a.md-link {
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+/* A link whose target isn't http(s): plain text, nothing to click. */
+.md a.md-link-inert {
+  color: inherit;
+}
+
+/* Stands in for every image in rendered Markdown, which never loads. */
+.md-img-blocked {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   max-width: 100%;
-  height: auto;
+  padding: 3px 9px;
+  border: 1px dashed var(--line);
   border-radius: var(--radius-s);
+  background: var(--paper-sunken);
+  color: var(--ink-soft);
+  font-size: 12.5px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  vertical-align: middle;
+}
+
+.md-img-blocked svg {
+  flex: none;
+  width: 14px;
+  height: 14px;
+}
+
+/* components/LinkConfirmDialog.tsx */
+.link-confirm {
+  width: min(480px, calc(100vw - 80px));
+}
+
+.link-confirm-text {
+  margin: 12px 0 0;
+  font-size: 13.5px;
+  color: var(--ink-soft);
+  line-height: 1.5;
+}
+
+.link-confirm-host {
+  margin: 4px 0 0;
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.link-confirm-warning {
+  margin: 12px 0 0;
+  padding: 8px 12px;
+  border-radius: var(--radius-s);
+  background: var(--warn-soft);
+  color: var(--badge-warn-ink);
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+/* The whole address, however long a reply made it — it scrolls inside the
+   dialog so the buttons below stay in view. */
+.link-confirm-address {
+  margin: 4px 0 0;
+  max-height: 7.5em;
+  overflow-y: auto;
+  padding: 8px 10px;
+  border-radius: var(--radius-s);
+  background: var(--paper-sunken);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.link-confirm-actions {
+  margin-top: 20px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
 }
 
 /* Math (KaTeX). Glyphs inherit the surrounding text color (KaTeX's own CSS

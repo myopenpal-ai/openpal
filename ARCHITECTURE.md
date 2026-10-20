@@ -108,7 +108,22 @@ pick", and the recommendation flow stays catalog-only.
 **Streaming via Tauri Channels.** Downloads and chat tokens stream through
 `tauri::ipc::Channel<T>` (adjacently-tagged serde enums mirrored 1:1 in
 `ui/src/lib/types.ts`). The frontend never talks to llama-server directly —
-CSP only allows the IPC origin, so the webview has no network access at all.
+CSP only allows the IPC origin for `connect-src`.
+
+**The webview sends nothing to other sites, and not on the CSP's word
+alone.** Model-written text — replies, artifact previews, Hugging Face model
+cards — is the one place outside content enters the page, so
+`ui/src/components/Markdown.tsx` holds its own line regardless of what the
+CSP allows (and under Vite and the e2e suite there is no CSP at all): an
+image never renders as an `<img>`, only as a placeholder with its alt text,
+and a link never holds the model's address in a live `href`, so no engine
+can prefetch, preconnect or navigate to it. An http(s) link opens in the
+system browser through `open_link` only after the user confirms a dialog
+showing its real host and full address (`LinkConfirmDialog.tsx`); every other
+target is inert. Navigation itself is fenced by the `on_navigation` guard in
+`crates/app/src/lib.rs`, which keeps the window on the app's own origin.
+The CSP (`img-src 'self' data:`, `connect-src ipc:`) is the backstop behind
+both.
 
 **Hand-written CSS first; Tailwind and shadcn/ui only for vendored
 components.** The UI's look is the tokenised stylesheets in `ui/src/styles/`;

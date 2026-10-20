@@ -1284,6 +1284,21 @@
     "copy": "Copy",
     "copied": "Copied",
     "codeScrollable": "Code, scrollable",
-    "tableScrollable": "Table, scrollable"
+    "tableScrollable": "Table, scrollable",
+    "link": {
+      "title": "Open this link?",
+      "intro": "This link opens in your browser and goes to:",
+      "fullAddress": "Full address:",
+      "mismatch": "The link shows {{shown}}, but it really goes to {{host}}.",
+      "local": "This address points to this computer or your local network.",
+      "advice": "A link can pass along whatever is written in its address. Only open it if you know this site.",
+      "open": "Open link",
+      "copyAddress": "Copy address"
+    },
+    "image": {
+      "notShown": "Image not shown",
+      "notShownNamed": "Image not shown: {{alt}}",
+      "why": "Images here aren't loaded, so nothing is sent to another site."
+    }
   }
 }

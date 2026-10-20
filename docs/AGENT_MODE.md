@@ -275,6 +275,31 @@ belonging to a since-changed project) can't read across a project boundary.
 This is `run_shell`/`read_file`'s "reject before any prompt is shown"
 posture, just checking project membership instead of a path.
 
+## What a reply can still do without tools
+
+With agent mode off — or on, between tool calls — the model's only output is
+text, rendered by `ui/src/components/Markdown.tsx`. Text steered by hidden
+instructions (a web page, a file, a model card) cannot reach the network on
+its own from there:
+
+- **Images never load.** A placeholder with the alt text stands in, so an
+  image address packed with conversation text is never fetched.
+- **Links ask first.** No link holds a live `href`, so hovering, pressing or
+  rendering one causes no DNS lookup or connection. Clicking an http(s) link
+  opens a dialog showing the real host (an IDN in its `xn--` form, the host
+  behind any `user@`), the full address, a warning when the link text names a
+  different host or the destination is local, and Open link / Cancel / Copy
+  address. Focus starts on the dialog and Escape cancels. Nothing is
+  remembered per site.
+- **Every other link is inert** — `mailto:`, relative, `//host`, and the
+  emptied `javascript:`. Only in-page `#` links keep working.
+
+What remains is persuasion: a reply can still ask the user to open a link
+whose address carries what it was told to leak, or to copy text (including a
+code block) somewhere. The dialog's full address and advice line are the
+defence there; nothing can stop a user who reads them and chooses Open.
+OpenPal's own update notes are the one place links open without asking.
+
 ## Out of scope, and why this doesn't block them later
 
 - **GUI computer-control, MCP client / third-party integrations.**

@@ -1,4 +1,4 @@
-import { isValidElement, useState, type ReactNode } from "react";
+import { createContext, isValidElement, useCallback, useContext, useState, type ReactNode } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
@@ -7,6 +7,8 @@ import rehypeKatex from "rehype-katex";
 import { useTranslation } from "react-i18next";
 import { api } from "../lib/api";
 import { copyText } from "../lib/clipboard";
+import { checkLink, parseWebLink, type LinkCheck } from "../lib/linkSafety";
+import LinkConfirmDialog from "./LinkConfirmDialog";
 
 /** Flattens a (possibly highlighted, span-wrapped) React tree back to plain text. */
 function textContent(node: ReactNode): string {
@@ -114,30 +116,88 @@ const CodeBlock: Components["pre"] = ({ children, node: _node, ...rest }) => {
   );
 };
 
-const HTTP_LINK = /^https?:\/\//i;
+/** How a web link asks to be opened — through the confirmation dialog, or
+ * straight away where the text is OpenPal's own (update notes). */
+const OpenWebLink = createContext<(url: URL, text: string) => void>(() => {});
 
 /**
- * Markdown http(s) links open in the system browser, never inside the app's
- * own webview. Anything else (in-page fragments, relative links, `mailto:`
- * — react-markdown's defaultUrlTransform already strips other dangerous
- * schemes to "") is left to the browser's normal anchor handling instead of
- * being force-routed through the http(s)-only open_link command, where it
- * would silently no-op.
+ * Rendered Markdown never holds the model's address in a live `href`: no
+ * engine can then prefetch its DNS or preconnect on hover, no native "Open
+ * Link"/"Copy Link" menu reaches it, and a click can't navigate the webview.
+ * An http(s) link is a focusable `role="link"` showing the real address as
+ * its tooltip, opened only through `OpenWebLink`. Every other target —
+ * `mailto:`, relative, protocol-relative `//host`, or the empty one
+ * react-markdown's defaultUrlTransform leaves for `javascript:` — is inert
+ * text; an empty `href` would otherwise navigate the app to itself and reload
+ * it. Only in-page `#` fragments keep a real `href`.
  */
-const Anchor: Components["a"] = ({ href, children, node: _node, ...rest }) => (
-  <a
-    {...rest}
-    href={href}
-    onClick={(e) => {
-      if (href && HTTP_LINK.test(href)) {
+const Anchor: Components["a"] = ({ href, children, node: _node, ...rest }) => {
+  const open = useContext(OpenWebLink);
+  if (href?.startsWith("#")) {
+    return (
+      <a {...rest} href={href}>
+        {children}
+      </a>
+    );
+  }
+  const url = parseWebLink(href);
+  if (!url) {
+    return (
+      <a {...rest} className="md-link-inert">
+        {children}
+      </a>
+    );
+  }
+  const activate = () => open(url, textContent(children));
+  return (
+    <a
+      {...rest}
+      role="link"
+      tabIndex={0}
+      className="md-link"
+      title={url.href}
+      onClick={(e) => {
         e.preventDefault();
-        void api.openLink(href);
-      }
-    }}
-  >
-    {children}
-  </a>
+        activate();
+      }}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          activate();
+        }
+      }}
+    >
+      {children}
+    </a>
+  );
+};
+
+const ImageIcon = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
+    strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <rect x="3" y="3" width="18" height="18" rx="2.5" />
+    <circle cx="9" cy="9" r="2" />
+    <path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21" />
+  </svg>
 );
+
+/**
+ * Images never load: fetching one would send its address — which a reply
+ * can fill with conversation text — to another site, whatever the CSP
+ * allows. A placeholder with the alt text stands in, and `src` never
+ * reaches the DOM.
+ */
+const Image: Components["img"] = ({ alt }) => {
+  const { t } = useTranslation();
+  const name = alt?.trim();
+  const label = name ? t("markdown.image.notShownNamed", { alt: name }) : t("markdown.image.notShown");
+  return (
+    <span className="md-img-blocked" role="img" aria-label={label} title={t("markdown.image.why")}>
+      <ImageIcon />
+      {label}
+    </span>
+  );
+};
 
 /** Wide tables (common in model cards) scroll within the bubble instead of overflowing it. */
 const TableWrap: Components["table"] = ({ children, node: _node, ...rest }) => {
@@ -149,19 +209,51 @@ const TableWrap: Components["table"] = ({ children, node: _node, ...rest }) => {
   );
 };
 
-const components: Components = { pre: CodeBlock, a: Anchor, table: TableWrap };
+const components: Components = { pre: CodeBlock, a: Anchor, img: Image, table: TableWrap };
 
-/** Assistant replies, rendered like a well-set page rather than raw text. */
-export default function Markdown({ children }: { children: string }) {
+/**
+ * Assistant replies, rendered like a well-set page rather than raw text.
+ * `confirmLinks` (on by default) asks before a web link opens; turn it off
+ * only for text OpenPal itself wrote, such as update notes.
+ */
+export default function Markdown({
+  children,
+  confirmLinks = true,
+}: {
+  children: string;
+  confirmLinks?: boolean;
+}) {
+  // Held here rather than in each link, so a reply still streaming in can
+  // re-render its links without closing the dialog.
+  const [pending, setPending] = useState<LinkCheck | null>(null);
+  const openWebLink = useCallback(
+    (url: URL, text: string) => {
+      if (confirmLinks) setPending(checkLink(url, text));
+      else void api.openLink(url.href);
+    },
+    [confirmLinks],
+  );
   return (
     <div className="md">
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm, remarkMath]}
-        rehypePlugins={[[rehypeHighlight, { detect: false }], rehypeKatex]}
-        components={components}
-      >
-        {promoteStandaloneDisplayMath(children)}
-      </ReactMarkdown>
+      <OpenWebLink.Provider value={openWebLink}>
+        <ReactMarkdown
+          remarkPlugins={[remarkGfm, remarkMath]}
+          rehypePlugins={[[rehypeHighlight, { detect: false }], rehypeKatex]}
+          components={components}
+        >
+          {promoteStandaloneDisplayMath(children)}
+        </ReactMarkdown>
+      </OpenWebLink.Provider>
+      {pending && (
+        <LinkConfirmDialog
+          link={pending}
+          onCancel={() => setPending(null)}
+          onOpen={() => {
+            setPending(null);
+            void api.openLink(pending.href);
+          }}
+        />
+      )}
     </div>
   );
 }

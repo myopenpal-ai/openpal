@@ -1406,10 +1406,20 @@ pub fn get_app_info(
     }
 }
 
+/// Whether `url` is a web link, the only kind `open_link` hands to the system
+/// opener. Schemes are case-insensitive, so `HTTPS://` counts too.
+fn is_web_link(url: &str) -> bool {
+    let starts_with = |prefix: &str| {
+        url.get(..prefix.len())
+            .is_some_and(|head| head.eq_ignore_ascii_case(prefix))
+    };
+    starts_with("http://") || starts_with("https://")
+}
+
 #[tauri::command]
 pub fn open_link(url: String) -> Result<(), String> {
     // Only web links — never hand arbitrary strings to the system opener.
-    if !url.starts_with("http://") && !url.starts_with("https://") {
+    if !is_web_link(&url) {
         return Err("That link can't be opened.".to_string());
     }
     crate::opener::open(&url).map_err(|e| {
@@ -5120,6 +5130,20 @@ mod tests {
         assert!(!should_notify_native(true, true));
         assert!(!should_notify_native(false, false));
         assert!(!should_notify_native(false, true));
+    }
+
+    #[test]
+    fn only_web_links_open_whatever_the_scheme_case() {
+        assert!(is_web_link("https://example.com"));
+        assert!(is_web_link("http://example.com"));
+        assert!(is_web_link("HTTPS://example.com"));
+        assert!(is_web_link("Http://example.com"));
+        assert!(!is_web_link("mailto:a@example.com"));
+        assert!(!is_web_link("file:///etc/passwd"));
+        assert!(!is_web_link("//example.com"));
+        assert!(!is_web_link("https:"));
+        assert!(!is_web_link("é"));
+        assert!(!is_web_link(""));
     }
 
     #[test]

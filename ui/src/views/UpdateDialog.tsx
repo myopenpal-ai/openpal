@@ -52,7 +52,7 @@ export default function UpdateDialog() {
 
         {update?.notes && (
           <div className="update-notes">
-            <Markdown>{update.notes}</Markdown>
+            <Markdown confirmLinks={false}>{update.notes}</Markdown>
           </div>
         )}
 

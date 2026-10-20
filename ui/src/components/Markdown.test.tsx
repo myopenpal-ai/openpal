@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import "../i18n";
 import Markdown from "./Markdown";
@@ -12,12 +12,12 @@ const { openLink, copyText } = vi.hoisted(() => ({
 vi.mock("../lib/api", () => ({ api: { openLink } }));
 vi.mock("../lib/clipboard", () => ({ copyText }));
 
-describe("Markdown", () => {
-  beforeEach(() => {
-    openLink.mockClear();
-    copyText.mockClear();
-  });
+beforeEach(() => {
+  openLink.mockClear();
+  copyText.mockClear();
+});
 
+describe("Markdown", () => {
   it("renders GFM: bold, lists and tables", () => {
     render(
       <Markdown>{"**bold**\n\n- one\n- two\n\n| a | b |\n|---|---|\n| 1 | 2 |"}</Markdown>,
@@ -173,22 +173,10 @@ describe("Markdown", () => {
     }
   });
 
-  it("opens http(s) links through api.openLink instead of navigating in-app", async () => {
-    const user = userEvent.setup();
-    render(<Markdown>{"[go](https://example.com)"}</Markdown>);
-
-    const link = screen.getByRole("link", { name: "go" });
-    const clickEvent = new MouseEvent("click", { bubbles: true, cancelable: true });
-    link.dispatchEvent(clickEvent);
-    expect(clickEvent.defaultPrevented).toBe(true);
-
-    await user.click(link);
-    expect(openLink).toHaveBeenCalledWith("https://example.com");
-  });
-
   it("leaves in-page fragment links to default browser handling", () => {
     render(<Markdown>{"[jump](#usage)"}</Markdown>);
     const link = screen.getByRole("link", { name: "jump" });
+    expect(link).toHaveAttribute("href", "#usage");
 
     const clickEvent = new MouseEvent("click", { bubbles: true, cancelable: true });
     link.dispatchEvent(clickEvent);
@@ -196,13 +184,224 @@ describe("Markdown", () => {
     expect(clickEvent.defaultPrevented).toBe(false);
     expect(openLink).not.toHaveBeenCalled();
   });
+});
 
-  it("no-ops on an empty link destination", async () => {
+describe("Markdown images", () => {
+  it("never renders an <img>: a placeholder with the alt text stands in", () => {
+    const { container } = render(
+      <Markdown>{"![sales chart](https://evil.example/x.png?d=secret)"}</Markdown>,
+    );
+    expect(container.querySelector("img")).toBeNull();
+    expect(container.innerHTML).not.toContain("evil.example");
+    const placeholder = screen.getByRole("img", { name: "Image not shown: sales chart" });
+    expect(placeholder).toHaveTextContent("Image not shown: sales chart");
+    expect(placeholder).toHaveAttribute("title", "Images here aren't loaded, so nothing is sent to another site.");
+  });
+
+  it("says just 'Image not shown' without alt text", () => {
+    render(<Markdown>{"![](https://evil.example/x.png)"}</Markdown>);
+    expect(screen.getByRole("img", { name: "Image not shown" })).toBeInTheDocument();
+  });
+
+  it("blocks reference-style images and images inside links", () => {
+    const { container } = render(
+      <Markdown>{"![a][pic]\n\n[![b](https://evil.example/b.png)](https://evil.example/)\n\n[pic]: https://evil.example/a.png"}</Markdown>,
+    );
+    expect(container.querySelector("img")).toBeNull();
+    expect(screen.getAllByRole("img")).toHaveLength(2);
+  });
+
+  it("blocks images in update notes too", () => {
+    const { container } = render(
+      <Markdown confirmLinks={false}>{"![x](https://example.com/x.png)"}</Markdown>,
+    );
+    expect(container.querySelector("img")).toBeNull();
+  });
+
+  it("does not render raw HTML images either", () => {
+    const { container } = render(<Markdown>{'<img src="https://evil.example/x.png">'}</Markdown>);
+    expect(container.querySelector("img")).toBeNull();
+  });
+});
+
+describe("Markdown links", () => {
+  const dialog = () => screen.getByRole("alertdialog");
+
+  it("asks before opening an http(s) link, and opens only on confirm", async () => {
     const user = userEvent.setup();
-    const { container } = render(<Markdown>{"[x]()"}</Markdown>);
+    render(<Markdown>{"[go](https://example.com/path?q=1)"}</Markdown>);
+
+    const link = screen.getByRole("link", { name: "go" });
+    const clickEvent = new MouseEvent("click", { bubbles: true, cancelable: true });
+    act(() => void link.dispatchEvent(clickEvent));
+    expect(clickEvent.defaultPrevented).toBe(true);
+    expect(openLink).not.toHaveBeenCalled();
+    expect(dialog()).toHaveAccessibleName("Open this link?");
+
+    await user.click(screen.getByRole("button", { name: "Open link" }));
+    expect(openLink).toHaveBeenCalledTimes(1);
+    expect(openLink).toHaveBeenCalledWith("https://example.com/path?q=1");
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+  });
+
+  it("never puts the address in a live href, and shows it as the tooltip", () => {
+    const { container } = render(<Markdown>{"[go](https://example.com/a)"}</Markdown>);
+    const link = screen.getByRole("link", { name: "go" });
+    expect(link).not.toHaveAttribute("href");
+    expect(link).toHaveAttribute("title", "https://example.com/a");
+    expect(link).toHaveAttribute("tabIndex", "0");
+    expect(container.querySelector("[href]")).toBeNull();
+  });
+
+  it("asks for every shape of http(s) link, autolinks included", async () => {
+    const user = userEvent.setup();
+    const links = [
+      "https://example.com/?q=secret",
+      "https://example.com/secret/path",
+      "https://secret.example.com/",
+    ];
+    for (const href of links) {
+      const { unmount } = render(<Markdown>{`[x](${href})`}</Markdown>);
+      await user.click(screen.getByRole("link", { name: "x" }));
+      expect(dialog()).toBeInTheDocument();
+      unmount();
+    }
+    render(<Markdown>{"see www.example.com"}</Markdown>);
+    await user.click(screen.getByRole("link", { name: "www.example.com" }));
+    expect(dialog()).toBeInTheDocument();
+    expect(openLink).not.toHaveBeenCalled();
+  });
+
+  it("shows the host, the full address and the three choices", async () => {
+    const user = userEvent.setup();
+    render(<Markdown>{"[go](https://trusted.com@xn--exmple-cua.com/c?d=my%20chat)"}</Markdown>);
+    await user.click(screen.getByRole("link", { name: "go" }));
+
+    expect(dialog()).toHaveAccessibleDescription(/goes to: xn--exmple-cua\.com$/);
+    expect(dialog()).toHaveTextContent("https://trusted.com@xn--exmple-cua.com/c?d=my%20chat");
+    expect(screen.getAllByRole("button").map((b) => b.textContent)).toEqual(["Cancel", "Copy address", "Open link"]);
+  });
+
+  it("shows an IDN host in its xn-- form", async () => {
+    const user = userEvent.setup();
+    render(<Markdown>{"[go](https://exämple.com/)"}</Markdown>);
+    await user.click(screen.getByRole("link", { name: "go" }));
+    expect(dialog()).toHaveAccessibleDescription(/xn--exmple-cua\.com/);
+  });
+
+  it("starts focus on the dialog, not on Open, and Escape cancels back to the link", async () => {
+    const user = userEvent.setup();
+    render(<Markdown>{"[go](https://example.com)"}</Markdown>);
+    const link = screen.getByRole("link", { name: "go" });
+    link.focus();
+    await user.keyboard("{Enter}");
+
+    expect(dialog()).toHaveFocus();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(openLink).not.toHaveBeenCalled();
+    expect(link).toHaveFocus();
+  });
+
+  it("cancels from the Cancel button and from the scrim", async () => {
+    const user = userEvent.setup();
+    render(<Markdown>{"[go](https://example.com)"}</Markdown>);
+    await user.click(screen.getByRole("link", { name: "go" }));
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("link", { name: "go" }));
+    await user.click(document.querySelector(".modal-backdrop") as Element);
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(openLink).not.toHaveBeenCalled();
+  });
+
+  it("copies the full address", async () => {
+    const user = userEvent.setup();
+    render(<Markdown>{"[go](https://example.com/a?b=c)"}</Markdown>);
+    await user.click(screen.getByRole("link", { name: "go" }));
+    await user.click(screen.getByRole("button", { name: "Copy address" }));
+    expect(copyText).toHaveBeenCalledWith("https://example.com/a?b=c");
+    expect(screen.getByRole("button", { name: "Copied" })).toBeInTheDocument();
+    expect(openLink).not.toHaveBeenCalled();
+  });
+
+  it("says so when the link text names a different host", async () => {
+    const user = userEvent.setup();
+    render(<Markdown>{"[https://bank.com/login](https://evil.example/c)"}</Markdown>);
+    await user.click(screen.getByRole("link", { name: "https://bank.com/login" }));
+    const warning = "The link shows bank.com, but it really goes to evil.example.";
+    expect(dialog()).toHaveTextContent(warning);
+    expect(dialog()).toHaveAccessibleDescription(new RegExp(warning.replace(/\./g, "\\.")));
+  });
+
+  it("does not warn about text that only looks like a file name", async () => {
+    const user = userEvent.setup();
+    render(<Markdown>{"[README.md](https://example.com/README.md)"}</Markdown>);
+    await user.click(screen.getByRole("link", { name: "README.md" }));
+    expect(dialog()).not.toHaveTextContent("really goes to");
+  });
+
+  it("warns about a local address, and still opens it", async () => {
+    const user = userEvent.setup();
+    render(<Markdown>{"[admin](http://192.168.1.1/admin)"}</Markdown>);
+    await user.click(screen.getByRole("link", { name: "admin" }));
+    expect(dialog()).toHaveTextContent("This address points to this computer or your local network.");
+    await user.click(screen.getByRole("button", { name: "Open link" }));
+    expect(openLink).toHaveBeenCalledWith("http://192.168.1.1/admin");
+  });
+
+  it("opens a mixed-case scheme after confirmation, normalized", async () => {
+    const user = userEvent.setup();
+    render(<Markdown>{"[go](HTTPS://Example.com/Path)"}</Markdown>);
+    await user.click(screen.getByRole("link", { name: "go" }));
+    await user.click(screen.getByRole("button", { name: "Open link" }));
+    expect(openLink).toHaveBeenCalledWith("https://example.com/Path");
+  });
+
+  it("opens update-note links directly, without asking", async () => {
+    const user = userEvent.setup();
+    render(<Markdown confirmLinks={false}>{"[notes](https://example.com/notes)"}</Markdown>);
+    await user.click(screen.getByRole("link", { name: "notes" }));
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(openLink).toHaveBeenCalledWith("https://example.com/notes");
+  });
+
+  it.each([
+    ["mailto", "[x](mailto:a@example.com)"],
+    ["relative", "[x](docs/guide.md)"],
+    ["protocol-relative", "[x](//evil.example/c)"],
+    ["stripped javascript:", "[x](javascript:alert(1))"],
+    ["empty", "[x]()"],
+  ])("leaves a link inert (%s): no href, no dialog, no open", async (_kind, source) => {
+    const user = userEvent.setup();
+    const { container } = render(<Markdown>{source}</Markdown>);
     const link = container.querySelector("a");
     expect(link).not.toBeNull();
+    expect(link).not.toHaveAttribute("href");
     await user.click(link as Element);
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(openLink).not.toHaveBeenCalled();
+  });
+
+  it("opens nothing on middle-click", async () => {
+    const user = userEvent.setup();
+    render(<Markdown>{"[go](https://example.com)"}</Markdown>);
+    await user.pointer({ keys: "[MouseMiddle]", target: screen.getByRole("link", { name: "go" }) });
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(openLink).not.toHaveBeenCalled();
+  });
+
+  // The artifact preview wraps model-written content in a 4-backtick fence
+  // (ChatView.tsx); content that closes it early renders as Markdown.
+  it("applies the image and link rules after content closes the artifact fence early", async () => {
+    const user = userEvent.setup();
+    const content = "safe\n````\n![x](https://evil.example/i.png)\n[go](https://evil.example/c)";
+    const { container } = render(<Markdown>{`\`\`\`\`md\n${content}\n\`\`\`\``}</Markdown>);
+    expect(container.querySelector("img")).toBeNull();
+    expect(screen.getByRole("img", { name: "Image not shown: x" })).toBeInTheDocument();
+    await user.click(screen.getByRole("link", { name: "go" }));
+    expect(dialog()).toBeInTheDocument();
     expect(openLink).not.toHaveBeenCalled();
   });
 });

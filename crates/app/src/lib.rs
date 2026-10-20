@@ -336,10 +336,10 @@ pub fn run() {
 /// webview from ever navigating itself to a non-app origin.
 ///
 /// Without this, a real `<a href>` pointing at an external URL — which
-/// rendered markdown (chat replies, Hugging Face model-card READMEs) now
-/// contains, for working hover/right-click/drag semantics — lets the
-/// webview's own native "Open Link" context-menu item (or a drag-and-drop)
-/// navigate the app's single, addressless window to that URL in place,
+/// rendered markdown no longer emits (`ui/src/components/Markdown.tsx` keeps
+/// the address out of `href` until the user confirms), but any other markup
+/// could — lets the webview's own native "Open Link" context-menu item (or a
+/// drag-and-drop) navigate the app's single, addressless window to that URL in place,
 /// bypassing `commands::open_link`'s http(s)-only allowlist entirely (that
 /// allowlist only ever runs when the link is opened through our `onClick`
 /// handler, not through webview-native navigation UI). External links are
