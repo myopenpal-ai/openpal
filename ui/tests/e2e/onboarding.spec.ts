@@ -97,8 +97,8 @@ const WORDS = {
     locale: "en-US",
     start: "Let's set things up",
     heading: "How should OpenPal look?",
-    system: "System",
-    systemHint: "Matches your device",
+    system: "Use system default",
+    systemHint: "Follows your device's light or dark mode",
     light: "Light",
     dark: "Dark",
   },
@@ -107,8 +107,8 @@ const WORDS = {
     locale: "fr-FR",
     start: "Configurons tout ça",
     heading: "Quelle apparence souhaitez-vous pour OpenPal ?",
-    system: "Système",
-    systemHint: "Suit votre appareil",
+    system: "Réglage du système",
+    systemHint: "Suit le mode clair ou sombre de votre appareil",
     light: "Clair",
     dark: "Sombre",
   },
@@ -148,14 +148,14 @@ for (const [install, hasTheme] of [
     );
     const options = group.getByRole("radio");
     await expect(options).toHaveCount(3);
-    for (const [i, name] of ["System", "Light", "Dark"].entries()) {
+    for (const [i, name] of ["Use system default", "Light", "Dark"].entries()) {
       await expect(options.nth(i)).toHaveAccessibleName(name);
     }
     // Nothing has to be chosen: System already is, so Continue is all it takes.
     await expect(options.nth(0)).toBeChecked();
     await expect(options.nth(1)).not.toBeChecked();
     await expect(options.nth(2)).not.toBeChecked();
-    await expect(options.nth(0)).toHaveAccessibleDescription("Matches your device");
+    await expect(options.nth(0)).toHaveAccessibleDescription("Follows your device's light or dark mode");
     await expect(page.getByRole("button", { name: "Continue" })).toBeEnabled();
   });
 }
@@ -168,7 +168,7 @@ test("the appearance step's options work from the keyboard alone", async ({ page
   // go. Only a real browser can tell that nothing hides them from the keyboard.
   const group = page.getByRole("radiogroup", { name: "How should OpenPal look?" });
   const html = page.locator("html");
-  await group.getByRole("radio", { name: "System" }).focus();
+  await group.getByRole("radio", { name: "Use system default" }).focus();
 
   await page.keyboard.press("ArrowRight");
   await expect(group.getByRole("radio", { name: "Light" })).toBeFocused();

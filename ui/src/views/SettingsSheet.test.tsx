@@ -229,20 +229,20 @@ describe("General settings: appearance", () => {
   it("has an Appearance group whose Theme choice is described by its hint", () => {
     renderGeneral({ theme: "system" });
     expect(screen.getByRole("heading", { level: 2, name: "Appearance" })).toBeInTheDocument();
-    expect(themeGroup()).toHaveAccessibleDescription(/follows your device/);
+    expect(themeGroup()).toHaveAccessibleDescription(/follow your device/);
   });
 
   it("offers System, Light and Dark, in that order, each named by those words alone", () => {
     renderGeneral({ theme: "system" });
     const radios = within(themeGroup()).getAllByRole("radio");
     expect(radios).toHaveLength(3);
-    ["System", "Light", "Dark"].forEach((name, i) => expect(radios[i]).toHaveAccessibleName(name));
+    ["Use system default", "Light", "Dark"].forEach((name, i) => expect(radios[i]).toHaveAccessibleName(name));
   });
 
   it.each([
-    { saved: undefined, checked: "System", when: "an older settings file has none" },
-    { saved: "system", checked: "System", when: "System is saved" },
-    { saved: "sepia", checked: "System", when: "an unknown theme is saved" },
+    { saved: undefined, checked: "Use system default", when: "an older settings file has none" },
+    { saved: "system", checked: "Use system default", when: "System is saved" },
+    { saved: "sepia", checked: "Use system default", when: "an unknown theme is saved" },
     { saved: "light", checked: "Light", when: "Light is saved" },
     { saved: "dark", checked: "Dark", when: "Dark is saved" },
   ])("checks $checked, and only that, when $when", ({ saved, checked }) => {
@@ -284,7 +284,7 @@ describe("General settings: appearance", () => {
     renderGeneral({ theme: "dark" });
     expect(pinnedTheme()).toBe("dark");
 
-    await user.click(themeRadio("System"));
+    await user.click(themeRadio("Use system default"));
 
     expect(pinnedTheme()).toBeNull();
     expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({ theme: "system" }));
@@ -360,7 +360,7 @@ describe("General settings: appearance", () => {
 
     // Past the last option it comes round to the first.
     await user.keyboard("{ArrowRight}");
-    expect(themeRadio("System")).toBeChecked();
+    expect(themeRadio("Use system default")).toBeChecked();
     expect(pinnedTheme()).toBeNull();
     expect(updateSettings).toHaveBeenLastCalledWith(expect.objectContaining({ theme: "system" }));
   });
@@ -391,9 +391,9 @@ describe("General settings: appearance", () => {
       expect(screen.getByText(/apparence/i, { selector: ".settings-sub" })).toBeInTheDocument();
       expect(screen.getByRole("heading", { level: 2, name: "Apparence" })).toBeInTheDocument();
       const group = screen.getByRole("radiogroup", { name: "Thème" });
-      expect(group).toHaveAccessibleDescription(/suit le mode clair ou sombre/);
+      expect(group).toHaveAccessibleDescription(/pour suivre le mode clair ou sombre/);
       const radios = within(group).getAllByRole("radio");
-      ["Système", "Clair", "Sombre"].forEach((name, i) =>
+      ["Réglage du système", "Clair", "Sombre"].forEach((name, i) =>
         expect(radios[i]).toHaveAccessibleName(name),
       );
       expect(within(group).getByRole("radio", { checked: true })).toHaveAccessibleName("Sombre");

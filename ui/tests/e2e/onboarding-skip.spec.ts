@@ -43,7 +43,7 @@ const notificationsHeading = (page: Page) =>
 const scanHeading = (page: Page) =>
   page.getByRole("heading", { name: "First, let's see what your Mac can do." });
 /** One of the appearance step's three options. */
-const themeOption = (page: Page, name: "System" | "Light" | "Dark") =>
+const themeOption = (page: Page, name: "Use system default" | "Light" | "Dark") =>
   page.getByRole("radio", { name });
 
 /** What the two palettes paint, as computed colours: `--paper` (the page),
@@ -414,7 +414,7 @@ for (const { way, leave, lands } of WAYS_OUT) {
     await page.emulateMedia({ colorScheme: "dark" });
     await bootFreshInstall(page);
     await toAppearance(page);
-    await expect(themeOption(page, "System")).toBeChecked();
+    await expect(themeOption(page, "Use system default")).toBeChecked();
 
     await leave(page);
     await expect(lands(page)).toBeVisible();
@@ -451,7 +451,7 @@ test("appearance scene: picking Dark re-themes the step at once, and saves the p
   await expect(heading).toBeVisible();
   await expect(heading).toHaveAttribute("data-same-node", "");
   await expect(themeOption(page, "Dark")).toBeChecked();
-  await expect(themeOption(page, "System")).not.toBeChecked();
+  await expect(themeOption(page, "Use system default")).not.toBeChecked();
   // Saved on the pick, not on Continue — and onboarding is still open.
   await expect.poll(async () => savedThemes(await invokes(page)).at(-1)).toBe("dark");
   expect(completionIndex(await invokes(page))).toBe(-1);

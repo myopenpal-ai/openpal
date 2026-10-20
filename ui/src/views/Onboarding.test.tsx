@@ -579,7 +579,7 @@ describe("Onboarding: the appearance step", () => {
     );
     const radios = within(group).getAllByRole("radio");
     expect(radios).toHaveLength(3);
-    expect(radios[0]).toHaveAccessibleName("System");
+    expect(radios[0]).toHaveAccessibleName("Use system default");
     expect(radios[1]).toHaveAccessibleName("Light");
     expect(radios[2]).toHaveAccessibleName("Dark");
   });
@@ -588,7 +588,7 @@ describe("Onboarding: the appearance step", () => {
     render(<Onboarding />);
     await toAppearance();
 
-    expect(radio("System")).toHaveAccessibleDescription("Matches your device");
+    expect(radio("Use system default")).toHaveAccessibleDescription("Follows your device's light or dark mode");
     expect(radio("Light")).not.toHaveAccessibleDescription();
     expect(radio("Dark")).not.toHaveAccessibleDescription();
   });
@@ -624,7 +624,7 @@ describe("Onboarding: the appearance step", () => {
     render(<Onboarding />);
     await toAppearance();
 
-    expect(radio("System")).toBeChecked();
+    expect(radio("Use system default")).toBeChecked();
     expect(radio("Light")).not.toBeChecked();
     expect(radio("Dark")).not.toBeChecked();
   });
@@ -640,7 +640,7 @@ describe("Onboarding: the appearance step", () => {
       await toAppearance();
 
       expect(radio(name)).toBeChecked();
-      expect(radio("System")).not.toBeChecked();
+      expect(radio("Use system default")).not.toBeChecked();
     },
   );
 
@@ -652,7 +652,7 @@ describe("Onboarding: the appearance step", () => {
     await pick("Dark");
 
     expect(radio("Dark")).toBeChecked();
-    expect(radio("System")).not.toBeChecked();
+    expect(radio("Use system default")).not.toBeChecked();
     expect(useStore.getState().settings?.theme).toBe("dark");
     expect(html).toHaveAttribute("data-theme", "dark");
     expect(updateSettings).toHaveBeenLastCalledWith(expect.objectContaining({ theme: "dark" }));
@@ -669,9 +669,9 @@ describe("Onboarding: the appearance step", () => {
     await pick("Light");
     expect(html).toHaveAttribute("data-theme", "light");
 
-    await pick("System");
+    await pick("Use system default");
 
-    expect(radio("System")).toBeChecked();
+    expect(radio("Use system default")).toBeChecked();
     // No attribute at all: the palette then follows the OS by CSS alone, live.
     expect(html).not.toHaveAttribute("data-theme");
     expect(themesWritten()).toEqual(["light", "system"]);
@@ -714,7 +714,7 @@ describe("Onboarding: the appearance step", () => {
     await pick("Dark");
 
     // The options follow the store, which drops a pick that never reached the disk.
-    await waitFor(() => expect(radio("System")).toBeChecked());
+    await waitFor(() => expect(radio("Use system default")).toBeChecked());
     expect(html).not.toHaveAttribute("data-theme");
     expect(useStore.getState().notice).toContain("disk full");
   });
@@ -822,7 +822,7 @@ describe("Onboarding: the appearance step", () => {
     );
 
     await userEvent.tab();
-    expect(radio("System")).toHaveFocus();
+    expect(radio("Use system default")).toHaveFocus();
 
     await userEvent.keyboard("{ArrowRight}");
     expect(radio("Light")).toBeChecked();

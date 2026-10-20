@@ -72,8 +72,8 @@
       "title": "Apparence",
       "theme": {
         "label": "Thème",
-        "hint": "L'option Système suit le mode clair ou sombre de votre appareil.",
-        "system": "Système",
+        "hint": "Choisissez « Réglage du système » pour suivre le mode clair ou sombre de votre appareil.",
+        "system": "Réglage du système",
         "light": "Clair",
         "dark": "Sombre"
       }
@@ -710,8 +710,8 @@
     "appearance": {
       "title": "Quelle apparence souhaitez-vous pour OpenPal ?",
       "sub": "Choisissez un thème. Vous pourrez le modifier à tout moment dans les Réglages.",
-      "system": "Système",
-      "systemHint": "Suit votre appareil",
+      "system": "Réglage du système",
+      "systemHint": "Suit le mode clair ou sombre de votre appareil",
       "light": "Clair",
       "dark": "Sombre",
       "continue": "Continuer"

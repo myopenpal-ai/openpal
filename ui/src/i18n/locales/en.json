@@ -72,8 +72,8 @@
       "title": "Appearance",
       "theme": {
         "label": "Theme",
-        "hint": "System follows your device's light or dark mode.",
-        "system": "System",
+        "hint": "Choose \"Use system default\" to follow your device's light or dark mode.",
+        "system": "Use system default",
         "light": "Light",
         "dark": "Dark"
       }
@@ -710,8 +710,8 @@
     "appearance": {
       "title": "How should OpenPal look?",
       "sub": "Pick a theme. You can change it anytime in Settings.",
-      "system": "System",
-      "systemHint": "Matches your device",
+      "system": "Use system default",
+      "systemHint": "Follows your device's light or dark mode",
       "light": "Light",
       "dark": "Dark",
       "continue": "Continue"

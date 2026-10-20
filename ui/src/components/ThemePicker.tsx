@@ -4,8 +4,8 @@ import type { Theme } from "../lib/types";
 export interface ThemePickerOption {
   value: Theme;
   label: string;
-  /** A second line under the label (onboarding's "Matches your device" under
-   * System). It describes the option rather than naming it. */
+  /** A second line under the label (onboarding's "Follows your device's light or
+   * dark mode" under "Use system default"). It describes the option rather than naming it. */
   hint?: string;
 }
 

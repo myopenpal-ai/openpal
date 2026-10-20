@@ -190,8 +190,8 @@ const themeOption = (page: Page, name: string) =>
   themeGroup(page).getByRole("radio", { name, exact: true });
 
 /** Exactly one option is selected, and it is `picked`. */
-async function expectPicked(page: Page, picked: "System" | "Light" | "Dark") {
-  for (const name of ["System", "Light", "Dark"]) {
+async function expectPicked(page: Page, picked: "Use system default" | "Light" | "Dark") {
+  for (const name of ["Use system default", "Light", "Dark"]) {
     if (name === picked) await expect(themeOption(page, name)).toBeChecked();
     else await expect(themeOption(page, name)).not.toBeChecked();
   }
@@ -328,7 +328,7 @@ test("a settings row saved before the Theme existed reads as System: it follows 
   await expectDataTheme(page, "system");
   await expectPalette(page, "dark");
   await openSettings(page);
-  await expectPicked(page, "System");
+  await expectPicked(page, "Use system default");
 });
 
 // ---------------------------------------------------------------------------
@@ -389,13 +389,13 @@ test("Settings → General has an Appearance group whose Theme control offers Sy
   await expect(appearance.getByRole("heading", { level: 2, name: "Appearance" })).toBeVisible();
   const theme = appearance.getByRole("radiogroup", { name: "Theme" });
   await expect(theme).toHaveAccessibleDescription(
-    "System follows your device's light or dark mode.",
+    "Choose \"Use system default\" to follow your device's light or dark mode.",
   );
   // What a screen reader announces: the group's name, each option's name, and
   // which one is selected.
   await expect(theme).toMatchAriaSnapshot(`
     - radiogroup "Theme":
-      - radio "System" [checked]
+      - radio "Use system default" [checked]
       - radio "Light"
       - radio "Dark"
   `);
@@ -408,18 +408,18 @@ test("the picker's own styling is in force: the radios are invisible overlays an
   await openShell(page);
   await openSettings(page);
 
-  const input = themeOption(page, "System");
+  const input = themeOption(page, "Use system default");
   await expect(input).toHaveCSS("opacity", "0");
   await expect(input).toHaveCSS("position", "absolute");
   const dot = (name: string) =>
     themeGroup(page).locator("label", { hasText: name }).locator(".theme-option-mark");
-  await expect(dot("System")).toHaveCSS("background-image", /radial-gradient/);
+  await expect(dot("Use system default")).toHaveCSS("background-image", /radial-gradient/);
   await expect(dot("Light")).toHaveCSS("background-image", "none");
   // Keyboard focus draws a ring on the visible face, not on the invisible input.
   // WebKit doesn't match :focus-visible on a radio reached this way (it skips
   // radios in the Tab order too), so the ring is a Chromium-only assertion.
   if (browserName !== "chromium") return;
-  await themeOption(page, "System").focus();
+  await themeOption(page, "Use system default").focus();
   await page.keyboard.press("ArrowRight");
   const face = themeGroup(page).locator("label", { hasText: "Light" }).locator(".theme-option-face");
   await expect(face).not.toHaveCSS("box-shadow", "none");
@@ -452,10 +452,10 @@ test("choosing a theme in Settings re-themes the open app at once with no Save, 
   await expect.poll(() => savedTheme(page)).toBe("dark");
 
   // System removes the attribute again, and the OS (light here) decides.
-  await themeOption(page, "System").click();
+  await themeOption(page, "Use system default").click();
   await expectDataTheme(page, "system");
   await expectPalette(page, "light");
-  await expectPicked(page, "System");
+  await expectPicked(page, "Use system default");
   await expect.poll(() => savedTheme(page)).toBe("system");
 
   await themeOption(page, "Light").click();
@@ -500,7 +500,7 @@ test("the Theme control works from the keyboard: one Tab stop, and the arrow key
   // A dark OS, so every step below changes the palette: dark, light, dark, light, dark.
   await openShell(page, { os: "dark" });
   await openSettings(page);
-  const system = themeOption(page, "System");
+  const system = themeOption(page, "Use system default");
   const light = themeOption(page, "Light");
   const dark = themeOption(page, "Dark");
 
@@ -517,7 +517,7 @@ test("the Theme control works from the keyboard: one Tab stop, and the arrow key
     }
   }
   await expect(system).toBeFocused();
-  await expectPicked(page, "System");
+  await expectPicked(page, "Use system default");
 
   await page.keyboard.press("ArrowRight");
   await expect(light).toBeFocused();
@@ -536,7 +536,7 @@ test("the Theme control works from the keyboard: one Tab stop, and the arrow key
   await expectPalette(page, "light");
 
   await page.keyboard.press("ArrowLeft");
-  await expectPicked(page, "System");
+  await expectPicked(page, "Use system default");
   await expectDataTheme(page, "system");
   await expectPalette(page, "dark");
 
@@ -824,13 +824,13 @@ for (const { language, locale, label } of PHONES) {
         language === "fr"
           ? `
             - radiogroup "Thème":
-              - radio "Système" [checked]
+              - radio "Réglage du système" [checked]
               - radio "Clair"
               - radio "Sombre"
           `
           : `
             - radiogroup "Theme":
-              - radio "System" [checked]
+              - radio "Use system default" [checked]
               - radio "Light"
               - radio "Dark"
           `,
