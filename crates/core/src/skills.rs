@@ -495,7 +495,10 @@ pub fn replace_from_export(
         .filter(|f| f.path.ends_with(".md") && is_safe_relative_path(&f.path))
         .cloned()
         .collect();
-    let tx = conn.transaction()?;
+    // A savepoint, not a transaction: a backup restore (`crate::backup`)
+    // runs every import inside one outer transaction, and SQLite refuses a
+    // nested `BEGIN`.
+    let tx = conn.savepoint()?;
     tx.execute(
         "INSERT INTO skills (slug, name, description, body) VALUES (?1, ?2, ?3, ?4)
          ON CONFLICT (slug) DO UPDATE SET name = ?2, description = ?3, body = ?4",

@@ -345,6 +345,29 @@
         "done": "Imported {{conversations}} chat(s), {{projects}} project(s), {{artifacts}} file(s), {{skills}} skill(s) and {{customModels}} custom model(s).",
         "doneWithSkipped": "Imported {{conversations}} chat(s), {{projects}} project(s), {{artifacts}} file(s), {{skills}} skill(s) and {{customModels}} custom model(s), but {{skipped}} item(s) couldn't be included."
       },
+      "autoBackup": {
+        "label": "Automatic backup",
+        "hint": "Regularly save an encrypted copy of your chats, projects, files and settings to a folder you choose, such as an external drive or a cloud-synced folder. Models aren't included.",
+        "chooseFolder": "Choose folder…",
+        "frequency": {
+          "label": "How often",
+          "daily": "Every day",
+          "weekly": "Every week"
+        },
+        "lastSuccess": "Last backup: {{when}}",
+        "never": "No backup yet",
+        "failed": "The last backup failed: {{reason}}",
+        "needsRecoveryCode": "Set up your recovery code first. It's what unlocks a backup on a new computer.",
+        "setUpRecoveryCode": "Set up recovery code",
+        "restore": {
+          "button": "Restore from backup…",
+          "prompt": "Enter your recovery code to unlock this backup.",
+          "confirm": "Restore",
+          "restoring": "Restoring…",
+          "wrongCode": "That recovery code doesn't unlock this backup.",
+          "done": "Restored {{conversations}} chat(s), {{projects}} project(s), and {{artifacts}} file(s)."
+        }
+      },
       "logs": {
         "label": "Latest logs",
         "hint": "The most recent lines OpenPal recorded. Anything sensitive is hidden automatically.",

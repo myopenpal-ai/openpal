@@ -58,6 +58,7 @@ pub mod app_db;
 pub mod applock;
 pub mod artifacts;
 pub mod attachments;
+pub mod backup;
 pub mod boot;
 pub mod catalog;
 pub mod cloud;

@@ -345,6 +345,29 @@
         "done": "{{conversations}} discussion(s), {{projects}} projet(s), {{artifacts}} fichier(s), {{skills}} compétence(s) et {{customModels}} modèle(s) personnalisé(s) importés.",
         "doneWithSkipped": "{{conversations}} discussion(s), {{projects}} projet(s), {{artifacts}} fichier(s), {{skills}} compétence(s) et {{customModels}} modèle(s) personnalisé(s) importés, mais {{skipped}} élément(s) n'ont pas pu être inclus."
       },
+      "autoBackup": {
+        "label": "Sauvegarde automatique",
+        "hint": "Enregistre régulièrement une copie chiffrée de vos discussions, projets, fichiers et réglages dans le dossier de votre choix, par exemple un disque externe ou un dossier synchronisé dans le cloud. Les modèles ne sont pas inclus.",
+        "chooseFolder": "Choisir un dossier…",
+        "frequency": {
+          "label": "Fréquence",
+          "daily": "Tous les jours",
+          "weekly": "Toutes les semaines"
+        },
+        "lastSuccess": "Dernière sauvegarde : {{when}}",
+        "never": "Aucune sauvegarde pour l'instant",
+        "failed": "La dernière sauvegarde a échoué : {{reason}}",
+        "needsRecoveryCode": "Configurez d'abord votre code de récupération. C'est lui qui déverrouille une sauvegarde sur un nouvel ordinateur.",
+        "setUpRecoveryCode": "Configurer le code de récupération",
+        "restore": {
+          "button": "Restaurer une sauvegarde…",
+          "prompt": "Saisissez votre code de récupération pour déverrouiller cette sauvegarde.",
+          "confirm": "Restaurer",
+          "restoring": "Restauration…",
+          "wrongCode": "Ce code de récupération ne déverrouille pas cette sauvegarde.",
+          "done": "{{conversations}} discussion(s), {{projects}} projet(s) et {{artifacts}} fichier(s) restaurés."
+        }
+      },
       "logs": {
         "label": "Journaux récents",
         "hint": "Les lignes les plus récentes enregistrées par OpenPal. Tout élément sensible est masqué automatiquement.",

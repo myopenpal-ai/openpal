@@ -113,6 +113,17 @@ impl AuditLog {
         }
     }
 
+    /// Re-read the last row's hash after something other than [`append`]
+    /// wrote to the table — a backup restore (`crate::backup`) — so the
+    /// next event chains onto what is actually there.
+    ///
+    /// [`append`]: Self::append
+    pub fn resync(&self) {
+        // Same lock order as `append`, so one can't slip in between.
+        let mut prev = self.prev_hash.lock().unwrap();
+        *prev = last_line_hash(&self.conn.lock().unwrap()).unwrap_or_else(|| GENESIS.to_string());
+    }
+
     /// Verify the chain from the oldest row. Returns `(valid_row_count,
     /// intact)` — `intact` is `false` as soon as a row's recorded `prevHash`
     /// doesn't match the hash of the row before it.
@@ -134,6 +145,42 @@ impl AuditLog {
             .collect();
         lines
     }
+}
+
+/// Every row's `line`, oldest first — what a backup (`crate::backup`)
+/// carries of this log.
+pub(crate) fn read_lines(conn: &Connection) -> rusqlite::Result<Vec<String>> {
+    let mut stmt = conn.prepare("SELECT line FROM agent_audit ORDER BY id ASC")?;
+    let lines = stmt
+        .query_map([], |r| r.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(lines)
+}
+
+/// Append each of `lines` (oldest first, as [`read_lines`] gave them) that
+/// this table doesn't already hold, keeping their order — so restoring a
+/// backup onto a fresh install rebuilds the chain exactly, and restoring it
+/// twice adds nothing. Onto a device with history of its own, the restored
+/// rows land after it and [`AuditLog::verify`] reports the join, which is
+/// the honest answer. Returns how many rows were added.
+pub(crate) fn restore_lines(conn: &Connection, lines: &[String]) -> rusqlite::Result<usize> {
+    let existing: std::collections::HashSet<String> = read_lines(conn)?.into_iter().collect();
+    let mut added = 0;
+    for line in lines {
+        if existing.contains(line) {
+            continue;
+        }
+        let ts_ms = serde_json::from_str::<serde_json::Value>(line)
+            .ok()
+            .and_then(|v| v.get("tsMs").and_then(|t| t.as_i64()))
+            .unwrap_or(0);
+        conn.execute(
+            "INSERT INTO agent_audit (ts_ms, line) VALUES (?1, ?2)",
+            params![ts_ms, line],
+        )?;
+        added += 1;
+    }
+    Ok(added)
 }
 
 fn hash_line(line: &str) -> String {

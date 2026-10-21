@@ -1350,6 +1350,15 @@
   border: 0;
 }
 
+/* Settings → Your data → Automatic backup: the recovery-code prompt that
+   opens once a backup file is picked. */
+.backup-restore {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 4px 0 0;
+}
+
 .export-include legend {
   padding: 0;
   margin-bottom: 6px;

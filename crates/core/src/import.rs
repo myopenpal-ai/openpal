@@ -86,8 +86,25 @@ pub fn read_import_zip(conn: &mut Connection, src: &Path) -> Result<ImportSummar
     let mut archive = ZipArchive::new(file).map_err(|e| {
         Error::DataImport(format!("that doesn't look like a valid export .zip: {e}"))
     })?;
+    Ok(import_archive(conn, &mut archive).0)
+}
 
+/// The body of [`read_import_zip`], for an archive from anywhere — a file,
+/// or a backup `crate::backup` has just decrypted in memory. Also returns
+/// how many writes the database itself refused (disk full, say), which
+/// [`ImportSummary::skipped`] can't tell apart from an entry that didn't
+/// parse: a restore that must be all-or-nothing rolls back on those.
+pub(crate) fn import_archive<R: std::io::Read + std::io::Seek>(
+    conn: &mut Connection,
+    archive: &mut ZipArchive<R>,
+) -> (ImportSummary, usize) {
     let mut summary = ImportSummary::default();
+    let mut failed_writes = 0;
+    let mut note = |e: &Error| {
+        if matches!(e, Error::Db(_)) {
+            failed_writes += 1;
+        }
+    };
     let mut skills: BTreeMap<String, PendingSkill> = BTreeMap::new();
 
     for i in 0..archive.len() {
@@ -111,6 +128,7 @@ pub fn read_import_zip(conn: &mut Connection, src: &Path) -> Result<ImportSummar
                     Ok(()) => summary.conversations += 1,
                     Err(e) => {
                         tracing::warn!("import: skipping conversation {id}: {e}");
+                        note(&e);
                         summary.skipped += 1;
                     }
                 },
@@ -132,6 +150,7 @@ pub fn read_import_zip(conn: &mut Connection, src: &Path) -> Result<ImportSummar
                     Ok(()) => summary.projects += 1,
                     Err(e) => {
                         tracing::warn!("import: skipping project {id}: {e}");
+                        note(&e);
                         summary.skipped += 1;
                     }
                 },
@@ -162,6 +181,7 @@ pub fn read_import_zip(conn: &mut Connection, src: &Path) -> Result<ImportSummar
                         Ok(_) => summary.artifacts += 1,
                         Err(e) => {
                             tracing::warn!("import: skipping artifact {name}: {e}");
+                            note(&e);
                             summary.skipped += 1;
                         }
                     }
@@ -196,15 +216,20 @@ pub fn read_import_zip(conn: &mut Connection, src: &Path) -> Result<ImportSummar
             continue;
         }
 
+        type ImportOne = fn(&Connection, &str, &mut ImportSummary) -> Option<Error>;
         let single_file = match name.as_str() {
-            "settings.json" => Some(import_settings as fn(&Connection, &str, &mut ImportSummary)),
+            "settings.json" => Some(import_settings as ImportOne),
             "custom-models.json" => Some(import_custom_models as _),
             "plugins.json" => Some(import_plugins as _),
             _ => None,
         };
         if let Some(import) = single_file {
             match read_entry_to_string(&mut entry) {
-                Ok(contents) => import(conn, &contents, &mut summary),
+                Ok(contents) => {
+                    if let Some(e) = import(conn, &contents, &mut summary) {
+                        note(&e);
+                    }
+                }
                 Err(e) => {
                     tracing::warn!("import: couldn't read {name}: {e}");
                     summary.skipped += 1;
@@ -227,29 +252,48 @@ pub fn read_import_zip(conn: &mut Connection, src: &Path) -> Result<ImportSummar
             Ok(_) => summary.skills += 1,
             Err(e) => {
                 tracing::warn!("import: skipping skill {slug}: {e}");
+                note(&e);
                 summary.skipped += 1;
             }
         }
     }
 
-    Ok(summary)
+    (summary, failed_writes)
 }
 
-/// `settings.json`: replaces this device's settings outright.
-fn import_settings(conn: &Connection, contents: &str, summary: &mut ImportSummary) {
-    let result = serde_json::from_str::<Settings>(contents)
+/// `settings.json`: replaces this device's settings outright. Like the two
+/// below, returns the database's own error when saving failed, for
+/// [`import_archive`]'s failed-write count.
+fn import_settings(
+    conn: &Connection,
+    contents: &str,
+    summary: &mut ImportSummary,
+) -> Option<Error> {
+    let settings = serde_json::from_str::<Settings>(contents)
         .map_err(|e| e.to_string())
         .and_then(|settings| {
             if let Some(url) = &settings.sync_relay_url {
                 crate::sync::mailbox_client::validate_relay_url(url)?;
             }
-            crate::settings::save(conn, &settings).map_err(|e| e.to_string())
+            Ok(settings)
         });
-    match result {
-        Ok(()) => summary.settings = true,
+    let result = match settings {
+        Ok(settings) => crate::settings::save(conn, &settings),
         Err(e) => {
             tracing::warn!("import: skipping settings: {e}");
             summary.skipped += 1;
+            return None;
+        }
+    };
+    match result {
+        Ok(()) => {
+            summary.settings = true;
+            None
+        }
+        Err(e) => {
+            tracing::warn!("import: skipping settings: {e}");
+            summary.skipped += 1;
+            Some(e)
         }
     }
 }
@@ -257,13 +301,17 @@ fn import_settings(conn: &Connection, contents: &str, summary: &mut ImportSummar
 /// `custom-models.json`: merged into this device's list by id. Each entry
 /// is parsed on its own, so one that no longer fits `ModelSpec` is skipped
 /// without losing the rest.
-fn import_custom_models(conn: &Connection, contents: &str, summary: &mut ImportSummary) {
+fn import_custom_models(
+    conn: &Connection,
+    contents: &str,
+    summary: &mut ImportSummary,
+) -> Option<Error> {
     let entries: Vec<serde_json::Value> = match serde_json::from_str(contents) {
         Ok(entries) => entries,
         Err(e) => {
             tracing::warn!("import: skipping custom models: {e}");
             summary.skipped += 1;
-            return;
+            return None;
         }
     };
     let mut custom = crate::custom::load(conn);
@@ -281,16 +329,20 @@ fn import_custom_models(conn: &Connection, contents: &str, summary: &mut ImportS
         }
     }
     match crate::custom::save(conn, &custom) {
-        Ok(()) => summary.custom_models += imported,
+        Ok(()) => {
+            summary.custom_models += imported;
+            None
+        }
         Err(e) => {
             tracing::warn!("import: couldn't save custom models: {e}");
             summary.skipped += imported;
+            Some(e)
         }
     }
 }
 
 /// `plugins.json`: each plugin's enabled switch, merged by id.
-fn import_plugins(conn: &Connection, contents: &str, summary: &mut ImportSummary) {
+fn import_plugins(conn: &Connection, contents: &str, summary: &mut ImportSummary) -> Option<Error> {
     match crate::plugin::import_records_json(conn, contents) {
         Ok(count) => summary.plugins = count,
         Err(e) => {
@@ -298,6 +350,7 @@ fn import_plugins(conn: &Connection, contents: &str, summary: &mut ImportSummary
             summary.skipped += 1;
         }
     }
+    None
 }
 
 /// `<id>.json`'s bytes, parsed as a `Conversation` and upserted. The `id` in

@@ -512,6 +512,30 @@ export interface ImportSummary {
   skipped: number;
 }
 
+/** How often automatic backup runs. Mirrors Rust `BackupFrequency`. */
+export type BackupFrequency = "daily" | "weekly";
+
+/** Settings → Your data's automatic backup: the user's choices and how the
+ * last run went. Device-local — never exported or restored. Mirrors Rust
+ * `openpal_core::backup::BackupState`. */
+export interface BackupState {
+  enabled: boolean;
+  /** The folder backups are written to, `null` until one is chosen. */
+  folder: string | null;
+  frequency: BackupFrequency;
+  lastSuccessMs: number | null;
+  lastAttemptMs: number | null;
+  /** Why the most recent attempt failed, safe to show as-is; `null` once
+   * one succeeds. */
+  lastError: string | null;
+}
+
+/** How a backup restore went. A wrong recovery code is an expected answer,
+ * not an error. Mirrors Rust `commands::RestoreOutcome`. */
+export type RestoreOutcome =
+  | { kind: "restored"; summary: ImportSummary }
+  | { kind: "wrongCode" };
+
 export interface ChatMessage {
   /** Stable identity for this message within its conversation's message
    * array. Minted once (the frontend via `crypto.randomUUID()` for a

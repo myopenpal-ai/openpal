@@ -217,6 +217,12 @@ export const SETTINGS_SEARCH_ENTRIES = [
   { section: "data", label: "settingsSheet.autoDelete.label" },
   {
     section: "data",
+    label: "settingsSheet.diagnostics.autoBackup.label",
+    hint: "settingsSheet.diagnostics.autoBackup.hint",
+    when: ({ appInfo }) => !appInfo?.portable && !appInfo?.isAndroid,
+  },
+  {
+    section: "data",
     label: "appLock.settings.dangerZone.summary",
     hint: "appLock.settings.dangerZone.eraseButton",
   },

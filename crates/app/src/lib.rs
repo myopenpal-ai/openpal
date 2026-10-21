@@ -7,6 +7,7 @@ mod audio;
 #[cfg(any(target_os = "android", target_os = "ios"))]
 #[path = "audio_mobile.rs"]
 mod audio;
+mod backup;
 mod bootstrap;
 mod commands;
 mod factory_reset;
@@ -298,6 +299,12 @@ pub fn run() {
             commands::estimate_export_size,
             commands::export_counts,
             commands::import_data,
+            commands::get_backup_state,
+            commands::set_backup_enabled,
+            commands::set_backup_frequency,
+            commands::choose_backup_folder,
+            commands::pick_backup_file,
+            commands::restore_backup,
             commands::sync_group_create,
             commands::sync_group_secret,
             commands::sync_pair_listen,

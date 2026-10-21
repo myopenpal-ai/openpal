@@ -472,6 +472,7 @@ pub fn finish_unlock(
 
     tauri::async_runtime::spawn(crate::idle::run(app.clone()));
     tauri::async_runtime::spawn(crate::parental::run(app.clone()));
+    tauri::async_runtime::spawn(crate::backup::run(app.clone()));
     // After `AppState` exists, like the two above: its first tick runs at
     // once, so "Delete old conversations" applies on every unlock, not only
     // after the app has stayed open for an interval.

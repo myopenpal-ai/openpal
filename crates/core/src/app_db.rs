@@ -44,7 +44,7 @@ use std::path::Path;
 
 /// Bumped whenever a new step is appended to [`migrate`]. There is
 /// deliberately no generic migration framework — see this module's header.
-pub const SCHEMA_VERSION: i64 = 12;
+pub const SCHEMA_VERSION: i64 = 13;
 
 /// Failure while opening or migrating `app_db`.
 #[derive(Debug, thiserror::Error)]
@@ -346,6 +346,17 @@ const SCHEMA_V12: &str = "
     ALTER TABLE conversations ADD COLUMN unread INTEGER NOT NULL DEFAULT 0;
     PRAGMA user_version = 12;";
 
+/// Settings → Your data's automatic backup (`crate::backup`): a fifth
+/// singleton-row store holding the user's choices (on/off, folder, how
+/// often) and how the last run went. Its own table rather than fields on
+/// `settings` because it describes *this* device — a folder path on this
+/// disk — so it must never travel inside an export or come back with a
+/// restore, and because the background job writes its status while the UI
+/// may be saving `Settings` wholesale.
+const SCHEMA_V13: &str = "
+    CREATE TABLE backup_config (key TEXT PRIMARY KEY, json TEXT NOT NULL);
+    PRAGMA user_version = 13;";
+
 /// Bring `conn`'s schema up to [`SCHEMA_VERSION`]. Ladder shape (`if
 /// version == N { ...; version = N+1 }`) — a fresh install has no existing
 /// data to carry forward (the one-time migration of pre-existing plaintext
@@ -400,6 +411,10 @@ pub(crate) fn migrate(conn: &Connection) -> Result<(), OpenError> {
     if version == 11 {
         conn.execute_batch(SCHEMA_V12)?;
         version = 12;
+    }
+    if version == 12 {
+        conn.execute_batch(SCHEMA_V13)?;
+        version = 13;
     }
     if version != SCHEMA_VERSION {
         return Err(OpenError::SchemaVersionMismatch {
@@ -495,6 +510,7 @@ mod tests {
             "sync_message_ops",
             "sync_outbox",
             "sync_artifact_push_state",
+            "backup_config",
         ] {
             conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| {
                 r.get::<_, i64>(0)

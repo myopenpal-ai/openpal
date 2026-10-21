@@ -225,7 +225,19 @@ pub fn read_export_data(conn: &Connection, include: &ExportCategories) -> Export
 
 pub fn write_export_zip(data: &ExportData, dest: &Path) -> Result<ExportSummary> {
     let file = File::create(dest)?;
-    write_archive(data, file).map(|(summary, _)| summary)
+    write_archive(data, &[], file).map(|(summary, _)| summary)
+}
+
+/// The same archive [`write_export_zip`] writes, built in memory with
+/// `extra` `(path, bytes)` entries appended after the usual ones — for
+/// `crate::backup`, which encrypts the whole archive before it touches disk
+/// and adds the agent audit log the plaintext export leaves out.
+pub(crate) fn archive_bytes(
+    data: &ExportData,
+    extra: &[(&str, &[u8])],
+) -> Result<(ExportSummary, Vec<u8>)> {
+    write_archive(data, extra, std::io::Cursor::new(Vec::new()))
+        .map(|(summary, out)| (summary, out.into_inner()))
 }
 
 /// The exact size in bytes of the zip [`write_export_zip`] would write for
@@ -233,12 +245,17 @@ pub fn write_export_zip(data: &ExportData, dest: &Path) -> Result<ExportSummary>
 /// slow as the export's compression itself, so — like it — run it off
 /// `app_db`'s lock and off the async executor.
 pub fn estimate_export_size(data: &ExportData) -> Result<u64> {
-    write_archive(data, ByteCounter::default()).map(|(_, counter)| counter.len)
+    write_archive(data, &[], ByteCounter::default()).map(|(_, counter)| counter.len)
 }
 
-/// The shared body of [`write_export_zip`] and [`estimate_export_size`]:
-/// every entry, in one fixed order, into whatever `out` is.
-fn write_archive<W: Write + Seek>(data: &ExportData, out: W) -> Result<(ExportSummary, W)> {
+/// The shared body of [`write_export_zip`], [`estimate_export_size`] and
+/// [`archive_bytes`]: every entry, in one fixed order, then `extra`, into
+/// whatever `out` is.
+fn write_archive<W: Write + Seek>(
+    data: &ExportData,
+    extra: &[(&str, &[u8])],
+    out: W,
+) -> Result<(ExportSummary, W)> {
     let mut zip = ZipWriter::new(out);
     let options = SimpleFileOptions::default();
     let mut summary = ExportSummary {
@@ -315,6 +332,12 @@ fn write_archive<W: Write + Seek>(data: &ExportData, out: W) -> Result<(ExportSu
         if write_entry(&mut zip, options, "plugins.json", json.as_bytes()) {
             summary.plugins = *count;
         } else {
+            summary.skipped += 1;
+        }
+    }
+
+    for (zip_path, bytes) in extra {
+        if !write_entry(&mut zip, options, zip_path, bytes) {
             summary.skipped += 1;
         }
     }

@@ -86,6 +86,12 @@ pub enum Error {
     #[error("{0}")]
     DataImport(String),
 
+    /// Writing or restoring an automatic backup (`crate::backup`) failed.
+    /// The message must be safe to show to a non-technical user — it is
+    /// what Settings → Your data shows as the last backup's reason.
+    #[error("{0}")]
+    Backup(String),
+
     /// The operation was cancelled by the user. Not an error to surface loudly.
     #[error("cancelled")]
     Cancelled,

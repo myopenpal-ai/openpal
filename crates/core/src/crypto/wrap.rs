@@ -263,7 +263,10 @@ pub fn write_wrap(
 /// nonce || ciphertext || tag, checksum already stripped and confirmed)
 /// shared by `read_wrap` and `read_header` below.
 fn read_checked_blob(path: &Path) -> Result<Vec<u8>, WrapError> {
-    let bytes = fs::read(path)?;
+    checked_blob(&fs::read(path)?).map(<[u8]>::to_vec)
+}
+
+fn checked_blob(bytes: &[u8]) -> Result<&[u8], WrapError> {
     if bytes.len() <= CHECKSUM_LEN {
         return Err(WrapError::Malformed);
     }
@@ -271,7 +274,7 @@ fn read_checked_blob(path: &Path) -> Result<Vec<u8>, WrapError> {
     if checksum(blob) != sum {
         return Err(WrapError::ChecksumMismatch);
     }
-    Ok(blob.to_vec())
+    Ok(blob)
 }
 
 /// Reads and unseals the `DataKey` at `path`. Checksum first — cheap, and
@@ -290,6 +293,19 @@ pub fn read_wrap(path: &Path, kek: &DataKey) -> Result<DataKey, WrapError> {
 pub fn read_header(path: &Path) -> Result<WrapHeader, WrapError> {
     let blob = read_checked_blob(path)?;
     let (header, _rest) = WrapHeader::from_bytes(&blob).ok_or(WrapError::Malformed)?;
+    Ok(header)
+}
+
+/// [`read_wrap`] for a wrap file's bytes already in memory — a copy of
+/// `recovery.wrap` carried inside a backup (`crate::backup`), say.
+pub fn open_wrap_bytes(bytes: &[u8], kek: &DataKey) -> Result<DataKey, WrapError> {
+    open(checked_blob(bytes)?, kek)
+}
+
+/// [`read_header`] for a wrap file's bytes already in memory.
+pub fn header_from_bytes(bytes: &[u8]) -> Result<WrapHeader, WrapError> {
+    let (header, _rest) =
+        WrapHeader::from_bytes(checked_blob(bytes)?).ok_or(WrapError::Malformed)?;
     Ok(header)
 }
 

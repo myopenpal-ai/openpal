@@ -7,11 +7,13 @@ import PinPad from "../components/PinPad";
 import ThemePicker from "../components/ThemePicker";
 import { api } from "../lib/api";
 import { hasNativeNotifications } from "../lib/appEvents";
-import { formatBytesAtLeast } from "../lib/format";
+import { formatBytesAtLeast, timeAgo } from "../lib/format";
 import { usePluginDisplayName } from "../lib/pluginName";
 import { normalizeTheme, THEMES } from "../lib/theme";
 import type {
   AppLockStatusView,
+  BackupFrequency,
+  BackupState,
   DeviceSummary,
   DiscoveredHost,
   ExportCategories,
@@ -2420,7 +2422,264 @@ export function YourDataSection() {
           </p>
         )}
       </div>
+
+      {/* Portable has no recovery code to unlock a backup with, and Android
+          has no folder picker. */}
+      {appInfo && !appInfo.portable && !appInfo.isAndroid && <AutoBackupField />}
     </>
+  );
+}
+
+/** Settings → Your data's automatic, encrypted backup to a folder the user
+ * picks, and restoring one with the recovery code. The schedule runs in the
+ * backend (`crates/app/src/backup.rs`); this only shows and changes its
+ * choices, and re-reads them whenever a run finishes. */
+export function AutoBackupField() {
+  const appInfo = useStore((s) => s.appInfo);
+  const reloadAfterImport = useStore((s) => s.reloadAfterImport);
+  const { t } = useTranslation();
+  const idPrefix = useId();
+  const [backup, setBackup] = useState<BackupState | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  // Restore: the picked file, waiting for its recovery code.
+  const [restorePath, setRestorePath] = useState<string | null>(null);
+  const [code, setCode] = useState("");
+  const [restoring, setRestoring] = useState(false);
+  const [restoreStatus, setRestoreStatus] = useState<string | null>(null);
+  // `RecoverySetup` normally gates the whole app until a code exists, so
+  // this only shows if that state changed under a running Settings.
+  const needsRecoveryCode = appInfo?.needsRecoverySetup ?? false;
+
+  useEffect(() => {
+    let current = true;
+    const load = () =>
+      api.getBackupState().then(
+        (next) => {
+          if (current) setBackup(next);
+        },
+        () => {},
+      );
+    void load();
+    let unlisten: (() => void) | null = null;
+    void api
+      .onBackupStateChanged(() => void load())
+      .then((stop) => {
+        if (current) unlisten = stop;
+        else stop();
+      });
+    return () => {
+      current = false;
+      unlisten?.();
+    };
+  }, []);
+
+  const change = async (run: () => Promise<BackupState | null>) => {
+    setError(null);
+    try {
+      const next = await run();
+      if (next) setBackup(next);
+    } catch (err: unknown) {
+      setError(String(err));
+    }
+  };
+
+  /** Re-read the app's state so `App.tsx`'s gate opens `RecoverySetup` —
+   * the same refetch `RecoverySetup` itself does once a code is saved. */
+  const setUpRecoveryCode = async () => {
+    useStore.setState({ appInfo: await api.getAppInfo() });
+  };
+
+  const toggle = (enabled: boolean) =>
+    change(async () => {
+      // Turning it on with nowhere to write asks where first; closing the
+      // picker leaves it off.
+      if (enabled && !backup?.folder) {
+        const withFolder = await api.chooseBackupFolder();
+        if (!withFolder?.folder) return null;
+      }
+      return api.setBackupEnabled(enabled);
+    });
+
+  const pickRestoreFile = async () => {
+    setRestoreStatus(null);
+    try {
+      const path = await api.pickBackupFile();
+      if (path) {
+        setRestorePath(path);
+        setCode("");
+      }
+    } catch (err: unknown) {
+      setRestoreStatus(String(err));
+    }
+  };
+
+  const runRestore = async () => {
+    if (!restorePath) return;
+    setRestoring(true);
+    setRestoreStatus(null);
+    try {
+      const outcome = await api.restoreBackup(restorePath, code);
+      if (outcome.kind === "wrongCode") {
+        setRestoreStatus(t("settingsSheet.diagnostics.autoBackup.restore.wrongCode"));
+        return;
+      }
+      await reloadAfterImport(outcome.summary);
+      setRestorePath(null);
+      setCode("");
+      setRestoreStatus(
+        t("settingsSheet.diagnostics.autoBackup.restore.done", { ...outcome.summary }),
+      );
+    } catch (err: unknown) {
+      setRestoreStatus(String(err));
+    } finally {
+      setRestoring(false);
+    }
+  };
+
+  const enabled = backup?.enabled ?? false;
+  const frequencyId = `${idPrefix}-frequency`;
+  const codeId = `${idPrefix}-code`;
+  const lastSuccess =
+    backup?.lastSuccessMs != null
+      ? t("settingsSheet.diagnostics.autoBackup.lastSuccess", {
+          when: timeAgo(backup.lastSuccessMs),
+        })
+      : null;
+
+  return (
+    <div className="settings-field">
+      <span className="settings-label">{t("settingsSheet.diagnostics.autoBackup.label")}</span>
+      <span className="settings-hint">{t("settingsSheet.diagnostics.autoBackup.hint")}</span>
+      <label className="settings-toggle">
+        <input
+          type="checkbox"
+          checked={enabled}
+          disabled={backup === null || (needsRecoveryCode && !enabled)}
+          onChange={(e) => void toggle(e.target.checked)}
+        />
+        <span>{t(enabled ? "settingsSheet.toggle.on" : "settingsSheet.toggle.off")}</span>
+      </label>
+      {needsRecoveryCode && (
+        <>
+          <span className="settings-hint">
+            {t("settingsSheet.diagnostics.autoBackup.needsRecoveryCode")}
+          </span>
+          <div className="logs-actions">
+            <button className="btn-ghost" onClick={() => void setUpRecoveryCode()}>
+              {t("settingsSheet.diagnostics.autoBackup.setUpRecoveryCode")}
+            </button>
+          </div>
+        </>
+      )}
+      {backup?.folder && <code className="settings-path">{backup.folder}</code>}
+      <div className="logs-actions">
+        <button
+          className="btn-ghost"
+          disabled={backup === null}
+          onClick={() => void change(() => api.chooseBackupFolder())}
+        >
+          {t("settingsSheet.diagnostics.autoBackup.chooseFolder")}
+        </button>
+      </div>
+      <label className="settings-hint" htmlFor={frequencyId}>
+        {t("settingsSheet.diagnostics.autoBackup.frequency.label")}
+      </label>
+      <select
+        id={frequencyId}
+        className="settings-select"
+        value={backup?.frequency ?? "daily"}
+        disabled={backup === null}
+        onChange={(e) =>
+          void change(() => api.setBackupFrequency(e.target.value as BackupFrequency))
+        }
+      >
+        <option value="daily">{t("settingsSheet.diagnostics.autoBackup.frequency.daily")}</option>
+        <option value="weekly">
+          {t("settingsSheet.diagnostics.autoBackup.frequency.weekly")}
+        </option>
+      </select>
+      {backup?.lastError ? (
+        <p className="settings-hint logs-status" role="status">
+          {t("settingsSheet.diagnostics.autoBackup.failed", { reason: backup.lastError })}
+          {lastSuccess && (
+            <>
+              <br />
+              {lastSuccess}
+            </>
+          )}
+        </p>
+      ) : (
+        enabled && (
+          <p className="settings-hint logs-status" role="status">
+            {lastSuccess ?? t("settingsSheet.diagnostics.autoBackup.never")}
+          </p>
+        )
+      )}
+      {error && (
+        <p className="settings-hint logs-status" role="alert">
+          {error}
+        </p>
+      )}
+
+      <div className="logs-actions">
+        <button
+          className="btn-ghost"
+          disabled={restoring}
+          onClick={() => void pickRestoreFile()}
+        >
+          {t("settingsSheet.diagnostics.autoBackup.restore.button")}
+        </button>
+      </div>
+      {restorePath && (
+        <form
+          className="backup-restore"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void runRestore();
+          }}
+        >
+          <code className="settings-path">{restorePath}</code>
+          <label className="settings-hint" htmlFor={codeId}>
+            {t("settingsSheet.diagnostics.autoBackup.restore.prompt")}
+          </label>
+          <input
+            id={codeId}
+            className="settings-text"
+            autoComplete="off"
+            spellCheck={false}
+            value={code}
+            onChange={(e) => setCode(e.target.value)}
+          />
+          <div className="logs-actions">
+            <button
+              type="submit"
+              className="btn"
+              disabled={restoring || code.trim() === ""}
+            >
+              {restoring
+                ? t("settingsSheet.diagnostics.autoBackup.restore.restoring")
+                : t("settingsSheet.diagnostics.autoBackup.restore.confirm")}
+            </button>
+            <button
+              type="button"
+              className="btn-ghost"
+              disabled={restoring}
+              onClick={() => {
+                setRestorePath(null);
+                setCode("");
+              }}
+            >
+              {t("common.cancel")}
+            </button>
+          </div>
+        </form>
+      )}
+      {restoreStatus && (
+        <p className="settings-hint logs-status" role="status">
+          {restoreStatus}
+        </p>
+      )}
+    </div>
   );
 }
 

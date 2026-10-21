@@ -14,6 +14,8 @@ import type {
   Artifact,
   Attachment,
   AvailableUpdate,
+  BackupFrequency,
+  BackupState,
   ChatEvent,
   ChatMessage,
   CloudModelInfo,
@@ -52,6 +54,7 @@ import type {
   Project,
   RemoteAccessStatusInfo,
   RemotePairingRecord,
+  RestoreOutcome,
   RiskSignal,
   SamplingParams,
   Settings,
@@ -594,6 +597,33 @@ export const api = {
    * models and plugin choices. Resolves to `null` if the dialog was closed
    * without a choice (not an error). */
   importData: () => invoke<ImportSummary | null>("import_data"),
+  /** The automatic backup's choices and how its last run went. */
+  getBackupState: () => invoke<BackupState>("get_backup_state"),
+  /** Turn automatic backup on or off. Turning it on is refused until a
+   * recovery code exists, and writes the first backup straight away. */
+  setBackupEnabled: (enabled: boolean) =>
+    invoke<BackupState>("set_backup_enabled", { enabled }),
+  setBackupFrequency: (frequency: BackupFrequency) =>
+    invoke<BackupState>("set_backup_frequency", { frequency }),
+  /** Pick the backup folder with the native folder picker. Resolves to
+   * `null` if the picker was closed. Desktop only. */
+  chooseBackupFolder: () => invoke<BackupState | null>("choose_backup_folder"),
+  /** Pick a backup file to restore. Resolves to its path, or `null` if the
+   * dialog was closed. Nothing is read until `restoreBackup`. */
+  pickBackupFile: () => invoke<string | null>("pick_backup_file"),
+  /** Unlock the backup at `path` with the recovery code and merge it into
+   * this device's data, all or nothing. */
+  restoreBackup: (path: string, code: string) =>
+    invoke<RestoreOutcome>("restore_backup", { path, code }),
+  /** Fires after each automatic backup run, good or bad, so Settings can
+   * re-read `getBackupState`. Mirrors Rust `backup::BACKUP_STATE_CHANGED_EVENT`. */
+  onBackupStateChanged: async (cb: () => void): Promise<() => void> => {
+    try {
+      return await listen("backup-state-changed", () => cb());
+    } catch {
+      return () => {};
+    }
+  },
   /** Record a webview-side message in the same log file as the backend. */
   logFrontend: (level: "error" | "warn" | "info" | "debug", message: string) =>
     invoke<void>("frontend_log", { level, message }),

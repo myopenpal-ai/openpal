@@ -46,7 +46,7 @@ use tauri::State;
 
 const GIB: u64 = 1024 * 1024 * 1024;
 
-fn friendly(err: CoreError) -> String {
+pub(crate) fn friendly(err: CoreError) -> String {
     match err {
         CoreError::Cancelled => "Cancelled.".to_string(),
         CoreError::Http(e) => {
@@ -5097,13 +5097,21 @@ pub async fn import_data(
     .map_err(internal)?
     .map_err(friendly)?;
 
+    reload_after_import(&state, &summary).await;
+    Ok(Some(summary))
+}
+
+/// Reload what this process keeps in memory of the settings, custom models
+/// and plugin records after an import or a backup restore rewrote them in
+/// `app_db`, so the change shows without a restart.
+async fn reload_after_import(state: &AppState, summary: &openpal_core::import::ImportSummary) {
     if summary.settings {
         let imported = openpal_core::settings::load(&state.app_db.lock().unwrap());
         let mut current = state.settings.lock().await;
         let relay_url_changed = current.sync_relay_url != imported.sync_relay_url;
         let experimental_changed = current.experimental_features != imported.experimental_features;
         *current = imported;
-        apply_settings_change(&state, current, relay_url_changed, experimental_changed).await;
+        apply_settings_change(state, current, relay_url_changed, experimental_changed).await;
     }
     if summary.custom_models > 0 {
         let imported = custom::load(&state.app_db.lock().unwrap());
@@ -5112,7 +5120,172 @@ pub async fn import_data(
     if summary.plugins > 0 {
         state.plugins.reload_records().await;
     }
-    Ok(Some(summary))
+}
+
+// ---------------------------------------------------------------------------
+// Automatic backup (Settings → Your data) — see `openpal_core::backup` for
+// the file format and `crate::backup` for the scheduler.
+// ---------------------------------------------------------------------------
+
+/// The automatic backup's choices and how its last run went.
+#[tauri::command]
+pub async fn get_backup_state(
+    state: State<'_, AppState>,
+) -> Result<openpal_core::backup::BackupState, String> {
+    Ok(crate::backup::current(&state))
+}
+
+/// Turn automatic backup on or off. Turning it on needs a recovery code —
+/// the only thing that can unlock a backup on another device — so it is
+/// refused until `recovery.wrap` exists, and in the Portable build, which
+/// has none. Writes the first backup straight away when one is due.
+#[tauri::command]
+pub async fn set_backup_enabled(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    enabled: bool,
+) -> Result<openpal_core::backup::BackupState, String> {
+    let has_recovery_code = state
+        .paths
+        .data_dir
+        .join("keys")
+        .join("recovery.wrap")
+        .exists();
+    if enabled && (state.paths.portable || !has_recovery_code) {
+        return Err("Set up your recovery code first.".to_string());
+    }
+    let updated = openpal_core::backup::update_state(&state.app_db.lock().unwrap(), |s| {
+        s.enabled = enabled;
+    })
+    .map_err(friendly)?;
+    if enabled {
+        tauri::async_runtime::spawn(async move { crate::backup::run_if_due(&app).await });
+    }
+    Ok(updated)
+}
+
+#[tauri::command]
+pub async fn set_backup_frequency(
+    state: State<'_, AppState>,
+    frequency: openpal_core::backup::BackupFrequency,
+) -> Result<openpal_core::backup::BackupState, String> {
+    openpal_core::backup::update_state(&state.app_db.lock().unwrap(), |s| {
+        s.frequency = frequency;
+    })
+    .map_err(friendly)
+}
+
+/// Pick the backup folder with the native folder picker. A new folder gets a
+/// backup of its own straight away (when backup is on) rather than waiting
+/// out the interval the old folder's last backup started. `Ok(None)` means
+/// the picker was closed. Desktop only, like [`import_skill_folder`].
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[tauri::command]
+pub async fn choose_backup_folder(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Option<openpal_core::backup::BackupState>, String> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.dialog().file().pick_folder(move |folder| {
+        let _ = tx.send(folder);
+    });
+    let Some(picked) = rx.await.map_err(internal)? else {
+        return Ok(None); // user closed the picker
+    };
+    let folder = picked.into_path().map_err(internal)?;
+    let updated = openpal_core::backup::update_state(&state.app_db.lock().unwrap(), |s| {
+        if s.folder.as_deref() != folder.to_str() {
+            s.last_success_ms = None;
+            s.last_attempt_ms = None;
+            s.last_error = None;
+        }
+        s.folder = Some(folder.display().to_string());
+    })
+    .map_err(friendly)?;
+    tauri::async_runtime::spawn(async move { crate::backup::run_if_due(&app).await });
+    Ok(Some(updated))
+}
+
+#[cfg(any(target_os = "android", target_os = "ios"))]
+#[tauri::command]
+pub async fn choose_backup_folder(
+    _app: tauri::AppHandle,
+    _state: State<'_, AppState>,
+) -> Result<Option<openpal_core::backup::BackupState>, String> {
+    Err("Automatic backup isn't available on mobile yet.".to_string())
+}
+
+/// Pick a backup file to restore, with the native open dialog. Only picks:
+/// [`restore_backup`] does the work once the user has typed their recovery
+/// code. `Ok(None)` means the dialog was closed.
+#[tauri::command]
+pub async fn pick_backup_file(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.dialog()
+        .file()
+        .add_filter("OpenPal backup", &["opbackup"])
+        .pick_file(move |path| {
+            let _ = tx.send(path);
+        });
+    let Some(picked) = rx.await.map_err(internal)? else {
+        return Ok(None);
+    };
+    Ok(Some(
+        picked.into_path().map_err(internal)?.display().to_string(),
+    ))
+}
+
+/// How a restore went: a wrong recovery code is an expected answer the UI
+/// words itself, not an error.
+#[derive(serde::Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum RestoreOutcome {
+    Restored {
+        summary: openpal_core::import::ImportSummary,
+    },
+    WrongCode,
+}
+
+/// Decrypt the backup at `path` with `code` and merge it into this device's
+/// data, all or nothing — see `openpal_core::backup::restore`. The KDF and
+/// decryption run before `app_db` is locked at all; only the database
+/// writes hold it. Then reloads what this process keeps in memory, as
+/// [`import_data`] does.
+#[tauri::command]
+pub async fn restore_backup(
+    state: State<'_, AppState>,
+    path: String,
+    code: String,
+) -> Result<RestoreOutcome, String> {
+    use openpal_core::backup::OpenError;
+
+    let archive = tokio::task::spawn_blocking(move || {
+        openpal_core::backup::open_backup(std::path::Path::new(&path), &code)
+    })
+    .await
+    .map_err(internal)?;
+    let archive = match archive {
+        Ok(archive) => archive,
+        Err(OpenError::WrongCode) => return Ok(RestoreOutcome::WrongCode),
+        Err(OpenError::Unreadable(reason)) => return Err(reason),
+        Err(OpenError::Io(e)) => return Err(friendly(CoreError::Io(e))),
+    };
+
+    let app_db = state.app_db.clone();
+    let summary = tokio::task::spawn_blocking(move || {
+        openpal_core::backup::restore(&mut app_db.lock().unwrap(), archive)
+    })
+    .await
+    .map_err(internal)?
+    .map_err(friendly)?;
+
+    state.agent_audit.resync();
+    reload_after_import(&state, &summary).await;
+    Ok(RestoreOutcome::Restored { summary })
 }
 
 /// `openpal-export-<unix-seconds>.zip` — a reasonable default so the save
