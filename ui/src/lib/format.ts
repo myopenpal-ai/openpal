@@ -84,6 +84,20 @@ export function formatBytes(bytes: number): string {
   return `${Math.max(1, Math.round(bytes / MB))} MB`;
 }
 
+/** `formatBytes`, but never showing less than `bytes`: rounds up to the
+ * step `formatBytes` displays at (1 MB, then 0.1 GB, then 1 GB) instead of
+ * to the nearest one. For an estimate the user should be able to treat as a
+ * ceiling — the data export's size, which must never come out larger than
+ * shown. */
+export function formatBytesAtLeast(bytes: number): string {
+  const GB = 1024 ** 3;
+  const MB = 1024 ** 2;
+  let step = MB;
+  if (bytes > 10 * GB - GB / 10) step = GB;
+  else if (bytes > GB - MB) step = GB / 10;
+  return formatBytes(Math.ceil(bytes / step) * step);
+}
+
 export function ramLabel(bytes: number): string {
   return `${Math.round(bytes / 1024 ** 3)} GB`;
 }

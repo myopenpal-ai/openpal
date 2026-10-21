@@ -7,12 +7,15 @@ import PinPad from "../components/PinPad";
 import ThemePicker from "../components/ThemePicker";
 import { api } from "../lib/api";
 import { hasNativeNotifications } from "../lib/appEvents";
+import { formatBytesAtLeast } from "../lib/format";
 import { usePluginDisplayName } from "../lib/pluginName";
 import { normalizeTheme, THEMES } from "../lib/theme";
 import type {
   AppLockStatusView,
   DeviceSummary,
   DiscoveredHost,
+  ExportCategories,
+  ExportCounts,
   Language,
   PairedDeviceInfo,
   PairingPayload,
@@ -2166,21 +2169,122 @@ function PerformanceSection() {
   );
 }
 
+/** The export row's checkboxes, in the order they're shown. */
+const EXPORT_CATEGORIES: (keyof ExportCategories)[] = [
+  "chats",
+  "settings",
+  "skills",
+  "customModels",
+  "plugins",
+];
+
+const ALL_EXPORT_CATEGORIES: ExportCategories = {
+  chats: true,
+  settings: true,
+  skills: true,
+  customModels: true,
+  plugins: true,
+};
+
 /** Where everything is kept, and taking it out (a backup) or bringing it in
  * from another device. */
-function YourDataSection() {
+export function YourDataSection() {
   const appInfo = useStore((s) => s.appInfo);
+  const reloadAfterImport = useStore((s) => s.reloadAfterImport);
   const { t } = useTranslation();
+  const idPrefix = useId();
+  const [include, setInclude] = useState<ExportCategories>(ALL_EXPORT_CATEGORIES);
+  // The export's size for `include`, re-asked whenever a box changes and
+  // after an export or import (`sizeRefresh`), since either can change it.
+  // Shown rounded up, never down, so the zip is never larger than this.
+  const [size, setSize] = useState<number | "calculating" | "unavailable">("calculating");
+  const [sizeRefresh, setSizeRefresh] = useState(0);
+  // How much each category holds, for the line under its checkbox. `null`
+  // until it arrives (or if it can't be read): the line then shows only what
+  // doesn't depend on it.
+  const [counts, setCounts] = useState<ExportCounts | null>(null);
   const [exporting, setExporting] = useState(false);
   const [exportStatus, setExportStatus] = useState<string | null>(null);
   const [importing, setImporting] = useState(false);
   const [importStatus, setImportStatus] = useState<string | null>(null);
+  const nothingTicked = !EXPORT_CATEGORIES.some((c) => include[c]);
+
+  useEffect(() => {
+    let current = true;
+    api.exportCounts().then(
+      (next) => {
+        if (current) setCounts(next);
+      },
+      () => {
+        if (current) setCounts(null);
+      },
+    );
+    return () => {
+      current = false;
+    };
+  }, [sizeRefresh]);
+
+  /** The lighter line under a category's label: how many it holds, plus
+   * what custom models leave out. */
+  const categoryDetail = (category: keyof ExportCategories): string | null => {
+    const count = (key: keyof ExportCategories | "projects" | "files", n: number) =>
+      t(`settingsSheet.diagnostics.exportData.include.count.${key}`, { count: n });
+    const parts: string[] = [];
+    if (counts) {
+      switch (category) {
+        case "chats":
+          parts.push(
+            [
+              count("chats", counts.conversations),
+              count("projects", counts.projects),
+              count("files", counts.artifacts),
+            ].join(", "),
+          );
+          break;
+        case "settings":
+          parts.push(count("settings", counts.changedSettings));
+          break;
+        case "skills":
+          parts.push(count("skills", counts.skills));
+          break;
+        case "customModels":
+          parts.push(count("customModels", counts.customModels));
+          break;
+        case "plugins":
+          parts.push(count("plugins", counts.enabledPlugins));
+          break;
+      }
+    }
+    if (category === "customModels") {
+      parts.push(t("settingsSheet.diagnostics.exportData.include.customModelsHint"));
+    }
+    return parts.length > 0 ? parts.join(" · ") : null;
+  };
+
+  useEffect(() => {
+    if (nothingTicked) return;
+    // Only the latest request's answer counts: ticking boxes quickly fires
+    // several, and an earlier, slower one mustn't land last.
+    let current = true;
+    setSize("calculating");
+    api.estimateExportSize(include).then(
+      (bytes) => {
+        if (current) setSize(bytes);
+      },
+      () => {
+        if (current) setSize("unavailable");
+      },
+    );
+    return () => {
+      current = false;
+    };
+  }, [include, nothingTicked, sizeRefresh]);
 
   const runExport = async () => {
     setExporting(true);
     setExportStatus(null);
     try {
-      const summary = await api.exportData();
+      const summary = await api.exportData(include);
       if (summary) {
         setExportStatus(
           t(
@@ -2190,6 +2294,7 @@ function YourDataSection() {
             { ...summary },
           ),
         );
+        setSizeRefresh((n) => n + 1);
       }
       // summary === null: the dialog was closed, nothing to say (mirrors
       // download_artifact's cancel convention).
@@ -2206,6 +2311,7 @@ function YourDataSection() {
     try {
       const summary = await api.importData();
       if (summary) {
+        await reloadAfterImport(summary);
         setImportStatus(
           t(
             summary.skipped > 0
@@ -2214,6 +2320,7 @@ function YourDataSection() {
             { ...summary },
           ),
         );
+        setSizeRefresh((n) => n + 1);
       }
       // summary === null: the dialog was closed, nothing to say (mirrors
       // download_artifact's cancel convention).
@@ -2238,8 +2345,52 @@ function YourDataSection() {
       <div className="settings-field">
         <span className="settings-label">{t("settingsSheet.diagnostics.exportData.label")}</span>
         <span className="settings-hint">{t("settingsSheet.diagnostics.exportData.hint")}</span>
+        <fieldset className="export-include">
+          <legend className="settings-hint">
+            {t("settingsSheet.diagnostics.exportData.include.label")}
+          </legend>
+          {EXPORT_CATEGORIES.map((category) => {
+            const hint = categoryDetail(category);
+            // The sub-text describes the checkbox rather than naming it, so
+            // the label alone stays its accessible name.
+            const labelId = `${idPrefix}-${category}`;
+            const hintId = `${labelId}-hint`;
+            return (
+              <label key={category} className="settings-toggle export-include-option">
+                <input
+                  type="checkbox"
+                  checked={include[category]}
+                  aria-labelledby={labelId}
+                  aria-describedby={hint ? hintId : undefined}
+                  onChange={(e) => setInclude({ ...include, [category]: e.target.checked })}
+                />
+                <span className="export-include-text">
+                  <span id={labelId}>
+                    {t(`settingsSheet.diagnostics.exportData.include.${category}`)}
+                  </span>
+                  {hint && (
+                    <span id={hintId} className="settings-hint">
+                      {hint}
+                    </span>
+                  )}
+                </span>
+              </label>
+            );
+          })}
+        </fieldset>
+        {!nothingTicked && size !== "unavailable" && (
+          <span className="settings-hint" aria-live="polite">
+            {size === "calculating"
+              ? t("settingsSheet.diagnostics.exportData.sizeCalculating")
+              : t("settingsSheet.diagnostics.exportData.size", { size: formatBytesAtLeast(size) })}
+          </span>
+        )}
         <div className="logs-actions">
-          <button className="btn-ghost" disabled={exporting} onClick={() => void runExport()}>
+          <button
+            className="btn-ghost"
+            disabled={exporting || nothingTicked}
+            onClick={() => void runExport()}
+          >
             {exporting
               ? t("settingsSheet.diagnostics.exportData.exporting")
               : t("settingsSheet.diagnostics.exportData.button")}

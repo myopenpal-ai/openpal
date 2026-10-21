@@ -473,6 +473,54 @@ fn insert_new_skill(
     })
 }
 
+/// Bring back one skill from a full data export (`crate::import`), keeping
+/// its slug: `raw` is its `SKILL.md` as [`export_markdown`] wrote it, and
+/// `files` its supporting files. Unlike [`import`], which always mints a
+/// fresh slug, a skill that already exists under `slug` is replaced — its
+/// old supporting files included — so moving to a new device leaves exactly
+/// one copy of each skill. A supporting file whose path could escape the
+/// skill's folder is dropped, same rule [`find_skill_in_memory`] applies.
+pub fn replace_from_export(
+    conn: &mut Connection,
+    slug: &str,
+    raw: &str,
+    files: &[SkillFile],
+) -> Result<Skill> {
+    if !is_valid_slug(slug) {
+        return Err(Error::Import(format!("{slug} isn't a valid skill name")));
+    }
+    let (name, description, body) = parse(raw, slug);
+    let files: Vec<SkillFile> = files
+        .iter()
+        .filter(|f| f.path.ends_with(".md") && is_safe_relative_path(&f.path))
+        .cloned()
+        .collect();
+    let tx = conn.transaction()?;
+    tx.execute(
+        "INSERT INTO skills (slug, name, description, body) VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT (slug) DO UPDATE SET name = ?2, description = ?3, body = ?4",
+        params![slug, name, description, body],
+    )?;
+    tx.execute(
+        "DELETE FROM skill_files WHERE skill_slug = ?1",
+        params![slug],
+    )?;
+    for f in &files {
+        tx.execute(
+            "INSERT INTO skill_files (skill_slug, path, content) VALUES (?1, ?2, ?3)",
+            params![slug, f.path, f.content],
+        )?;
+    }
+    tx.commit()?;
+    Ok(Skill {
+        slug: slug.to_string(),
+        name,
+        description,
+        body,
+        files,
+    })
+}
+
 /// Seed a brand-new (genuinely first-run) skills store with one starter
 /// skill that teaches the feature itself by using it: `/create-skill` walks
 /// the user through designing their own, in whichever of the app's two UI

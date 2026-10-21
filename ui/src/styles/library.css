@@ -1340,6 +1340,37 @@
   margin: 6px 0 0;
 }
 
+/* Settings → Your data: what the export includes, one checkbox per line. */
+.export-include {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 10px 0 0;
+  padding: 0;
+  border: 0;
+}
+
+.export-include legend {
+  padding: 0;
+  margin-bottom: 6px;
+}
+
+/* A category with sub-text keeps its checkbox on the label's line, not
+   centred between the label and the lighter line under it. */
+.export-include-option {
+  align-items: flex-start;
+}
+
+.export-include-option input {
+  margin-top: 2px;
+}
+
+.export-include-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
 .logs-actions {
   display: flex;
   flex-wrap: wrap;

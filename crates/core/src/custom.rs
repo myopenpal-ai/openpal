@@ -63,6 +63,16 @@ impl CustomModels {
         id
     }
 
+    /// Add `spec`, or replace the entry already holding its id in place —
+    /// how a data import (`crate::import`) brings an entry back from another
+    /// device without duplicating one this device already has.
+    pub fn upsert(&mut self, spec: ModelSpec) {
+        match self.models.iter_mut().find(|m| m.id == spec.id) {
+            Some(existing) => *existing = spec,
+            None => self.models.push(spec),
+        }
+    }
+
     /// Remove the model with `id`. Idempotent.
     pub fn remove(&mut self, id: &str) {
         self.models.retain(|m| m.id != id);

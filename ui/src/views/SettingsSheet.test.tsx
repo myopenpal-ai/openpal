@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import i18n from "../i18n";
-import SettingsSheet, { ExperimentalSection } from "./SettingsSheet";
+import SettingsSheet, { ExperimentalSection, YourDataSection } from "./SettingsSheet";
 import { useStore } from "../state/store";
 import type { AppInfo, PluginInfo, Settings } from "../lib/types";
 
@@ -11,11 +11,17 @@ const {
   notificationPermission,
   requestNotificationPermission,
   openNotificationSettings,
+  estimateExportSize,
+  exportData,
+  exportCounts,
 } = vi.hoisted(() => ({
   updateSettings: vi.fn(),
   notificationPermission: vi.fn(),
   requestNotificationPermission: vi.fn(),
   openNotificationSettings: vi.fn(),
+  estimateExportSize: vi.fn(),
+  exportData: vi.fn(),
+  exportCounts: vi.fn(),
 }));
 
 // The only calls the pages rendered here may make are the write behind the theme
@@ -23,13 +29,17 @@ const {
 // `setDesktopNotifications`), the OS permission read the Notifications group
 // does when it opens, the OS permission request that turning the switch on
 // makes, and the "blocked" line's button that opens the OS notification
-// settings; any other still throws.
+// settings, plus the Your data section's export size estimate, category
+// counts and export; any other still throws.
 vi.mock("../lib/api", () => ({
   api: {
     updateSettings,
     notificationPermission,
     requestNotificationPermission,
     openNotificationSettings,
+    estimateExportSize,
+    exportData,
+    exportCounts,
   },
 }));
 
@@ -749,5 +759,132 @@ describe("General settings: notifications", () => {
     } finally {
       await i18n.changeLanguage("en");
     }
+  });
+});
+
+describe("YourDataSection", () => {
+  const MB = 1024 ** 2;
+  const all = { chats: true, settings: true, skills: true, customModels: true, plugins: true };
+
+  const counts = {
+    conversations: 4,
+    projects: 1,
+    artifacts: 3,
+    changedSettings: 2,
+    skills: 1,
+    customModels: 0,
+    enabledPlugins: 2,
+  };
+
+  beforeEach(() => {
+    estimateExportSize.mockReset();
+    exportData.mockReset();
+    exportCounts.mockReset().mockResolvedValue(counts);
+  });
+
+  it("ticks every category by default and exports them all", async () => {
+    estimateExportSize.mockResolvedValue(3 * MB);
+    exportData.mockResolvedValue(null);
+    render(<YourDataSection />);
+
+    for (const name of [
+      "Chats, projects and files",
+      "Settings",
+      "Skills",
+      "Custom models",
+      "Plugins",
+    ]) {
+      expect(screen.getByRole("checkbox", { name })).toBeChecked();
+    }
+    await userEvent.click(screen.getByRole("button", { name: "Export data…" }));
+    expect(exportData).toHaveBeenCalledWith(all);
+  });
+
+  it("shows the estimate rounded up, and re-asks when a box changes", async () => {
+    estimateExportSize.mockResolvedValueOnce(2.2 * MB).mockResolvedValueOnce(0.4 * MB);
+    render(<YourDataSection />);
+    expect(screen.getByText("Estimating size…")).toBeInTheDocument();
+    expect(await screen.findByText("Estimated size: 3 MB")).toBeInTheDocument();
+    expect(estimateExportSize).toHaveBeenLastCalledWith(all);
+
+    await userEvent.click(screen.getByRole("checkbox", { name: "Chats, projects and files" }));
+    expect(estimateExportSize).toHaveBeenLastCalledWith({ ...all, chats: false });
+    expect(await screen.findByText("Estimated size: 1 MB")).toBeInTheDocument();
+  });
+
+  it("keeps only the latest estimate when an earlier one answers last", async () => {
+    let answerFirst: (bytes: number) => void = () => {};
+    estimateExportSize
+      .mockReturnValueOnce(new Promise<number>((resolve) => (answerFirst = resolve)))
+      .mockResolvedValueOnce(5 * MB);
+    render(<YourDataSection />);
+    await userEvent.click(screen.getByRole("checkbox", { name: "Skills" }));
+    expect(await screen.findByText("Estimated size: 5 MB")).toBeInTheDocument();
+
+    await act(async () => answerFirst(900 * MB));
+    expect(screen.getByText("Estimated size: 5 MB")).toBeInTheDocument();
+  });
+
+  it("reports skills and custom models when the export is done", async () => {
+    estimateExportSize.mockResolvedValue(MB);
+    exportData.mockResolvedValue({
+      conversations: 3,
+      projects: 1,
+      artifacts: 2,
+      skills: 4,
+      customModels: 5,
+      settings: true,
+      plugins: 2,
+      skipped: 0,
+    });
+    render(<YourDataSection />);
+    await userEvent.click(screen.getByRole("button", { name: "Export data…" }));
+    expect(
+      await screen.findByText(
+        "Exported 3 chat(s), 1 project(s), 2 file(s), 4 skill(s) and 5 custom model(s).",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("says under each label how much that category holds", async () => {
+    estimateExportSize.mockResolvedValue(MB);
+    render(<YourDataSection />);
+    const detail = (name: string) => screen.getByRole("checkbox", { name });
+
+    await waitFor(() =>
+      expect(detail("Chats, projects and files")).toHaveAccessibleDescription(
+        "4 chats, 1 project, 3 files",
+      ),
+    );
+    expect(detail("Settings")).toHaveAccessibleDescription("2 changed from the defaults");
+    expect(detail("Skills")).toHaveAccessibleDescription("1 skill");
+    expect(detail("Custom models")).toHaveAccessibleDescription(
+      "0 models · The list only, not the model files",
+    );
+    expect(detail("Plugins")).toHaveAccessibleDescription("2 turned on");
+  });
+
+  it("keeps the custom-model note and drops the counts when they can't be read", async () => {
+    exportCounts.mockReset().mockRejectedValue(new Error("locked"));
+    estimateExportSize.mockResolvedValue(MB);
+    render(<YourDataSection />);
+    await screen.findByText("Estimated size: 1 MB");
+
+    expect(screen.getByRole("checkbox", { name: "Custom models" })).toHaveAccessibleDescription(
+      "The list only, not the model files",
+    );
+    expect(screen.getByRole("checkbox", { name: "Skills" })).not.toHaveAttribute(
+      "aria-describedby",
+    );
+  });
+
+  it("disables Export data… with every box unticked", async () => {
+    estimateExportSize.mockResolvedValue(MB);
+    render(<YourDataSection />);
+    for (const checkbox of screen.getAllByRole("checkbox")) {
+      await userEvent.click(checkbox);
+    }
+    expect(screen.getByRole("button", { name: "Export data…" })).toBeDisabled();
+    expect(screen.queryByText(/Estimat/)).toBeNull();
   });
 });

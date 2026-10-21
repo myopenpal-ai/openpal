@@ -1,6 +1,7 @@
 //! Read-back counterpart to `crate::export`: reads a zip produced by
-//! [`crate::export::write_export_zip`] and upserts its conversations,
-//! projects, and artifacts into the app-wide SQLCipher database
+//! [`crate::export::write_export_zip`] and brings back whatever it contains —
+//! conversations, projects, artifacts, settings, skills, custom models and
+//! plugin records — into the app-wide SQLCipher database
 //! (`crate::app_db`). This is Phase 0 of multi-device sync (see
 //! `docs/design/MULTI_DEVICE_SYNC.md`) — the lowest-risk slice: a user can manually
 //! move their data to another device today by exporting on one and importing
@@ -17,6 +18,23 @@
 //!   recovered from the path itself and handed to `crate::artifacts::save`
 //!   (also an upsert — it validates size and sanitizes `filename` itself, so
 //!   this module doesn't duplicate that).
+//! - `settings.json` — parsed as `Settings` and saved over this device's,
+//!   machine-specific fields included (the user chose full replacement over
+//!   keeping Force CPU, sync and the like). A relay URL `update_settings`
+//!   would refuse makes it skipped instead.
+//! - `skills/<slug>/SKILL.md` plus that folder's supporting files — each
+//!   skill replaces the local one with the same slug
+//!   (`crate::skills::replace_from_export`); other local skills stay.
+//! - `custom-models.json` — each entry replaces the local one with the same
+//!   id, or is added; other local entries stay. A local-file entry whose
+//!   file isn't on this device just reads as not installed.
+//! - `plugins.json` — each plugin's `enabled` is taken; setup state stays
+//!   this device's own (`crate::plugin::import_records_json`).
+//!
+//! An export made before the last four existed simply has none of them, and
+//! leaves those parts of this device untouched. The app layer must reload
+//! whatever it keeps in memory of the last four afterwards — see
+//! `crates/app/src/commands.rs`'s `import_data`.
 //! - Anything else: skipped silently, not counted as an error — forward
 //!   compatible with a newer export format adding entries this older import
 //!   doesn't understand yet.
@@ -27,9 +45,10 @@
 //! be opened as a zip — everything else is counted in
 //! [`ImportSummary::skipped`], never fatal.
 
-use crate::types::{Conversation, Project};
+use crate::types::{Conversation, ModelSpec, Project, Settings, SkillFile};
 use crate::{Error, Result};
 use rusqlite::Connection;
+use std::collections::BTreeMap;
 use std::path::Path;
 use zip::ZipArchive;
 
@@ -41,13 +60,27 @@ pub struct ImportSummary {
     pub conversations: usize,
     pub projects: usize,
     pub artifacts: usize,
+    pub skills: usize,
+    pub custom_models: usize,
+    /// Whether `settings.json` replaced this device's settings.
+    pub settings: bool,
+    /// How many plugin records `plugins.json` carried.
+    pub plugins: usize,
     pub skipped: usize,
 }
 
+/// One skill's entries, gathered from anywhere in the archive before it's
+/// written — zip order doesn't promise `SKILL.md` comes first.
+#[derive(Default)]
+struct PendingSkill {
+    skill_md: Option<String>,
+    files: Vec<SkillFile>,
+}
+
 /// Read the zip at `src` (as written by
-/// [`crate::export::write_export_zip`]) and upsert every conversation,
-/// project, and artifact it contains into `conn`.
-pub fn read_import_zip(conn: &Connection, src: &Path) -> Result<ImportSummary> {
+/// [`crate::export::write_export_zip`]) and bring every entry it contains
+/// into `conn`.
+pub fn read_import_zip(conn: &mut Connection, src: &Path) -> Result<ImportSummary> {
     let file = std::fs::File::open(src)
         .map_err(|e| Error::DataImport(format!("couldn't open the import archive: {e}")))?;
     let mut archive = ZipArchive::new(file).map_err(|e| {
@@ -55,6 +88,7 @@ pub fn read_import_zip(conn: &Connection, src: &Path) -> Result<ImportSummary> {
     })?;
 
     let mut summary = ImportSummary::default();
+    let mut skills: BTreeMap<String, PendingSkill> = BTreeMap::new();
 
     for i in 0..archive.len() {
         let mut entry = match archive.by_index(i) {
@@ -140,10 +174,130 @@ pub fn read_import_zip(conn: &Connection, src: &Path) -> Result<ImportSummary> {
             continue;
         }
 
+        if let Some((slug, path)) = name
+            .strip_prefix("skills/")
+            .and_then(|rest| rest.split_once('/'))
+        {
+            if entry.is_dir() {
+                continue;
+            }
+            let pending = skills.entry(slug.to_string()).or_default();
+            match read_entry_to_string(&mut entry) {
+                Ok(contents) if path == "SKILL.md" => pending.skill_md = Some(contents),
+                Ok(content) => pending.files.push(SkillFile {
+                    path: path.to_string(),
+                    content,
+                }),
+                Err(e) => {
+                    tracing::warn!("import: couldn't read skill entry {name}: {e}");
+                    summary.skipped += 1;
+                }
+            }
+            continue;
+        }
+
+        let single_file = match name.as_str() {
+            "settings.json" => Some(import_settings as fn(&Connection, &str, &mut ImportSummary)),
+            "custom-models.json" => Some(import_custom_models as _),
+            "plugins.json" => Some(import_plugins as _),
+            _ => None,
+        };
+        if let Some(import) = single_file {
+            match read_entry_to_string(&mut entry) {
+                Ok(contents) => import(conn, &contents, &mut summary),
+                Err(e) => {
+                    tracing::warn!("import: couldn't read {name}: {e}");
+                    summary.skipped += 1;
+                }
+            }
+            continue;
+        }
+
         // Any other/unexpected path: forward-compat, not an error.
     }
 
+    for (slug, mut pending) in skills {
+        let Some(skill_md) = pending.skill_md else {
+            tracing::warn!("import: skipping skill {slug}: no SKILL.md");
+            summary.skipped += 1;
+            continue;
+        };
+        pending.files.sort_by(|a, b| a.path.cmp(&b.path));
+        match crate::skills::replace_from_export(conn, &slug, &skill_md, &pending.files) {
+            Ok(_) => summary.skills += 1,
+            Err(e) => {
+                tracing::warn!("import: skipping skill {slug}: {e}");
+                summary.skipped += 1;
+            }
+        }
+    }
+
     Ok(summary)
+}
+
+/// `settings.json`: replaces this device's settings outright.
+fn import_settings(conn: &Connection, contents: &str, summary: &mut ImportSummary) {
+    let result = serde_json::from_str::<Settings>(contents)
+        .map_err(|e| e.to_string())
+        .and_then(|settings| {
+            if let Some(url) = &settings.sync_relay_url {
+                crate::sync::mailbox_client::validate_relay_url(url)?;
+            }
+            crate::settings::save(conn, &settings).map_err(|e| e.to_string())
+        });
+    match result {
+        Ok(()) => summary.settings = true,
+        Err(e) => {
+            tracing::warn!("import: skipping settings: {e}");
+            summary.skipped += 1;
+        }
+    }
+}
+
+/// `custom-models.json`: merged into this device's list by id. Each entry
+/// is parsed on its own, so one that no longer fits `ModelSpec` is skipped
+/// without losing the rest.
+fn import_custom_models(conn: &Connection, contents: &str, summary: &mut ImportSummary) {
+    let entries: Vec<serde_json::Value> = match serde_json::from_str(contents) {
+        Ok(entries) => entries,
+        Err(e) => {
+            tracing::warn!("import: skipping custom models: {e}");
+            summary.skipped += 1;
+            return;
+        }
+    };
+    let mut custom = crate::custom::load(conn);
+    let mut imported = 0;
+    for entry in entries {
+        match serde_json::from_value::<ModelSpec>(entry) {
+            Ok(spec) => {
+                custom.upsert(spec);
+                imported += 1;
+            }
+            Err(e) => {
+                tracing::warn!("import: skipping a custom model: {e}");
+                summary.skipped += 1;
+            }
+        }
+    }
+    match crate::custom::save(conn, &custom) {
+        Ok(()) => summary.custom_models += imported,
+        Err(e) => {
+            tracing::warn!("import: couldn't save custom models: {e}");
+            summary.skipped += imported;
+        }
+    }
+}
+
+/// `plugins.json`: each plugin's enabled switch, merged by id.
+fn import_plugins(conn: &Connection, contents: &str, summary: &mut ImportSummary) {
+    match crate::plugin::import_records_json(conn, contents) {
+        Ok(count) => summary.plugins = count,
+        Err(e) => {
+            tracing::warn!("import: skipping plugin records: {e}");
+            summary.skipped += 1;
+        }
+    }
 }
 
 /// `<id>.json`'s bytes, parsed as a `Conversation` and upserted. The `id` in
@@ -188,7 +342,9 @@ fn read_entry_to_string<R: std::io::Read>(entry: &mut R) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{SamplingParams, TaskType};
+    use crate::export::tests::populate_every_category as populate;
+    use crate::export::ExportCategories;
+    use crate::types::{SamplingParams, Skill, TaskType};
 
     /// See `crate::store::tests::test_conn`'s own doc comment for why
     /// `.keep()` is used here.
@@ -233,7 +389,8 @@ mod tests {
         .unwrap();
         crate::artifacts::save(&src_conn, "conv-1", "art-1", "report.md", "# Report").unwrap();
 
-        let data = crate::export::read_export_data(&src_conn);
+        let data =
+            crate::export::read_export_data(&src_conn, &crate::export::ExportCategories::ALL);
         let dest = tmp.path().join("export.zip");
         let export_summary = crate::export::write_export_zip(&data, &dest).unwrap();
         assert_eq!(
@@ -247,8 +404,8 @@ mod tests {
         );
 
         // Import into a second, fresh, empty database.
-        let dst_conn = test_conn();
-        let import_summary = read_import_zip(&dst_conn, &dest).unwrap();
+        let mut dst_conn = test_conn();
+        let import_summary = read_import_zip(&mut dst_conn, &dest).unwrap();
         assert_eq!(
             (
                 import_summary.conversations,
@@ -302,8 +459,8 @@ mod tests {
             zip.finish().unwrap();
         }
 
-        let conn = test_conn();
-        let summary = read_import_zip(&conn, &dest).unwrap();
+        let mut conn = test_conn();
+        let summary = read_import_zip(&mut conn, &dest).unwrap();
         assert_eq!(
             summary.conversations, 1,
             "the well-formed entry still imports"
@@ -336,8 +493,8 @@ mod tests {
             zip.finish().unwrap();
         }
 
-        let conn = test_conn();
-        let summary = read_import_zip(&conn, &dest).unwrap();
+        let mut conn = test_conn();
+        let summary = read_import_zip(&mut conn, &dest).unwrap();
         assert_eq!(summary.conversations, 0);
         assert_eq!(summary.projects, 0);
         assert_eq!(summary.artifacts, 0);
@@ -352,10 +509,292 @@ mod tests {
         let dest = tmp.path().join("not-a-zip.zip");
         std::fs::write(&dest, b"definitely not a zip archive").unwrap();
 
-        let conn = test_conn();
+        let mut conn = test_conn();
         assert!(matches!(
-            read_import_zip(&conn, &dest),
+            read_import_zip(&mut conn, &dest),
             Err(Error::DataImport(_))
         ));
+    }
+
+    fn export(conn: &Connection, include: &ExportCategories, dest: &Path) {
+        let data = crate::export::read_export_data(conn, include);
+        crate::export::write_export_zip(&data, dest).unwrap();
+    }
+
+    fn skill(conn: &Connection, slug: &str) -> Skill {
+        crate::skills::get(conn, slug).unwrap()
+    }
+
+    fn write_zip(dest: &Path, entries: &[(&str, &str)]) {
+        let mut zip = zip::ZipWriter::new(std::fs::File::create(dest).unwrap());
+        for (name, contents) in entries {
+            zip.start_file(*name, zip::write::SimpleFileOptions::default())
+                .unwrap();
+            std::io::Write::write_all(&mut zip, contents.as_bytes()).unwrap();
+        }
+        zip.finish().unwrap();
+    }
+
+    /// Export everything on one device, import it on a fresh one with a
+    /// different data directory and some data of its own: every new
+    /// category comes back, and what the other device didn't have is kept.
+    #[test]
+    fn every_new_category_round_trips_onto_a_fresh_install() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("export.zip");
+        let mut src = test_conn();
+        populate(&mut src);
+        export(&src, &ExportCategories::ALL, &dest);
+
+        let mut dst = test_conn();
+        crate::skills::replace_from_export(&mut dst, "local-only", "Mine.", &[]).unwrap();
+        let mut local = crate::custom::CustomModels::default();
+        local.add(crate::custom::local_spec(
+            Path::new("/here/kept.gguf"),
+            1,
+            &[],
+        ));
+        crate::custom::save(&dst, &local).unwrap();
+        dst.execute(
+            "INSERT INTO plugin_records (key, json) VALUES ('current', ?1)",
+            [r#"{"writing-tools":{"enabled":true,"setupVersion":"2.0.0"}}"#],
+        )
+        .unwrap();
+
+        let summary = read_import_zip(&mut dst, &dest).unwrap();
+        assert_eq!(
+            (
+                summary.conversations,
+                summary.projects,
+                summary.artifacts,
+                summary.skills,
+                summary.custom_models,
+                summary.settings,
+                summary.plugins,
+                summary.skipped
+            ),
+            (1, 1, 1, 1, 1, true, 1, 0)
+        );
+
+        assert_eq!(
+            serde_json::to_value(crate::settings::load(&dst)).unwrap(),
+            serde_json::to_value(crate::settings::load(&src)).unwrap(),
+            "settings are replaced wholesale, machine-specific ones included"
+        );
+
+        let summarize = skill(&dst, "summarize");
+        assert_eq!(
+            (
+                summarize.name.as_str(),
+                summarize.description.as_str(),
+                summarize.body.as_str()
+            ),
+            ("Summarize", "Make it short", "Summarize the text.")
+        );
+        assert_eq!(summarize.files.len(), 1);
+        assert_eq!(summarize.files[0].path, "examples/one.md");
+        assert_eq!(summarize.files[0].content, "An example.");
+        assert_eq!(skill(&dst, "local-only").body, "Mine.");
+
+        let custom = crate::custom::load(&dst);
+        let src_custom = crate::custom::load(&src);
+        let imported_id = &src_custom.all()[0].id;
+        assert_eq!(custom.all().len(), 2, "the local entry is kept");
+        assert_eq!(
+            serde_json::to_value(custom.get(imported_id).unwrap()).unwrap(),
+            serde_json::to_value(&src_custom.all()[0]).unwrap()
+        );
+
+        let (plugins, _) = crate::plugin::export_records_json(&dst).unwrap();
+        let plugins: serde_json::Value = serde_json::from_str(&plugins).unwrap();
+        assert_eq!(
+            plugins["voice"],
+            serde_json::json!({"enabled": true, "setupVersion": null}),
+            "enabled comes over; setup stays this device's own (never set up here)"
+        );
+        assert_eq!(
+            plugins["writing-tools"],
+            serde_json::json!({"enabled": true, "setupVersion": "2.0.0"}),
+            "a plugin the export doesn't mention is left alone"
+        );
+    }
+
+    #[test]
+    fn an_existing_skill_or_custom_model_is_replaced_not_duplicated() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("export.zip");
+        let mut src = test_conn();
+        populate(&mut src);
+        export(&src, &ExportCategories::ALL, &dest);
+        let imported_spec = crate::custom::load(&src).all()[0].clone();
+
+        let mut dst = test_conn();
+        crate::skills::replace_from_export(
+            &mut dst,
+            "summarize",
+            "Old local body.",
+            &[SkillFile {
+                path: "stale.md".to_string(),
+                content: "Stale.".to_string(),
+            }],
+        )
+        .unwrap();
+        let mut local = crate::custom::CustomModels::default();
+        local.add(ModelSpec {
+            name: "Local name".to_string(),
+            ..imported_spec.clone()
+        });
+        crate::custom::save(&dst, &local).unwrap();
+
+        read_import_zip(&mut dst, &dest).unwrap();
+
+        let summarize = skill(&dst, "summarize");
+        assert_eq!(summarize.body, "Summarize the text.");
+        assert_eq!(
+            summarize
+                .files
+                .iter()
+                .map(|f| f.path.as_str())
+                .collect::<Vec<_>>(),
+            vec!["examples/one.md"],
+            "the local copy's supporting files go with it"
+        );
+        assert_eq!(crate::skills::list(&dst).len(), 1);
+
+        let custom = crate::custom::load(&dst);
+        assert_eq!(custom.all().len(), 1);
+        assert_eq!(custom.all()[0].name, imported_spec.name);
+    }
+
+    /// A zip from before the new categories existed — exactly what today's
+    /// chats-only export writes — still imports its chats and touches
+    /// nothing else.
+    #[test]
+    fn a_chats_only_export_leaves_the_new_categories_untouched() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("export.zip");
+        let mut src = test_conn();
+        populate(&mut src);
+        let chats_only = ExportCategories {
+            chats: true,
+            settings: false,
+            skills: false,
+            custom_models: false,
+            plugins: false,
+        };
+        export(&src, &chats_only, &dest);
+
+        let mut dst = test_conn();
+        let dst_settings = Settings {
+            user_name: Some("Grace".to_string()),
+            ..Settings::default()
+        };
+        crate::settings::save(&dst, &dst_settings).unwrap();
+        crate::skills::replace_from_export(&mut dst, "local-only", "Mine.", &[]).unwrap();
+        let mut local = crate::custom::CustomModels::default();
+        local.add(crate::custom::local_spec(
+            Path::new("/here/kept.gguf"),
+            1,
+            &[],
+        ));
+        crate::custom::save(&dst, &local).unwrap();
+        crate::plugin::import_records_json(&dst, r#"{"voice":{"enabled":false}}"#).unwrap();
+        let before = (
+            serde_json::to_value(crate::settings::load(&dst)).unwrap(),
+            serde_json::to_value(crate::skills::list(&dst)).unwrap(),
+            serde_json::to_value(crate::custom::load(&dst).all()).unwrap(),
+            crate::plugin::export_records_json(&dst).unwrap().0,
+        );
+
+        let summary = read_import_zip(&mut dst, &dest).unwrap();
+        assert_eq!(
+            (
+                summary.conversations,
+                summary.projects,
+                summary.artifacts,
+                summary.skills,
+                summary.custom_models,
+                summary.settings,
+                summary.plugins,
+                summary.skipped
+            ),
+            (1, 1, 1, 0, 0, false, 0, 0)
+        );
+        let after = (
+            serde_json::to_value(crate::settings::load(&dst)).unwrap(),
+            serde_json::to_value(crate::skills::list(&dst)).unwrap(),
+            serde_json::to_value(crate::custom::load(&dst).all()).unwrap(),
+            crate::plugin::export_records_json(&dst).unwrap().0,
+        );
+        assert_eq!(before, after);
+    }
+
+    #[test]
+    fn a_bad_entry_in_a_new_category_is_skipped_not_fatal() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("export.zip");
+        let good_spec = crate::custom::local_spec(Path::new("/x/good.gguf"), 1, &[]);
+        let custom_models = format!(
+            "[{}, {{\"not\": \"a model\"}}]",
+            serde_json::to_string(&good_spec).unwrap()
+        );
+        write_zip(
+            &dest,
+            &[
+                (
+                    "conversations/conv-1.json",
+                    &serde_json::to_string_pretty(&conversation("conv-1")).unwrap(),
+                ),
+                ("settings.json", "{not json"),
+                ("custom-models.json", &custom_models),
+                ("plugins.json", "[]"),
+                ("skills/no-skill-md/notes.md", "Orphan."),
+                ("skills/Bad Slug/SKILL.md", "Body."),
+                ("skills/fine/SKILL.md", "Fine."),
+            ],
+        );
+
+        let mut conn = test_conn();
+        let summary = read_import_zip(&mut conn, &dest).unwrap();
+        assert_eq!(
+            (
+                summary.conversations,
+                summary.skills,
+                summary.custom_models,
+                summary.settings,
+                summary.plugins
+            ),
+            (1, 1, 1, false, 0)
+        );
+        assert_eq!(
+            summary.skipped, 5,
+            "settings, one model entry, plugins, and two skills"
+        );
+        assert_eq!(skill(&conn, "fine").body, "Fine.");
+        assert!(crate::custom::load(&conn).get(&good_spec.id).is_some());
+        assert!(crate::settings::load(&conn).user_name.is_none());
+    }
+
+    /// The same refusal `update_settings` gives a plain-HTTP relay applies
+    /// to an imported one.
+    #[test]
+    fn imported_settings_with_a_refused_relay_url_are_skipped() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("export.zip");
+        let settings = Settings {
+            user_name: Some("Ada".to_string()),
+            sync_relay_url: Some("http://relay.example.com".to_string()),
+            ..Settings::default()
+        };
+        write_zip(
+            &dest,
+            &[("settings.json", &serde_json::to_string(&settings).unwrap())],
+        );
+
+        let mut conn = test_conn();
+        let summary = read_import_zip(&mut conn, &dest).unwrap();
+        assert!(!summary.settings);
+        assert_eq!(summary.skipped, 1);
+        assert!(crate::settings::load(&conn).user_name.is_none());
     }
 }

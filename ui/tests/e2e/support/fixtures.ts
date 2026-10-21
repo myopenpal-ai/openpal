@@ -60,6 +60,19 @@ export function freshInstallResponses(overrides: Record<string, unknown> = {}) {
     notify_native: null,
     list_plugins: [],
     list_cloud_models: [],
+    // Settings -> Your data asks for the export's size as soon as it opens,
+    // and again on every checkbox tick: 1 MB in bytes.
+    estimate_export_size: 1_048_576,
+    // ...and how much each of its checkboxes' categories holds.
+    export_counts: {
+      conversations: 0,
+      projects: 0,
+      artifacts: 0,
+      changedSettings: 0,
+      skills: 0,
+      customModels: 0,
+      enabledPlugins: 0,
+    },
     get_system_report: {
       hardware: {
         chip: "Apple M4",

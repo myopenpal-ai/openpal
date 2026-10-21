@@ -3817,7 +3817,21 @@ pub async fn update_settings(state: State<'_, AppState>, settings: Settings) -> 
     let experimental_changed = current.experimental_features != settings.experimental_features;
     *current = settings;
     save_settings(&state, &current)?;
+    apply_settings_change(&state, current, relay_url_changed, experimental_changed).await;
+    Ok(())
+}
 
+/// Carry a settings change into the parts of the running app that hold
+/// their own copy — the sync relay client and the plugin manager — once
+/// `current` already holds (and the database already stores) the new
+/// settings. Shared by `update_settings` and `import_data`, so imported
+/// settings take effect without a restart exactly the way edited ones do.
+async fn apply_settings_change(
+    state: &AppState,
+    current: tokio::sync::MutexGuard<'_, Settings>,
+    relay_url_changed: bool,
+    experimental_changed: bool,
+) {
     if relay_url_changed {
         // Repoints the SAME `MailboxClient` the pairing flows and
         // `sync_loop`'s tick already use, live — previously this setting
@@ -3839,8 +3853,6 @@ pub async fn update_settings(state: State<'_, AppState>, settings: Settings) -> 
             state.plugins.stop_experimental_services().await;
         }
     }
-
-    Ok(())
 }
 
 /// Star/unstar a model as a favorite, from the Library page or the
@@ -4933,14 +4945,16 @@ pub fn clear_logs(state: State<'_, AppState>) -> Result<usize, String> {
     Ok(logging::clear_old_app_logs(&state.paths.logs_dir))
 }
 
-/// Export everything the user has stored locally — conversations, projects,
-/// and artifacts — as one plaintext `.zip`, via the native save dialog.
-/// `Ok(None)` means the dialog was closed without a choice (not an error) —
-/// same cancel convention as [`download_artifact`].
+/// Export what the user has stored locally — whichever of chats (with
+/// projects and artifacts), settings, skills, custom models and plugin
+/// records `include` ticks — as one plaintext `.zip`, via the native save
+/// dialog. `Ok(None)` means the dialog was closed without a choice (not an
+/// error) — same cancel convention as [`download_artifact`].
 #[tauri::command]
 pub async fn export_data(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
+    include: openpal_core::export::ExportCategories,
 ) -> Result<Option<openpal_core::export::ExportSummary>, String> {
     use tauri_plugin_dialog::DialogExt;
 
@@ -4962,7 +4976,8 @@ pub async fn export_data(
     // export can be large, and every other command touching conversations/
     // projects/artifacts/settings/custom models/plugins would otherwise
     // stall behind it for as long as the zip write takes.
-    let export_data = openpal_core::export::read_export_data(&state.app_db.lock().unwrap());
+    let export_data =
+        openpal_core::export::read_export_data(&state.app_db.lock().unwrap(), &include);
     tokio::task::spawn_blocking(move || openpal_core::export::write_export_zip(&export_data, &dest))
         .await
         .map_err(internal)?
@@ -4970,11 +4985,44 @@ pub async fn export_data(
         .map_err(friendly)
 }
 
+/// The exact size in bytes of the `.zip` [`export_data`] would write right
+/// now for `include` — shown beside the export row's checkboxes and
+/// re-asked on every tick. Same lock discipline as `export_data`: the reads
+/// happen under a short lock, the compression it has to run to know the
+/// size happens off it, so chatting never waits on an estimate.
+#[tauri::command]
+pub async fn estimate_export_size(
+    state: State<'_, AppState>,
+    include: openpal_core::export::ExportCategories,
+) -> Result<u64, String> {
+    let export_data =
+        openpal_core::export::read_export_data(&state.app_db.lock().unwrap(), &include);
+    tokio::task::spawn_blocking(move || openpal_core::export::estimate_export_size(&export_data))
+        .await
+        .map_err(internal)?
+        .map_err(friendly)
+}
+
+/// How much each export category holds right now, for the counts beside
+/// the export row's checkboxes. A handful of `COUNT(*)`s under a short lock
+/// — async, so waiting on that lock (behind an import, say) never blocks
+/// the main thread the way a sync command would.
+#[tauri::command]
+pub async fn export_counts(
+    state: State<'_, AppState>,
+) -> Result<openpal_core::export::ExportCounts, String> {
+    Ok(openpal_core::export::count_export_contents(
+        &state.app_db.lock().unwrap(),
+    ))
+}
+
 /// Import a `.zip` produced by [`export_data`] on another device (or an
-/// earlier export on this one): reads back every conversation, project, and
-/// artifact it contains and upserts them into the local database, via the
-/// native open dialog. `Ok(None)` means the dialog was closed without a
-/// choice (not an error) — same cancel convention as `export_data`.
+/// earlier export on this one): brings back everything it contains into the
+/// local database, via the native open dialog, then reloads the settings,
+/// custom models and plugin records this process keeps in memory, so the
+/// import shows without a restart. `Ok(None)` means the dialog was closed
+/// without a choice (not an error) — same cancel convention as
+/// `export_data`.
 #[tauri::command]
 pub async fn import_data(
     app: tauri::AppHandle,
@@ -5000,14 +5048,30 @@ pub async fn import_data(
     // conversations/projects/artifacts/settings/custom models/plugins for as
     // long as a large import takes.
     let app_db = state.app_db.clone();
-    tokio::task::spawn_blocking(move || {
-        let conn = app_db.lock().unwrap();
-        openpal_core::import::read_import_zip(&conn, &src)
+    let summary = tokio::task::spawn_blocking(move || {
+        let mut conn = app_db.lock().unwrap();
+        openpal_core::import::read_import_zip(&mut conn, &src)
     })
     .await
     .map_err(internal)?
-    .map(Some)
-    .map_err(friendly)
+    .map_err(friendly)?;
+
+    if summary.settings {
+        let imported = openpal_core::settings::load(&state.app_db.lock().unwrap());
+        let mut current = state.settings.lock().await;
+        let relay_url_changed = current.sync_relay_url != imported.sync_relay_url;
+        let experimental_changed = current.experimental_features != imported.experimental_features;
+        *current = imported;
+        apply_settings_change(&state, current, relay_url_changed, experimental_changed).await;
+    }
+    if summary.custom_models > 0 {
+        let imported = custom::load(&state.app_db.lock().unwrap());
+        *state.custom.lock().await = imported;
+    }
+    if summary.plugins > 0 {
+        state.plugins.reload_records().await;
+    }
+    Ok(Some(summary))
 }
 
 /// `openpal-export-<unix-seconds>.zip` — a reasonable default so the save
@@ -5430,6 +5494,20 @@ mod tests {
         assert!(!should_notify_native(true, true));
         assert!(!should_notify_native(false, false));
         assert!(!should_notify_native(false, true));
+    }
+
+    /// A local-file custom model imported from another device points at a
+    /// file this one doesn't have: the Models screen lists it as not
+    /// installed rather than failing.
+    #[test]
+    fn a_local_file_model_whose_file_is_missing_reads_as_not_installed() {
+        let spec = custom::local_spec(
+            std::path::Path::new("/nowhere/on/this/device/model.gguf"),
+            1_000,
+            &[],
+        );
+        let path = spec.local_path.clone().unwrap();
+        assert!(matches!(model_status(&[path]), ModelStatus::NotInstalled));
     }
 
     #[test]

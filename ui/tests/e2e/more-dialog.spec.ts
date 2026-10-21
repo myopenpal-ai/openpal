@@ -118,7 +118,10 @@ test("every Settings category shows its own settings, and only those", async ({ 
     ["AI model", [text("Smart model loading"), text("Add your own models"), ...groups(["Performance"])]],
     ["Privacy & safety", [text("Crisis support banner"), ...groups(["App lock", "Parental controls"])]],
     ["Devices", groups(["Sync", "Remote access"])],
-    ["Your data", [text("Export your data"), ...groups(["Danger zone"])]],
+    [
+      "Your data",
+      [text("Export your data"), text("Estimated size: 1 MB"), ...groups(["Danger zone"])],
+    ],
     ["Advanced", groups(["Agent tools", "Experimental features", "Logs & diagnostics"])],
   ];
   for (const [category, shown] of expected) {

@@ -288,19 +288,46 @@
       },
       "exportData": {
         "label": "Exporter vos données",
-        "hint": "Enregistrez un .zip de tout ce qui est stocké sur cet appareil (discussions, projets et fichiers créés par l'IA) sous forme de fichiers ordinaires que vous pouvez ouvrir sans OpenPal.",
+        "hint": "Enregistrez un .zip de ce qui est stocké sur cet appareil sous forme de fichiers ordinaires que vous pouvez ouvrir sans OpenPal. Choisissez ci-dessous ce qu'il faut inclure.",
         "button": "Exporter les données…",
         "exporting": "Exportation…",
-        "done": "{{conversations}} discussion(s), {{projects}} projet(s) et {{artifacts}} fichier(s) exportés.",
-        "doneWithSkipped": "{{conversations}} discussion(s), {{projects}} projet(s) et {{artifacts}} fichier(s) exportés, mais {{skipped}} fichier(s) n'ont pas pu être inclus."
+        "done": "{{conversations}} discussion(s), {{projects}} projet(s), {{artifacts}} fichier(s), {{skills}} compétence(s) et {{customModels}} modèle(s) personnalisé(s) exportés.",
+        "doneWithSkipped": "{{conversations}} discussion(s), {{projects}} projet(s), {{artifacts}} fichier(s), {{skills}} compétence(s) et {{customModels}} modèle(s) personnalisé(s) exportés, mais {{skipped}} élément(s) n'ont pas pu être inclus.",
+        "include": {
+          "label": "Inclure",
+          "chats": "Discussions, projets et fichiers",
+          "settings": "Réglages",
+          "skills": "Compétences",
+          "customModels": "Modèles personnalisés",
+          "customModelsHint": "La liste seulement, pas les fichiers des modèles",
+          "plugins": "Modules",
+          "count": {
+            "chats_one": "{{count}} discussion",
+            "chats_other": "{{count}} discussions",
+            "projects_one": "{{count}} projet",
+            "projects_other": "{{count}} projets",
+            "files_one": "{{count}} fichier",
+            "files_other": "{{count}} fichiers",
+            "settings_one": "{{count}} modifié par rapport à la valeur par défaut",
+            "settings_other": "{{count}} modifiés par rapport aux valeurs par défaut",
+            "skills_one": "{{count}} compétence",
+            "skills_other": "{{count}} compétences",
+            "customModels_one": "{{count}} modèle",
+            "customModels_other": "{{count}} modèles",
+            "plugins_one": "{{count}} activé",
+            "plugins_other": "{{count}} activés"
+          }
+        },
+        "size": "Taille estimée : {{size}}",
+        "sizeCalculating": "Estimation de la taille…"
       },
       "importData": {
         "label": "Importer depuis un autre appareil",
-        "hint": "Choisissez un fichier .zip exporté depuis OpenPal sur un autre appareil (ou un export précédent sur celui-ci) pour y récupérer ses discussions, projets et fichiers.",
+        "hint": "Choisissez un fichier .zip exporté depuis OpenPal sur un autre appareil (ou un export précédent sur celui-ci) pour y récupérer ses discussions, projets, fichiers, compétences et réglages. Les réglages importés remplacent ceux de cet appareil.",
         "button": "Importer des données…",
         "importing": "Importation…",
-        "done": "{{conversations}} discussion(s), {{projects}} projet(s) et {{artifacts}} fichier(s) importés.",
-        "doneWithSkipped": "{{conversations}} discussion(s), {{projects}} projet(s) et {{artifacts}} fichier(s) importés, mais {{skipped}} fichier(s) n'ont pas pu être inclus."
+        "done": "{{conversations}} discussion(s), {{projects}} projet(s), {{artifacts}} fichier(s), {{skills}} compétence(s) et {{customModels}} modèle(s) personnalisé(s) importés.",
+        "doneWithSkipped": "{{conversations}} discussion(s), {{projects}} projet(s), {{artifacts}} fichier(s), {{skills}} compétence(s) et {{customModels}} modèle(s) personnalisé(s) importés, mais {{skipped}} élément(s) n'ont pas pu être inclus."
       },
       "logs": {
         "label": "Journaux récents",

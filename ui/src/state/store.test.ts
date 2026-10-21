@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import i18n from "../i18n";
 import {
   cloudModelsAvailable,
   expandSkillBody,
@@ -25,6 +26,7 @@ import type {
   InjectionNotice,
   PluginInfo,
   Project,
+  ImportSummary,
   Settings,
   Skill,
 } from "../lib/types";
@@ -1973,6 +1975,58 @@ describe("theme", () => {
       await pick;
       expect(useStore.getState().settings).toEqual({ ...settingsWith("dark"), userName: "Grace" });
       expect(pinned()).toBe("dark");
+    });
+  });
+
+  describe("reloadAfterImport", () => {
+    const imported = (overrides: Partial<ImportSummary> = {}): ImportSummary => ({
+      conversations: 0,
+      projects: 0,
+      artifacts: 0,
+      skills: 0,
+      customModels: 0,
+      settings: false,
+      plugins: 0,
+      skipped: 0,
+      ...overrides,
+    });
+    const loaders = () => ({
+      loadProjects: vi.fn().mockResolvedValue(undefined),
+      loadSkills: vi.fn().mockResolvedValue(undefined),
+      refreshModels: vi.fn().mockResolvedValue(undefined),
+      loadPlugins: vi.fn().mockResolvedValue(undefined),
+    });
+
+    afterEach(async () => {
+      await i18n.changeLanguage("en");
+    });
+
+    it("shows imported settings at once, theme and language included", async () => {
+      const spies = loaders();
+      useStore.setState({ settings: settingsWith("light"), ...spies });
+      getSettings.mockResolvedValue({ ...settingsWith("dark"), language: "fr", userName: "Grace" });
+
+      await useStore.getState().reloadAfterImport(imported({ settings: true, skills: 1 }));
+
+      expect(useStore.getState().settings?.userName).toBe("Grace");
+      expect(pinned()).toBe("dark");
+      expect(i18n.language).toBe("fr");
+      expect(spies.loadSkills).toHaveBeenCalled();
+      expect(spies.loadPlugins).toHaveBeenCalled();
+    });
+
+    it("leaves settings, skills, models and plugins alone for a chats-only zip", async () => {
+      const spies = loaders();
+      useStore.setState({ settings: settingsWith("light"), ...spies });
+
+      await useStore.getState().reloadAfterImport(imported({ conversations: 2 }));
+
+      expect(getSettings).not.toHaveBeenCalled();
+      expect(useStore.getState().settings).toEqual(settingsWith("light"));
+      expect(spies.loadProjects).toHaveBeenCalled();
+      expect(spies.loadSkills).not.toHaveBeenCalled();
+      expect(spies.refreshModels).not.toHaveBeenCalled();
+      expect(spies.loadPlugins).not.toHaveBeenCalled();
     });
   });
 });

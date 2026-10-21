@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import i18n from "../i18n";
 import {
   architectureLabel,
+  formatBytesAtLeast,
   formatChatStats,
   formatDuration,
   formatEta,
@@ -109,6 +110,21 @@ describe("totalModelSizeBytes", () => {
         extraShards: [{ sizeBytes: 2_000 }, { sizeBytes: 3_000 }],
       }),
     ).toBe(6_000);
+  });
+});
+
+describe("formatBytesAtLeast", () => {
+  const MB = 1024 ** 2;
+  const GB = 1024 ** 3;
+
+  it("rounds up to the step formatBytes shows, never down", () => {
+    expect(formatBytesAtLeast(22)).toBe("1 MB");
+    expect(formatBytesAtLeast(1.2 * MB)).toBe("2 MB");
+    expect(formatBytesAtLeast(5 * MB)).toBe("5 MB");
+    expect(formatBytesAtLeast(1023.5 * MB)).toBe("1 GB");
+    expect(formatBytesAtLeast(1.21 * GB)).toBe("1.3 GB");
+    expect(formatBytesAtLeast(9.95 * GB)).toBe("10 GB");
+    expect(formatBytesAtLeast(12.2 * GB)).toBe("13 GB");
   });
 });
 

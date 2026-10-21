@@ -45,6 +45,7 @@ import {
   recommendedSampling,
   type ResolvedPath,
   type ServiceState,
+  type ImportSummary,
   type Settings,
   type SetupState,
   type Skill,
@@ -727,6 +728,11 @@ interface Store {
 
   completeOnboarding: () => Promise<void>;
   saveSettings: (patch: Partial<Settings>) => Promise<void>;
+  /** Re-read everything a data import (`api.importData`) just changed on
+   * the Rust side, so it shows without a restart: the chat list and
+   * projects always, and settings (with the language and theme they set),
+   * skills, models and plugins when the zip carried them. */
+  reloadAfterImport: (summary: ImportSummary) => Promise<void>;
   /** Toggle "Show model thinking". Hides thinking from new replies at once;
    * the engine stops producing it on its next load. Never restarts a running
    * model, so an in-flight reply is safe. */
@@ -3359,6 +3365,25 @@ export const useStore = create<Store>()((set, get) => ({
           }
         }
       }
+    } catch (err: unknown) {
+      set({ notice: String(err) });
+    }
+  },
+
+  reloadAfterImport: async (summary) => {
+    try {
+      set({ conversations: await api.listConversations() });
+      void get().loadProjects();
+      if (summary.settings) {
+        const settings = await api.getSettings();
+        await i18n.changeLanguage(settings.language);
+        set({ settings, agentTools: agentToolsAvailable(settings) });
+      }
+      if (summary.skills > 0) void get().loadSkills();
+      // Imported settings can change fit (`diskOffload`) and which plugins
+      // are listed (`experimentalFeatures`), not just the lists themselves.
+      if (summary.customModels > 0 || summary.settings) void get().refreshModels();
+      if (summary.plugins > 0 || summary.settings) void get().loadPlugins();
     } catch (err: unknown) {
       set({ notice: String(err) });
     }

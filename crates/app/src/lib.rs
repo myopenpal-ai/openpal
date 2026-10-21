@@ -292,6 +292,8 @@ pub fn run() {
             commands::export_logs,
             commands::clear_logs,
             commands::export_data,
+            commands::estimate_export_size,
+            commands::export_counts,
             commands::import_data,
             commands::sync_group_create,
             commands::sync_group_secret,

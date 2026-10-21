@@ -28,6 +28,8 @@ import type {
   EnhanceOutcome,
   EngineStatus,
   EngineUpdateInfo,
+  ExportCategories,
+  ExportCounts,
   ExportSummary,
   HfListing,
   HfModelDetails,
@@ -553,14 +555,24 @@ export const api = {
   exportLogs: () => invoke<boolean>("export_logs"),
   /** Delete old daily log files (keeps the current one). Resolves to the count removed. */
   clearLogs: () => invoke<number>("clear_logs"),
-  /** Export every conversation, project, and artifact as one plaintext
-   * `.zip` via the native save dialog. Resolves to `null` if the dialog was
-   * closed without a choice (not an error). */
-  exportData: () => invoke<ExportSummary | null>("export_data"),
+  /** Export the categories `include` ticks (chats with their projects and
+   * files, settings, skills, custom models, plugins) as one plaintext `.zip`
+   * via the native save dialog. Resolves to `null` if the dialog was closed
+   * without a choice (not an error). */
+  exportData: (include: ExportCategories) =>
+    invoke<ExportSummary | null>("export_data", { include }),
+  /** The exact size in bytes of the `.zip` `exportData(include)` would write
+   * right now. */
+  estimateExportSize: (include: ExportCategories) =>
+    invoke<number>("estimate_export_size", { include }),
+  /** How much each export category holds right now (chats, projects,
+   * files, changed settings, skills, custom models, plugins turned on). */
+  exportCounts: () => invoke<ExportCounts>("export_counts"),
   /** Read back a `.zip` produced by `exportData` (on this device or another)
-   * via the native open dialog, upserting its conversations, projects, and
-   * artifacts into local storage. Resolves to `null` if the dialog was
-   * closed without a choice (not an error). */
+   * via the native open dialog, bringing back whatever it contains — chats,
+   * projects, files, settings (replacing this device's), skills, custom
+   * models and plugin choices. Resolves to `null` if the dialog was closed
+   * without a choice (not an error). */
   importData: () => invoke<ImportSummary | null>("import_data"),
   /** Record a webview-side message in the same log file as the backend. */
   logFrontend: (level: "error" | "warn" | "info" | "debug", message: string) =>

@@ -288,19 +288,46 @@
       },
       "exportData": {
         "label": "Export your data",
-        "hint": "Save a .zip of everything stored on this device (chats, projects, and files the AI created) as plain files you can open without OpenPal.",
+        "hint": "Save a .zip of what's stored on this device as plain files you can open without OpenPal. Choose what to include below.",
         "button": "Export data…",
         "exporting": "Exporting…",
-        "done": "Exported {{conversations}} chat(s), {{projects}} project(s), and {{artifacts}} file(s).",
-        "doneWithSkipped": "Exported {{conversations}} chat(s), {{projects}} project(s), and {{artifacts}} file(s), but {{skipped}} file(s) couldn't be included."
+        "done": "Exported {{conversations}} chat(s), {{projects}} project(s), {{artifacts}} file(s), {{skills}} skill(s) and {{customModels}} custom model(s).",
+        "doneWithSkipped": "Exported {{conversations}} chat(s), {{projects}} project(s), {{artifacts}} file(s), {{skills}} skill(s) and {{customModels}} custom model(s), but {{skipped}} item(s) couldn't be included.",
+        "include": {
+          "label": "Include",
+          "chats": "Chats, projects and files",
+          "settings": "Settings",
+          "skills": "Skills",
+          "customModels": "Custom models",
+          "customModelsHint": "The list only, not the model files",
+          "plugins": "Plugins",
+          "count": {
+            "chats_one": "{{count}} chat",
+            "chats_other": "{{count}} chats",
+            "projects_one": "{{count}} project",
+            "projects_other": "{{count}} projects",
+            "files_one": "{{count}} file",
+            "files_other": "{{count}} files",
+            "settings_one": "{{count}} changed from the default",
+            "settings_other": "{{count}} changed from the defaults",
+            "skills_one": "{{count}} skill",
+            "skills_other": "{{count}} skills",
+            "customModels_one": "{{count}} model",
+            "customModels_other": "{{count}} models",
+            "plugins_one": "{{count}} turned on",
+            "plugins_other": "{{count}} turned on"
+          }
+        },
+        "size": "Estimated size: {{size}}",
+        "sizeCalculating": "Estimating size…"
       },
       "importData": {
         "label": "Import from another device",
-        "hint": "Choose a .zip exported from OpenPal on another device (or an earlier export on this one) to bring its chats, projects, and files here.",
+        "hint": "Choose a .zip exported from OpenPal on another device (or an earlier export on this one) to bring its chats, projects, files, skills and settings here. Imported settings replace the ones on this device.",
         "button": "Import data…",
         "importing": "Importing…",
-        "done": "Imported {{conversations}} chat(s), {{projects}} project(s), and {{artifacts}} file(s).",
-        "doneWithSkipped": "Imported {{conversations}} chat(s), {{projects}} project(s), and {{artifacts}} file(s), but {{skipped}} file(s) couldn't be included."
+        "done": "Imported {{conversations}} chat(s), {{projects}} project(s), {{artifacts}} file(s), {{skills}} skill(s) and {{customModels}} custom model(s).",
+        "doneWithSkipped": "Imported {{conversations}} chat(s), {{projects}} project(s), {{artifacts}} file(s), {{skills}} skill(s) and {{customModels}} custom model(s), but {{skipped}} item(s) couldn't be included."
       },
       "logs": {
         "label": "Latest logs",

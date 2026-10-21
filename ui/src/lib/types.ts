@@ -455,6 +455,31 @@ export interface Artifact {
   sizeBytes: number;
 }
 
+/** Which parts of the user's data a data export includes, one checkbox each
+ * in Settings → Your data. `chats` covers conversations, projects and
+ * artifacts together. Mirrors Rust `ExportCategories`. */
+export interface ExportCategories {
+  chats: boolean;
+  settings: boolean;
+  skills: boolean;
+  customModels: boolean;
+  plugins: boolean;
+}
+
+/** How much each export category holds right now, shown beside the export
+ * row's checkboxes. Mirrors Rust `ExportCounts`. */
+export interface ExportCounts {
+  conversations: number;
+  projects: number;
+  artifacts: number;
+  /** Settings that differ from a fresh install's (all of them are exported). */
+  changedSettings: number;
+  skills: number;
+  customModels: number;
+  /** Plugins currently turned on. */
+  enabledPlugins: number;
+}
+
 /** Result of a data export: how many zip entries were written per category,
  * plus how many source rows couldn't be read. Mirrors Rust
  * `ExportSummary`. */
@@ -462,6 +487,12 @@ export interface ExportSummary {
   conversations: number;
   projects: number;
   artifacts: number;
+  skills: number;
+  customModels: number;
+  /** Whether the settings went in. */
+  settings: boolean;
+  /** How many plugin records went in. */
+  plugins: number;
   skipped: number;
 }
 
@@ -472,6 +503,12 @@ export interface ImportSummary {
   conversations: number;
   projects: number;
   artifacts: number;
+  skills: number;
+  customModels: number;
+  /** Whether the zip's settings replaced this device's. */
+  settings: boolean;
+  /** How many plugin records the zip carried. */
+  plugins: number;
   skipped: number;
 }
 

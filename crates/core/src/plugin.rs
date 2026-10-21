@@ -678,6 +678,39 @@ impl PluginManager {
         }
     }
 
+    /// Re-read the persisted records after something other than this
+    /// manager rewrote them (a data import, see [`import_records_json`]) —
+    /// otherwise the next enable/disable would save the stale in-memory copy
+    /// over the import. Re-derives each idle plugin's setup state from the
+    /// new records (one mid-setup or failed is left alone) and stops the
+    /// service of any plugin the import turned off.
+    pub async fn reload_records(&self) {
+        let records = load_records(&self.db.lock().unwrap());
+        let to_stop: Vec<String> = {
+            let mut inner = self.inner.lock().await;
+            for p in &self.plugins {
+                if let Some(rt) = inner.runtime.get_mut(&p.manifest.id) {
+                    if matches!(rt.setup, SetupState::Ready | SetupState::NotSetup) {
+                        rt.setup = if is_set_up(&records, &self.data_root, p) {
+                            SetupState::Ready
+                        } else {
+                            SetupState::NotSetup
+                        };
+                    }
+                }
+            }
+            inner.records = records;
+            self.plugins
+                .iter()
+                .filter(|p| !self.is_active(&inner.records, p))
+                .map(|p| p.manifest.id.clone())
+                .collect()
+        };
+        for id in to_stop {
+            self.stop_service(&id).await;
+        }
+    }
+
     // -- internals ---------------------------------------------------------
 
     fn find(&self, id: &str) -> Option<&DiscoveredPlugin> {
@@ -1186,6 +1219,39 @@ fn save_records(conn: &Connection, records: &HashMap<String, PluginRecord>) {
          ON CONFLICT(key) DO UPDATE SET json = excluded.json",
         params![json],
     );
+}
+
+/// Every persisted enable/setup record, as the pretty JSON object (`id` →
+/// `{enabled, setupVersion}`) a full data export writes to `plugins.json`
+/// (`crate::export`), with how many records it holds.
+pub fn export_records_json(conn: &Connection) -> Result<(String, usize), serde_json::Error> {
+    let records = load_records(conn);
+    Ok((serde_json::to_string_pretty(&records)?, records.len()))
+}
+
+/// How many plugins the persisted records say are turned on — what the
+/// data export's Plugins checkbox reports it would carry.
+pub fn enabled_record_count(conn: &Connection) -> usize {
+    load_records(conn).values().filter(|r| r.enabled).count()
+}
+
+/// Merge a `plugins.json` written by [`export_records_json`] (on this device
+/// or another) into the persisted records, returning how many it carried.
+/// Each imported plugin takes the imported `enabled`; plugins absent from
+/// it keep theirs. `setupVersion` always stays this device's own: it
+/// describes a venv on *this* disk, so a plugin set up elsewhere but never
+/// here still reads as not set up and offers setup when turned on. A running
+/// [`PluginManager`] keeps its own copy of the records — follow this with
+/// [`PluginManager::reload_records`].
+pub fn import_records_json(conn: &Connection, json: &str) -> Result<usize, serde_json::Error> {
+    let imported: HashMap<String, PluginRecord> = serde_json::from_str(json)?;
+    let mut records = load_records(conn);
+    for (id, rec) in &imported {
+        records.entry(id.clone()).or_default().enabled = rec.enabled;
+    }
+    migrate_renamed_ids(&mut records);
+    save_records(conn, &records);
+    Ok(imported.len())
 }
 
 fn free_port() -> std::io::Result<u16> {
@@ -1700,6 +1766,51 @@ mod tests {
             manager.list().await[0].setup,
             SetupState::NotSetup
         ));
+    }
+
+    /// A data import from a device where the add-on was enabled and set up
+    /// turns it on here, but — never set up on this device — it still
+    /// offers setup rather than claiming to be ready, and a running manager
+    /// sees the import without a restart.
+    #[tokio::test]
+    async fn an_imported_set_up_record_still_offers_setup_on_a_new_device() {
+        let tmp = tempfile::tempdir().unwrap();
+        let plugin_dir = tmp.path().join("plugins/addon");
+        std::fs::create_dir_all(&plugin_dir).unwrap();
+        std::fs::write(
+            plugin_dir.join("plugin.json"),
+            r#"{"id":"addon","name":"Addon","version":"0.1.0","capabilities":["cap"],
+                "python":{"setup":"setup_plugin.py","service":"service.py"}}"#,
+        )
+        .unwrap();
+        let db = test_conn();
+        let manager = PluginManager::new(
+            vec![tmp.path().join("plugins")],
+            tmp.path().join("plugin-data"),
+            db.clone(),
+        );
+        assert!(!manager.list().await[0].enabled);
+
+        let count = import_records_json(
+            &db.lock().unwrap(),
+            r#"{"addon":{"enabled":true,"setupVersion":"0.1.0"}}"#,
+        )
+        .unwrap();
+        assert_eq!(count, 1);
+        manager.reload_records().await;
+
+        let addon = &manager.list().await[0];
+        assert!(addon.enabled);
+        assert!(matches!(addon.setup, SetupState::NotSetup));
+        assert!(!manager.is_ready(&manager.plugins[0]).await);
+        assert_eq!(
+            manager
+                .ensure_capability_service("cap", |_| {})
+                .await
+                .unwrap_err(),
+            "This add-on is still setting up. Try again in a moment.",
+            "never tries to start a service from a venv that isn't here"
+        );
     }
 
     /// A user who had the plugin enabled under its old `model-router` id
