@@ -347,9 +347,10 @@ interface Store {
   engineBusy: boolean;
   /** True right after `stopModel` (the Sidebar's explicit "Unload" button) —
    * consumed and cleared by the composer's typing-triggered preload effect
-   * the next time it sees it, so a deliberate unload isn't silently undone by
-   * continuing to type, but a later, fresh burst of typing preloads normally
-   * again. Also cleared by any `useModel` call (a fresh load supersedes it). */
+   * the next time it sees it, so a deliberate unload made mid-draft isn't
+   * silently undone by continuing to type, but a later, fresh burst of typing
+   * (or one started after an unload with an empty composer) preloads normally.
+   * Also cleared by any `useModel` call (a fresh load supersedes it). */
   userStoppedModel: boolean;
   view: View;
   /** Set by `startChatWithDraft` (the standalone "Improve a message"

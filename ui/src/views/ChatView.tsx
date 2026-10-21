@@ -2658,10 +2658,16 @@ function Composer({ locked }: { locked: boolean }) {
   // mid-burst, so don't undo that by reloading it on the next keystroke".
   // It consumes (and clears) the store's `userStoppedModel` flag the first
   // time it observes it, and itself resets once the draft empties — a later,
-  // fresh burst of typing preloads normally again.
+  // fresh burst of typing preloads normally again. The flag only suppresses
+  // when the draft was already non-empty on the previous run: an unload made
+  // with an empty composer happened before this burst started, so the first
+  // keystroke of the new draft preloads as usual.
   const typingTouchRef = useRef(0);
   const suppressPreloadRef = useRef(false);
+  const draftWasEmptyRef = useRef(true);
   useEffect(() => {
+    const draftWasEmpty = draftWasEmptyRef.current;
+    draftWasEmptyRef.current = draft.trim() === "";
     if (draft.trim() === "") {
       suppressPreloadRef.current = false;
       return;
@@ -2676,7 +2682,7 @@ function Composer({ locked }: { locked: boolean }) {
     }
 
     if (s.userStoppedModel) {
-      suppressPreloadRef.current = true;
+      if (!draftWasEmpty) suppressPreloadRef.current = true;
       useStore.setState({ userStoppedModel: false });
     }
 
