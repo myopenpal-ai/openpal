@@ -628,6 +628,9 @@ describe("model loaded and unloaded", () => {
 // ---------------------------------------------------------------------------
 
 describe("answer ready", () => {
+  // A loaded model, which a chat turn waits for before it runs.
+  beforeEach(() => setEngine(running("qwen")));
+
   /** A conversation with one finished exchange, open in the chat view. */
   const withExchange = () =>
     conversation({
@@ -1176,6 +1179,7 @@ describe("native notifications", () => {
     },
     answerReady: async () => {
       // The conversation stays open in the chat view: no in-app alert.
+      setEngine(running("qwen"));
       completeReply();
       await useStore.getState().send("Make a report");
     },
@@ -1208,6 +1212,7 @@ describe("native notifications", () => {
 
   it("mirrors the answer together with its alert when the conversation is not the open one", async () => {
     goToBackground();
+    setEngine(running("qwen"));
     nextStream((on) => {
       on(token("Here you go."));
       on(done);

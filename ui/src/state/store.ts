@@ -1073,10 +1073,21 @@ function saveTurnEarly(set: SetState, conversationId: string | undefined) {
   earlySaves.set(conversationId, saving);
 }
 
-/** Start the request at the head of `modelRequests` if it's still waiting. */
+/** Whether a chat turn can be answered right now: a cloud model always can,
+ * a local one once it has loaded. */
+export function chatModelReady(state: Pick<Store, "engine" | "settings">): boolean {
+  return state.settings?.chatBackend === "cloud" || state.engine.type === "running";
+}
+
+/** Start the request at the head of `modelRequests` if it's still waiting.
+ * A chat turn also waits for a model to answer it — sent before the model
+ * loaded, it holds the head (and so everything behind it, in order) until
+ * the engine reports running; the engine subscriber at the bottom of this
+ * file calls back in here when it does. */
 function startNextModelRequest(set: SetState, get: GetState) {
   const head = get().modelRequests[0];
   if (!head || head.status === "running") return;
+  if (head.kind === "chat" && !chatModelReady(get())) return;
   setModelRequests(set, (requests) =>
     requests.map((r, i) => (i === 0 ? { ...r, status: "running" as const } : r)),
   );
@@ -1147,7 +1158,7 @@ async function runGeneration(
   // the caller — read back off it rather than re-threading it as its own
   // parameter.
   const placeholder = conversation.messages[conversation.messages.length - 1];
-  const replyModel = placeholder.model;
+  let replyModel = placeholder.model;
   const assistantId = placeholder.id;
   const assistantCreatedAtMs = placeholder.createdAtMs;
 
@@ -1273,14 +1284,22 @@ async function runGeneration(
     () => ({ active: conversation, chatError: null }),
   );
   // Its first turn: not listed until saved, and saved early only if it
-  // would otherwise be out of reach — starting with having to wait.
+  // would otherwise be out of reach — starting with having to wait, behind
+  // another request or for the model to load.
   if (!get().conversations.some((c) => c.id === conversation.id)) {
     unlistedTurns.add(conversation.id);
-    if (get().modelRequests[0]?.id !== requestId) saveTurnEarly(set, conversation.id);
+    const request = get().modelRequests.find((r) => r.id === requestId);
+    if (request?.status !== "running") saveTurnEarly(set, conversation.id);
   }
   const started = await turnStarted;
   if (started) {
     stopRequestedForTurn = false;
+    // A turn that waited for a load is answered by whichever model loaded,
+    // not necessarily the one selected when it was sent.
+    const engine = get().engine;
+    if (get().settings?.chatBackend !== "cloud" && engine.type === "running") {
+      replyModel = engine.data.modelId;
+    }
     if (beforeStream) await beforeStream();
   }
 
@@ -3015,6 +3034,22 @@ export const useStore = create<Store>()((set, get) => ({
       }
     };
 
+    // Sent before the model has loaded: the turn waits for it in the queue
+    // (see `startNextModelRequest`), and pressing Send is an explicit ask for
+    // the selected model — even right after the user unloaded it by hand —
+    // so start loading it unless a load is already on its way. With nothing
+    // selected or downloaded the turn just waits until the user loads one.
+    if (
+      settingsNow?.chatBackend !== "cloud" &&
+      (engine.type === "stopped" || engine.type === "failed") &&
+      !get().engineBusy
+    ) {
+      const selected = settingsNow?.selectedModelId;
+      const installed =
+        !!selected && get().models.find((m) => m.spec.id === selected)?.status.type === "installed";
+      if (installed) void get().useModel(selected);
+    }
+
     return await runGeneration(set, get, conversation, history, undefined, checkRisk);
   },
 
@@ -3779,6 +3814,22 @@ useStore.subscribe((state, prev) => {
       conversations: s.conversations.map((c) => (c.id === id ? { ...c, unread: false } : c)),
     }));
     Promise.resolve(api.setConversationUnread(id, false)).catch(() => {});
+  } catch {
+    // See below.
+  }
+});
+
+// Starts a chat turn that was waiting for a model the moment one can answer
+// it — the engine reports running, or the backend turns to cloud — however
+// that came about: the load Send started, the user loading one in Models, or
+// "Try again" after a failed load. Same module-scope and wrapping reasoning
+// as the listener below.
+useStore.subscribe((state, prev) => {
+  try {
+    if (state.engine === prev.engine && state.settings === prev.settings) return;
+    if (chatModelReady(state) && !chatModelReady(prev)) {
+      startNextModelRequest(useStore.setState, useStore.getState);
+    }
   } catch {
     // See below.
   }

@@ -1023,6 +1023,8 @@
   "chatView": {
     "queued": {
       "waiting": "Waiting for the model to finish its current task…",
+      "waitingForLoad": "Waiting for the model to load…",
+      "noModel": "No model is ready yet. Pick or download one in Models and your message will be sent once it has loaded.",
       "cancel": "Cancel this request"
     },
     "sources": {

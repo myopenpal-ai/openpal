@@ -1,6 +1,14 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { chatRequestFor, resetAlertTracking, useStore } from "./store";
-import type { ChatEvent, ChatMessage, Conversation, ConversationMeta, Settings } from "../lib/types";
+import type {
+  ChatEvent,
+  ChatMessage,
+  Conversation,
+  ConversationMeta,
+  EngineStatus,
+  ModelInfo,
+  Settings,
+} from "../lib/types";
 import { DEFAULT_SAMPLING } from "../lib/types";
 
 const {
@@ -46,6 +54,11 @@ interface Stream {
 }
 
 let streams: Stream[] = [];
+
+const RUNNING = {
+  type: "running",
+  data: { modelId: "m", port: 1, diskSlow: false, autoUnloadAt: null },
+} as const;
 
 /** Let every pending promise continuation run. */
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
@@ -147,6 +160,8 @@ beforeEach(() => {
   useStore.setState({
     active: null,
     conversations: [meta("a"), meta("b"), meta("c")],
+    engine: RUNNING,
+    engineBusy: false,
     modelRequests: [],
     streaming: false,
     chatError: null,
@@ -265,6 +280,167 @@ describe("queued chat turns", () => {
     );
     expect(useStore.getState().safetyAlerts.b).toEqual({ turn: 3, dismissedTurn: null });
     await streams[1].finish();
+  });
+});
+
+describe("sending before the model has loaded", () => {
+  const installed = {
+    spec: { id: "m", name: "Model M" },
+    status: { type: "installed", data: { path: "/models/m.gguf", sizeBytes: 1 } },
+  } as unknown as ModelInfo;
+  const STARTING = { type: "starting", data: { modelId: "m", progressPercent: null } } as const;
+  const loaded = (modelId = "m") =>
+    useStore.setState({ engine: { ...RUNNING, data: { ...RUNNING.data, modelId } } });
+
+  /** Stands in for a load: shows the model starting at once, as the real
+   * `useModel` does, and leaves the rest to the test. */
+  const useModel = vi.fn(async (modelId: string) => {
+    useStore.setState({ engine: { type: "starting", data: { modelId, progressPercent: null } } });
+  });
+
+  function unloaded(engine: EngineStatus, settings: Partial<Settings> = {}) {
+    useStore.setState({
+      engine,
+      models: [installed],
+      settings: {
+        chatBackend: "local",
+        selectedModelId: "m",
+        riskDetectionEnabled: true,
+        ...settings,
+      } as Settings,
+      useModel,
+    });
+  }
+
+  beforeEach(() => useModel.mockClear());
+  afterEach(() => useStore.setState({ useModel: useStore.getInitialState().useModel }));
+
+  it("waits for the load Send starts — even after a manual unload — then runs, checked first", async () => {
+    unloaded({ type: "stopped" });
+    useStore.setState({ userStoppedModel: true });
+    const { settled } = await sendIn("a", "I feel hopeless");
+
+    expect(useModel).toHaveBeenCalledWith("m");
+    expect(requests()).toEqual([["a", "waiting"]]);
+    expect(useStore.getState().active?.messages.at(-2)?.content).toBe("I feel hopeless");
+    expect(chatStream).not.toHaveBeenCalled();
+    expect(classifyRisk).not.toHaveBeenCalled();
+
+    classifyRisk.mockResolvedValueOnce("risk");
+    loaded();
+    await flush();
+
+    expect(requests()).toEqual([["a", "running"]]);
+    expect(classifyRisk).toHaveBeenCalledWith("I feel hopeless");
+    expect(classifyRisk.mock.invocationCallOrder[0]).toBeLessThan(
+      chatStream.mock.invocationCallOrder[0],
+    );
+    expect(useStore.getState().safetyAlerts.a).toBeDefined();
+    await streams[0].finish();
+    await settled;
+  });
+
+  it("doesn't start a second load while one is on its way", async () => {
+    unloaded(STARTING);
+    await sendIn("a", "first");
+
+    expect(useModel).not.toHaveBeenCalled();
+    expect(requests()).toEqual([["a", "waiting"]]);
+
+    loaded();
+    await flush();
+    await streams[0].finish();
+  });
+
+  it("keeps every request in order behind it, sent before or after the load", async () => {
+    unloaded(STARTING);
+    await sendIn("a", "first");
+    const tool = vi.fn(async () => "done");
+    const toolResult = useStore.getState().runModelRequest({ id: "wt", kind: "writingTool" }, tool);
+    await sendIn("b", "second");
+    expect(requests()).toEqual([
+      ["a", "waiting"],
+      ["writingTool", "waiting"],
+      ["b", "waiting"],
+    ]);
+
+    loaded();
+    await flush();
+    expect(requests()).toEqual([
+      ["a", "running"],
+      ["writingTool", "waiting"],
+      ["b", "waiting"],
+    ]);
+    await sendIn("c", "third");
+
+    await streams[0].finish();
+    expect(tool).toHaveBeenCalledTimes(1);
+    expect(await toolResult).toBe("done");
+    await flush();
+    await streams[1].finish();
+    await streams[2].finish();
+    expect(streams.map((s) => s.conversationId)).toEqual(["a", "b", "c"]);
+  });
+
+  it("with no model selected, waits without loading one and runs once the user loads one", async () => {
+    unloaded({ type: "stopped" }, { selectedModelId: null });
+    const { settled } = await sendIn("a", "first");
+
+    expect(useModel).not.toHaveBeenCalled();
+    expect(requests()).toEqual([["a", "waiting"]]);
+
+    loaded("picked-in-models");
+    await flush();
+    streams[0].emit(token("Hello"));
+    await streams[0].finish();
+    // Answered by, and credited to, the model that loaded.
+    expect((await settled)?.messages.at(-1)?.model).toBe("picked-in-models");
+  });
+
+  it("can be cancelled on its own, and the load carries on", async () => {
+    unloaded({ type: "stopped" });
+    const { settled } = await sendIn("a", "first");
+
+    await useStore.getState().cancelModelRequest(chatRequestFor(useStore.getState(), "a")!.id);
+
+    expect(useStore.getState().modelRequests).toEqual([]);
+    expect((await settled)?.messages.at(-1)).toEqual(
+      expect.objectContaining({ role: "user", content: "first" }),
+    );
+    expect(stopGeneration).not.toHaveBeenCalled();
+    expect(useStore.getState().engine).toEqual(STARTING);
+    loaded();
+    await flush();
+    expect(chatStream).not.toHaveBeenCalled();
+  });
+
+  it("keeps the message when the load fails, and answers it once a load succeeds", async () => {
+    unloaded({ type: "stopped" });
+    useModel.mockImplementationOnce(async () => {
+      useStore.setState({ engine: { type: "failed", data: { message: "Not enough memory" } } });
+    });
+    const { settled } = await sendIn("a", "first");
+
+    expect(useStore.getState().engine.type).toBe("failed");
+    expect(requests()).toEqual([["a", "waiting"]]);
+    expect(useStore.getState().active?.messages.at(-2)?.content).toBe("first");
+    expect(chatStream).not.toHaveBeenCalled();
+
+    // "Try again" on the failure banner.
+    loaded();
+    await flush();
+    streams[0].emit(token("Hello"));
+    await streams[0].finish();
+    expect((await settled)?.messages.at(-2)?.content).toBe("first");
+  });
+
+  it("leaves the cloud backend as it was: answered at once, nothing loaded", async () => {
+    unloaded({ type: "stopped" }, { chatBackend: "cloud" });
+    await sendIn("a", "first");
+
+    expect(useModel).not.toHaveBeenCalled();
+    expect(requests()).toEqual([["a", "running"]]);
+    await streams[0].finish();
   });
 });
 

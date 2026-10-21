@@ -1023,6 +1023,8 @@
   "chatView": {
     "queued": {
       "waiting": "En attente que le modèle termine sa tâche en cours…",
+      "waitingForLoad": "En attente du chargement du modèle…",
+      "noModel": "Aucun modèle n'est encore prêt. Choisissez-en ou téléchargez-en un dans Modèles : votre message sera envoyé dès qu'il sera chargé.",
       "cancel": "Annuler cette demande"
     },
     "sources": {

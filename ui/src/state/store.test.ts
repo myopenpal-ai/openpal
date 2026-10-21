@@ -184,6 +184,17 @@ function plugin(overrides: Partial<PluginInfo> = {}): PluginInfo {
   };
 }
 
+// A model is loaded: a chat turn only reaches `api.chatStream` once one is
+// (see `startNextModelRequest`).
+beforeEach(() => {
+  useStore.setState({
+    engine: {
+      type: "running",
+      data: { modelId: "m", port: 1, diskSlow: false, autoUnloadAt: null },
+    },
+  });
+});
+
 describe("modelBrowserAvailable", () => {
   it("is false with no plugins", () => {
     expect(modelBrowserAvailable([])).toBe(false);

@@ -1,15 +1,27 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { act, render, screen } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import "../i18n";
 import ChatView from "./ChatView";
 import { resetAlertTracking, useStore, type ModelRequest } from "../state/store";
-import type { Conversation, PluginInfo } from "../lib/types";
+import type {
+  ChatEvent,
+  Conversation,
+  EngineStatus,
+  ModelInfo,
+  PluginInfo,
+  Settings,
+} from "../lib/types";
 import { DEFAULT_SAMPLING } from "../lib/types";
 
-const { enhancePrompt } = vi.hoisted(() => ({
+const apiMocks = vi.hoisted(() => ({
   enhancePrompt: vi.fn().mockResolvedValue({ type: "enhanced", data: { text: "A clearer ask." } }),
+  chatStream: vi.fn(),
+  classifyRisk: vi.fn().mockResolvedValue(null),
+  getParentalStatus: vi.fn().mockResolvedValue(null),
+  listConversations: vi.fn().mockResolvedValue([]),
 }));
+const { enhancePrompt, chatStream, classifyRisk, getParentalStatus } = apiMocks;
 
 const RUNNING = {
   type: "running",
@@ -26,9 +38,7 @@ vi.mock("../lib/api", () => ({
       get: (_api, name) =>
         name === "getEngineStatus"
           ? vi.fn().mockResolvedValue(RUNNING)
-          : name === "enhancePrompt"
-            ? enhancePrompt
-            : vi.fn().mockResolvedValue(null),
+          : (apiMocks[name as keyof typeof apiMocks] ?? vi.fn().mockResolvedValue(null)),
     },
   ),
 }));
@@ -169,6 +179,126 @@ describe("ChatView for a conversation whose own reply is running", () => {
     for (const button of screen.getAllByRole("button", { name: /^Fork$/ })) {
       expect(button).toBeEnabled();
     }
+  });
+});
+
+describe("sending before the model has loaded", () => {
+  const installed = {
+    spec: { id: "m", name: "Model M" },
+    status: { type: "installed", data: { path: "/models/m.gguf", sizeBytes: 1 } },
+  } as unknown as ModelInfo;
+
+  /** The real `send` and queue, with the engine as given and `useModel`
+   * standing in for a load: it only shows the model as starting, like the
+   * real one does at once. */
+  function showUnloaded(engine: EngineStatus, settings: Partial<Settings> = {}) {
+    resetAlertTracking();
+    chatStream.mockReset();
+    classifyRisk.mockClear();
+    const useModel = vi.fn(async (modelId: string) => {
+      useStore.setState({ engine: { type: "starting", data: { modelId, progressPercent: null } } });
+    });
+    const initial = useStore.getInitialState();
+    useStore.setState({
+      engine,
+      settings: {
+        // Off, so it's Send — not typing — that starts the load.
+        autoUnloadEnabled: false,
+        chatBackend: "local",
+        selectedModelId: "m",
+        ...settings,
+      } as Settings,
+      models: [installed],
+      conversations: [],
+      active: conversation("b", "settled answer"),
+      modelRequests: [],
+      streaming: false,
+      engineBusy: false,
+      send: initial.send,
+      cancelModelRequest: initial.cancelModelRequest,
+      useModel,
+    });
+    render(<ChatView />);
+    return { user: userEvent.setup(), useModel };
+  }
+
+  it("sends while unloaded: the message waits, then runs once the engine reports running", async () => {
+    const { user, useModel } = showUnloaded({ type: "stopped" });
+    let emit!: (event: ChatEvent) => void;
+    let finish!: () => void;
+    chatStream.mockImplementation(
+      (_id: string, _messages: unknown, _ws: boolean, _at: boolean, _s: unknown, onEvent) =>
+        new Promise<void>((resolve) => {
+          emit = onEvent;
+          finish = resolve;
+        }),
+    );
+
+    await user.type(screen.getByRole("textbox"), "a question");
+    const sendButton = screen.getByRole("button", { name: "Send" });
+    expect(sendButton).toBeEnabled();
+    await user.click(sendButton);
+
+    expect(useModel).toHaveBeenCalledWith("m");
+    expect(await screen.findByText("a question")).toBeInTheDocument();
+    expect(screen.getByText("Waiting for the model to load…")).toBeInTheDocument();
+    expect(chatStream).not.toHaveBeenCalled();
+    expect(classifyRisk).not.toHaveBeenCalled();
+
+    await act(async () => useStore.setState({ engine: RUNNING }));
+
+    await waitFor(() => expect(chatStream).toHaveBeenCalledTimes(1));
+    expect(classifyRisk).toHaveBeenCalledWith("a question");
+    expect(screen.queryByText("Waiting for the model to load…")).not.toBeInTheDocument();
+    act(() => emit({ type: "token", data: { text: "Here is the answer." } }));
+    expect(await screen.findAllByText("Here is the answer.")).not.toHaveLength(0);
+
+    await act(async () => finish());
+  });
+
+  it("keeps the message on screen, and shows why, when the load fails", async () => {
+    const { user, useModel } = showUnloaded({ type: "stopped" });
+    useModel.mockImplementationOnce(async () => {
+      useStore.setState({ engine: { type: "failed", data: { message: "Not enough memory" } } });
+    });
+
+    await user.type(screen.getByRole("textbox"), "a question");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Not enough memory");
+    expect(screen.getByText("a question")).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Cancel this request" })).toHaveLength(2);
+    expect(chatStream).not.toHaveBeenCalled();
+
+    await act(async () => {
+      await useStore.getState().cancelModelRequest(useStore.getState().modelRequests[0].id);
+    });
+  });
+
+  it("still keeps Send disabled while the parental lock is on", async () => {
+    getParentalStatus.mockResolvedValueOnce({ locked: true });
+    const { user } = showUnloaded({ type: "stopped" });
+
+    await user.type(screen.getByRole("textbox"), "a question");
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "Send" })).toBeDisabled());
+  });
+
+  it("with no model selected, takes the message and says to pick one", async () => {
+    const { user, useModel } = showUnloaded({ type: "stopped" }, { selectedModelId: null });
+
+    await user.type(screen.getByRole("textbox"), "a question");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+
+    expect(useModel).not.toHaveBeenCalled();
+    expect(
+      await screen.findByText(/No model is ready yet\. Pick or download one in Models/),
+    ).toBeInTheDocument();
+    expect(chatStream).not.toHaveBeenCalled();
+
+    await act(async () => {
+      await useStore.getState().cancelModelRequest(useStore.getState().modelRequests[0].id);
+    });
   });
 });
 

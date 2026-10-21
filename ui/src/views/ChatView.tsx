@@ -64,6 +64,7 @@ import {
 } from "../lib/types";
 import {
   agentToolsAvailable,
+  chatModelReady,
   chatRequestFor,
   isSafetyAlertVisible,
   smartModelRouterAvailable,
@@ -1274,6 +1275,15 @@ export default function ChatView() {
   const activeRequest = useStore((s) => chatRequestFor(s, s.active?.id));
   const replyRunning = activeRequest?.status === "running";
   const replyWaiting = activeRequest?.status === "waiting";
+  // What a waiting reply waits for: the model to load, a model to load at
+  // all, or — once one is loaded — the requests ahead of it.
+  const waitingLabelKey = useStore((s) =>
+    chatModelReady(s)
+      ? "chatView.queued.waiting"
+      : s.engine.type === "starting"
+        ? "chatView.queued.waitingForLoad"
+        : "chatView.queued.noModel",
+  );
   const busyHere = activeRequest !== undefined;
   const cancelModelRequest = useStore((s) => s.cancelModelRequest);
   const liveActivity = useStore((s) => s.liveActivity);
@@ -1724,7 +1734,10 @@ export default function ChatView() {
                     )}
                     <div className="msg-assistant">
                       {isWaitingReply && activeRequest ? (
-                        <QueuedNotice onCancel={() => void cancelModelRequest(activeRequest.id)} />
+                        <QueuedNotice
+                          label={t(waitingLabelKey)}
+                          onCancel={() => void cancelModelRequest(activeRequest.id)}
+                        />
                       ) : noBody && isStreamingReply ? (
                         showActivity ? null : (
                           <span className="thinking">
@@ -2386,9 +2399,10 @@ function Composer({ locked }: { locked: boolean }) {
   };
 
   // A cloud model needs no local engine — it's always "ready" the moment
-  // it's selected (no subprocess to wake up), unlike a local model. Only
-  // Send waits on this — typing, attaching, and toggling web search all work
-  // regardless of whether a model is loaded yet.
+  // it's selected (no subprocess to wake up), unlike a local model. Only the
+  // Message improver waits on this — typing, attaching, toggling web search
+  // and Send all work regardless of whether a model is loaded yet (a message
+  // sent before then waits for the load in its conversation, see `send`).
   const ready = cloudMode || engine.type === "running";
 
   // The model that will answer — the running/starting engine, else the saved
@@ -2459,9 +2473,8 @@ function Composer({ locked }: { locked: boolean }) {
   // The "+" menu's "Add files" item: pick images (vision models only) and/or
   // documents through a native dialog. Rust reads the files — images to
   // data: URIs, documents to extracted text. Works regardless of model
-  // loading state — only Send waits on `ready`. Documents are pre-checked
-  // for prompt injection only in a chat whose turns are checked: one with
-  // agent tools or web search on.
+  // loading state. Documents are pre-checked for prompt injection only in a
+  // chat whose turns are checked: one with agent tools or web search on.
   const addFiles = async () => {
     try {
       const picked = await api.pickAttachments(visionOk, agentToolsOn || webSearchOn);
@@ -2490,8 +2503,13 @@ function Composer({ locked }: { locked: boolean }) {
   const removeAttachment = (index: number) =>
     setAttachments((a) => a.filter((_, i) => i !== index));
 
+  // On a phone paired with a desktop there's no model to load here: Send
+  // waits for the desktop to be reachable, as before.
+  const remoteDown =
+    !cloudMode && (engine.type === "remoteUnpaired" || engine.type === "remoteUnreachable");
+
   const canSend =
-    ready &&
+    !remoteDown &&
     !locked &&
     !replyRequest &&
     !improving &&
@@ -2630,7 +2648,7 @@ function Composer({ locked }: { locked: boolean }) {
   }, [improving, improveRequestId, cancelModelRequest]);
 
   const submit = async () => {
-    if (!ready || locked || replyRequest || improving) return;
+    if (remoteDown || locked || replyRequest || improving) return;
     if (draft.trim() === "" && attachments.length === 0) return;
     const text = draft;
     const atts = attachments;
