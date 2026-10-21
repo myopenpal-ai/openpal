@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { api } from "../lib/api";
 import { copyText } from "../lib/clipboard";
 import { keptStatus, MAX_DRAFT_CHARS } from "../lib/draftImprover";
+import QueuedNotice from "../components/QueuedNotice";
 import { useStore } from "../state/store";
 
 /**
@@ -16,38 +17,47 @@ import { useStore } from "../state/store";
  * chatting yet."
  *
  * Same shape as `WritingToolsScreen` (single-turn, non-conversational, no
- * Library/`app_db` persistence, sets the store's top-level `streaming` flag
- * around its own request so chat-side guards transparently cover this too,
- * and vice versa) but simpler: `enhance_prompt` is a single, non-streaming
+ * Library/`app_db` persistence, one request in the store's `modelRequests`
+ * queue — waiting, cancellable, behind a reply already running, and
+ * cancelled if the user leaves the screen) but simpler: `enhance_prompt` is a single, non-streaming
  * `invoke` (the result is cleaned once in Rust, never partial), not a
  * `Channel`-streamed one, and there's no document upload, chunking, or
  * tracked-changes diff — just a draft in, a result out.
  */
 export default function ImproveView() {
   const { t } = useTranslation();
-  const engineStreaming = useStore((s) => s.streaming);
+  const runModelRequest = useStore((s) => s.runModelRequest);
+  const cancelModelRequest = useStore((s) => s.cancelModelRequest);
   const startChatWithDraft = useStore((s) => s.startChatWithDraft);
 
   const [draft, setDraft] = useState("");
   const [resultText, setResultText] = useState("");
   const [status, setStatus] = useState<{ text: string; alert: boolean } | null>(null);
   const [busy, setBusy] = useState(false);
+  // This screen's request in `modelRequests` while `busy`.
+  const [requestId, setRequestId] = useState<string | null>(null);
+  const waiting = useStore(
+    (s) =>
+      requestId !== null && s.modelRequests.some((r) => r.id === requestId && r.status === "waiting"),
+  );
   const [copied, setCopied] = useState(false);
 
   // StrictMode-safe request guard, same shape as WritingToolsScreen.
   const requestSeq = useRef(0);
   const alive = useRef(true);
+  const requestIdRef = useRef<string | null>(null);
   useEffect(() => {
     alive.current = true;
     return () => {
       alive.current = false;
+      const id = requestIdRef.current;
+      if (id) void useStore.getState().cancelModelRequest(id).catch(() => {});
     };
   }, []);
 
   const trimmed = draft.trim();
-  const blockedByChat = engineStreaming && !busy;
   const tooLong = draft.length > MAX_DRAFT_CHARS;
-  const canRun = trimmed.length > 0 && !tooLong && !busy && !blockedByChat;
+  const canRun = trimmed.length > 0 && !tooLong && !busy;
 
   const run = async () => {
     if (!canRun) return;
@@ -57,12 +67,20 @@ export default function ImproveView() {
     setBusy(true);
     setResultText("");
     setStatus(null);
-    useStore.setState({ streaming: true });
+    const id = crypto.randomUUID();
+    requestIdRef.current = id;
+    setRequestId(id);
 
     try {
-      const outcome = await api.enhancePrompt(trimmed);
+      const outcome = await runModelRequest({ id, kind: "improve" }, () =>
+        api.enhancePrompt(trimmed),
+      );
       if (isStale()) return;
-      if (outcome.type === "enhanced") {
+      if (outcome === undefined) {
+        // Cancelled before it started.
+        const { key, alert } = keptStatus("cancelled");
+        setStatus({ text: t(key), alert });
+      } else if (outcome.type === "enhanced") {
         setResultText(outcome.data.text);
       } else {
         const { key, alert } = keptStatus(outcome.data.reason);
@@ -71,12 +89,17 @@ export default function ImproveView() {
     } catch (err: unknown) {
       if (!isStale()) setStatus({ text: String(err), alert: true });
     } finally {
-      if (!isStale()) setBusy(false);
-      useStore.setState({ streaming: false });
+      if (requestIdRef.current === id) requestIdRef.current = null;
+      if (!isStale()) {
+        setBusy(false);
+        setRequestId(null);
+      }
     }
   };
 
-  const stop = () => void api.stopGeneration();
+  const stop = () => {
+    if (requestId) void cancelModelRequest(requestId);
+  };
 
   const copy = async () => {
     if (await copyText(resultText)) {
@@ -148,11 +171,6 @@ export default function ImproveView() {
               {t("improveView.tooLong")}
             </p>
           )}
-          {blockedByChat && (
-            <p className="writing-tools-notice" role="status">
-              {t("improveView.engineBusy")}
-            </p>
-          )}
           {status && (
             <p className="writing-tools-error" role={status.alert ? "alert" : "status"}>
               {status.text}
@@ -160,7 +178,9 @@ export default function ImproveView() {
           )}
 
           <div className="writing-tools-actions">
-            {busy ? (
+            {busy && waiting ? (
+              <QueuedNotice onCancel={stop} />
+            ) : busy ? (
               <button type="button" className="btn-ghost" onClick={stop}>
                 {t("improveView.stop")}
               </button>

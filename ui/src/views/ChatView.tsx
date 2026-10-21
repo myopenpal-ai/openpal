@@ -17,6 +17,7 @@ import SafetyBanner from "../components/SafetyBanner";
 import { ToolConsentCard } from "../components/ToolConsentCard";
 import { AskUserCard } from "../components/AskUserCard";
 import { InjectionReviewCard } from "../components/InjectionReviewCard";
+import QueuedNotice from "../components/QueuedNotice";
 import {
   InjectionNotices,
   injectionNoticeText,
@@ -63,6 +64,7 @@ import {
 } from "../lib/types";
 import {
   agentToolsAvailable,
+  chatRequestFor,
   isSafetyAlertVisible,
   smartModelRouterAvailable,
   type LiveActivity,
@@ -600,7 +602,9 @@ function CopyButton({ text }: { text: string }) {
 function VariantNav({ anchorKey, active, total }: { anchorKey: string; active: number; total: number }) {
   const { t } = useTranslation();
   const setActiveVariant = useStore((s) => s.setActiveVariant);
-  const streaming = useStore((s) => s.streaming);
+  // Locked only while this conversation's own turn is in flight: it would
+  // rewrite the transcript that turn is being saved into.
+  const busyHere = useStore((s) => chatRequestFor(s, s.active?.id) !== undefined);
   if (total <= 1) return null;
   return (
     <div className="msg-variant-nav" aria-label={t("chatView.variantNav.counter", { current: active + 1, total })}>
@@ -608,7 +612,7 @@ function VariantNav({ anchorKey, active, total }: { anchorKey: string; active: n
         className="msg-variant-nav-btn"
         title={t("chatView.variantNav.previous")}
         aria-label={t("chatView.variantNav.previous")}
-        disabled={streaming || active === 0}
+        disabled={busyHere || active === 0}
         onClick={() => void setActiveVariant(anchorKey, active - 1)}
       >
         <ChevronLeftIcon />
@@ -618,7 +622,7 @@ function VariantNav({ anchorKey, active, total }: { anchorKey: string; active: n
         className="msg-variant-nav-btn"
         title={t("chatView.variantNav.next")}
         aria-label={t("chatView.variantNav.next")}
-        disabled={streaming || active === total - 1}
+        disabled={busyHere || active === total - 1}
         onClick={() => void setActiveVariant(anchorKey, active + 1)}
       >
         <ChevronRightIcon />
@@ -1265,7 +1269,13 @@ function useStreamingAnnouncement(
 export default function ChatView() {
   const { t } = useTranslation();
   const active = useStore((s) => s.active);
-  const streaming = useStore((s) => s.streaming);
+  // This conversation's own reply in flight, if any: running (streaming
+  // into the last message) or waiting behind another request.
+  const activeRequest = useStore((s) => chatRequestFor(s, s.active?.id));
+  const replyRunning = activeRequest?.status === "running";
+  const replyWaiting = activeRequest?.status === "waiting";
+  const busyHere = activeRequest !== undefined;
+  const cancelModelRequest = useStore((s) => s.cancelModelRequest);
   const liveActivity = useStore((s) => s.liveActivity);
   const liveActivityLabel = useLiveActivityLabel(liveActivity);
   const pendingToolConsent = useStore((s) => s.pendingToolConsent);
@@ -1299,14 +1309,14 @@ export default function ChatView() {
   // together, and the composer glides down once the first message is sent.
   const isEmpty = messages.length === 0;
   const composerSlotRef = useComposerGlide<HTMLDivElement>(isEmpty);
-  const streamAnnouncements = useStreamingAnnouncement(messages, streaming, liveActivityLabel);
+  const streamAnnouncements = useStreamingAnnouncement(messages, replyRunning, liveActivityLabel);
   // The streaming reply's newest "sent as typed" notice, for the status
   // region below. The other outcomes follow the user's own answer on a
   // review card (announced as an alertdialog), but this one shows up with
   // nothing else to draw attention to it.
   const lastMessage = messages[messages.length - 1];
   const latestSentNotice =
-    streaming && lastMessage?.role === "assistant"
+    replyRunning && lastMessage?.role === "assistant"
       ? [...(lastMessage.injectionNotices ?? [])].reverse().find((n) => n.outcome === "sent")
       : undefined;
   const activeId = active?.id;
@@ -1373,7 +1383,7 @@ export default function ChatView() {
   };
 
   // A new chat, switching chats, or a fresh turn closes any open editor.
-  useEffect(cancelEdit, [activeId, streaming]);
+  useEffect(cancelEdit, [activeId, busyHere]);
 
   // Editing an earlier turn is typing too — same reasoning as the composer's
   // own effect (see Composer), just the touch/pause half: an edit doesn't
@@ -1446,12 +1456,13 @@ export default function ChatView() {
   }, [scrollToMessageId, clearScrollToMessage, detach]);
 
   // Sending a message re-pins, so the new turn streams into view even if
-  // the user had scrolled up to re-read. Only on the send itself: scrolling
-  // up while the reply is streaming stays put.
+  // the user had scrolled up to re-read — or shows waiting, if it queued.
+  // Only on the send itself: scrolling up while the reply is streaming
+  // stays put.
   useEffect(() => {
-    if (!streaming) return;
+    if (!busyHere) return;
     scrollToBottom();
-  }, [streaming, scrollToBottom]);
+  }, [busyHere, scrollToBottom]);
 
   return (
     <PreviewContext.Provider value={preview}>
@@ -1603,7 +1614,7 @@ export default function ChatView() {
                           <button
                             className="msg-action"
                             title={t("chatView.message.edit")}
-                            disabled={streaming}
+                            disabled={busyHere}
                             onClick={() => {
                               setEditingIndex(i);
                               setEditDraft(shown);
@@ -1620,7 +1631,10 @@ export default function ChatView() {
                     </div>
                   );
                 }
-                const isStreamingReply = streaming && isLast;
+                const isStreamingReply = replyRunning && isLast;
+                // The reply this conversation is waiting to get: nothing to
+                // show or act on yet but the wait itself.
+                const isWaitingReply = replyWaiting && isLast;
                 const noBody = message.content === "";
                 const hasThinking = !!message.thinking;
                 const hasSteps = !!message.steps && message.steps.length > 0;
@@ -1709,7 +1723,9 @@ export default function ChatView() {
                       />
                     )}
                     <div className="msg-assistant">
-                      {noBody && isStreamingReply ? (
+                      {isWaitingReply && activeRequest ? (
+                        <QueuedNotice onCancel={() => void cancelModelRequest(activeRequest.id)} />
+                      ) : noBody && isStreamingReply ? (
                         showActivity ? null : (
                           <span className="thinking">
                             <span className="thinking-dot" />
@@ -1731,14 +1747,14 @@ export default function ChatView() {
                     {message.citations && message.citations.length > 0 && (
                       <Sources citations={message.citations} />
                     )}
-                    {!isStreamingReply && (
+                    {!isStreamingReply && !isWaitingReply && (
                       <VariantNav
                         anchorKey={retryAnchorKey}
                         active={retryBranch?.active ?? 0}
                         total={retryBranch?.variants.length ?? 1}
                       />
                     )}
-                    {!isStreamingReply && (
+                    {!isStreamingReply && !isWaitingReply && (
                       <div className="msg-actions-row">
                         <div className="msg-actions">
                           {/* Nothing to copy or read aloud on a tool-only turn
@@ -1748,7 +1764,6 @@ export default function ChatView() {
                           <button
                             className="msg-action"
                             title={t("chatView.message.fork")}
-                            disabled={streaming}
                             onClick={() => setPendingForkIndex(i)}
                           >
                             <ForkIcon />
@@ -1757,7 +1772,7 @@ export default function ChatView() {
                           <button
                             className="msg-action"
                             title={t("chatView.message.retry")}
-                            disabled={streaming}
+                            disabled={busyHere}
                             onClick={() => void retryMessage(i)}
                           >
                             <RetryIcon />
@@ -2232,9 +2247,13 @@ function Composer({ locked }: { locked: boolean }) {
     }
   }, []);
   const engine = useStore((s) => s.engine);
-  const streaming = useStore((s) => s.streaming);
+  // This conversation's own reply in flight, if any: until it ends this
+  // composer offers Stop (or Cancel, while it waits) instead of Send. Every
+  // other conversation can still send meanwhile — those turns queue.
+  const replyRequest = useStore((s) => chatRequestFor(s, s.active?.id));
   const send = useStore((s) => s.send);
-  const stopGeneration = useStore((s) => s.stopGeneration);
+  const runModelRequest = useStore((s) => s.runModelRequest);
+  const cancelModelRequest = useStore((s) => s.cancelModelRequest);
   const plugins = useStore((s) => s.plugins);
   const webSearch = useStore((s) => s.webSearch);
   const setWebSearch = useStore((s) => s.setWebSearch);
@@ -2260,6 +2279,14 @@ function Composer({ locked }: { locked: boolean }) {
   // the hint slot. `improveStatus.raw`, when set, is a backend error string
   // shown as-is instead of an i18n key.
   const [improving, setImproving] = useState(false);
+  // The in-flight improve's id in `modelRequests`, to show it waiting and to
+  // stop or cancel exactly it.
+  const [improveRequestId, setImproveRequestId] = useState<string | null>(null);
+  const improveWaiting = useStore(
+    (s) =>
+      improveRequestId !== null &&
+      s.modelRequests.some((r) => r.id === improveRequestId && r.status === "waiting"),
+  );
   const [previousDraft, setPreviousDraft] = useState<string | null>(null);
   const [improveStatus, setImproveStatus] = useState<{
     key: ImproveStatusKey;
@@ -2276,10 +2303,15 @@ function Composer({ locked }: { locked: boolean }) {
   // StrictMode-safe request guard, same shape as WritingToolsView.
   const improveRequestSeq = useRef(0);
   const improveAlive = useRef(true);
+  // Leaving with an improve still queued or running cancels it: its rewrite
+  // has no draft left to land in.
+  const improveRequestIdRef = useRef<string | null>(null);
   useEffect(() => {
     improveAlive.current = true;
     return () => {
       improveAlive.current = false;
+      const id = improveRequestIdRef.current;
+      if (id) void useStore.getState().cancelModelRequest(id).catch(() => {});
     };
   }, []);
   const addTriggerRef = useRef<HTMLButtonElement>(null);
@@ -2461,7 +2493,7 @@ function Composer({ locked }: { locked: boolean }) {
   const canSend =
     ready &&
     !locked &&
-    !streaming &&
+    !replyRequest &&
     !improving &&
     (draft.trim() !== "" || attachments.length > 0);
 
@@ -2495,7 +2527,6 @@ function Composer({ locked }: { locked: boolean }) {
   const blocker = improveBlocker({
     locked,
     improving,
-    streaming,
     ready,
     starting: engine.type === "starting",
     diskSlow,
@@ -2513,11 +2544,21 @@ function Composer({ locked }: { locked: boolean }) {
     setPreviousDraft(original);
     setImproving(true);
     setImproveStatus({ key: "chatView.composer.improve.working", alert: false });
+    // Waits its turn behind any reply already using the model.
+    const requestId = crypto.randomUUID();
+    improveRequestIdRef.current = requestId;
+    setImproveRequestId(requestId);
 
     try {
-      const outcome = await api.enhancePrompt(textToImprove);
+      const outcome = await runModelRequest({ id: requestId, kind: "improve" }, () =>
+        api.enhancePrompt(textToImprove),
+      );
       if (isStale()) return;
-      if (outcome.type === "enhanced") {
+      if (outcome === undefined) {
+        // Cancelled before it started.
+        setPreviousDraft(null);
+        setImproveStatus(keptStatus("cancelled"));
+      } else if (outcome.type === "enhanced") {
         if (draftRef.current !== original) {
           // The user (or a finishing dictation) changed the draft while
           // this request was in flight — never overwrite their newer text.
@@ -2548,9 +2589,21 @@ function Composer({ locked }: { locked: boolean }) {
         raw: String(err),
       });
     } finally {
-      if (!isStale()) setImproving(false);
+      if (improveRequestIdRef.current === requestId) improveRequestIdRef.current = null;
+      if (!isStale()) {
+        setImproving(false);
+        setImproveRequestId(null);
+      }
     }
   };
+
+  const stopButtonKey = improving
+    ? improveWaiting
+      ? "chatView.queued.cancel"
+      : "chatView.composer.improve.stopTitle"
+    : replyRequest?.status === "waiting"
+      ? "chatView.queued.cancel"
+      : "chatView.composer.stop";
 
   const undoImprove = () => {
     if (previousDraft === null) return;
@@ -2567,17 +2620,17 @@ function Composer({ locked }: { locked: boolean }) {
   useEffect(() => {
     if (!improving) return;
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
+      if (e.key === "Escape" && improveRequestId) {
         e.preventDefault();
-        void api.stopGeneration();
+        void cancelModelRequest(improveRequestId);
       }
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [improving]);
+  }, [improving, improveRequestId, cancelModelRequest]);
 
   const submit = async () => {
-    if (!ready || locked || streaming || improving) return;
+    if (!ready || locked || replyRequest || improving) return;
     if (draft.trim() === "" && attachments.length === 0) return;
     const text = draft;
     const atts = attachments;
@@ -2850,16 +2903,17 @@ function Composer({ locked }: { locked: boolean }) {
               <SparkleIcon />
             </button>
           )}
-          {streaming || improving ? (
+          {improving || replyRequest ? (
+            // Stops what's running, or cancels what's still waiting — the
+            // improve first, since it's what this composer just started.
             <button
               className="composer-send composer-stop"
-              onClick={() => void stopGeneration()}
-              aria-label={t(
-                improving ? "chatView.composer.improve.stopTitle" : "chatView.composer.stop",
-              )}
-              title={t(
-                improving ? "chatView.composer.improve.stopTitle" : "chatView.composer.stop",
-              )}
+              onClick={() => {
+                const id = improving ? improveRequestId : (replyRequest?.id ?? null);
+                if (id) void cancelModelRequest(id);
+              }}
+              aria-label={t(stopButtonKey)}
+              title={t(stopButtonKey)}
             >
               ■
             </button>
@@ -2887,7 +2941,9 @@ function Composer({ locked }: { locked: boolean }) {
               className="composer-hint-status"
             >
               {improving && <span className="searching-spinner" aria-hidden="true" />}
-              {improveStatus.raw ?? t(improveStatus.key)}
+              {improveWaiting
+                ? t("chatView.queued.waiting")
+                : (improveStatus.raw ?? t(improveStatus.key))}
             </span>
             {previousDraft !== null && !improving && (
               <button

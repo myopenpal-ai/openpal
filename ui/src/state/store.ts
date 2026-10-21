@@ -151,6 +151,31 @@ interface RespondedClarifyingQuestion {
   answer: string;
 }
 
+/** What a request to the model is for — see `Store.modelRequests`. */
+export type ModelRequestKind = "chat" | "writingTool" | "improve";
+
+/** One request to the model, waiting its turn or running — see
+ * `Store.modelRequests`. */
+export interface ModelRequest {
+  id: string;
+  kind: ModelRequestKind;
+  /** The conversation a chat reply is for; null for the one-shot tools
+   * (Translate/Correct, the Message improver). */
+  conversationId: string | null;
+  status: "waiting" | "running";
+}
+
+/** The chat request in flight — waiting or running — for `conversationId`,
+ * if any. A conversation has at most one: its composer waits for it (Stop
+ * or Cancel) instead of queueing a second turn behind it. */
+export function chatRequestFor(
+  state: { modelRequests: ModelRequest[] },
+  conversationId: string | null | undefined,
+): ModelRequest | undefined {
+  if (!conversationId) return undefined;
+  return state.modelRequests.find((r) => r.kind === "chat" && r.conversationId === conversationId);
+}
+
 /** What a streaming turn is doing right now, before (or between) its answer
  * text — kept structured rather than as display text so `ChatView` can
  * localize it. */
@@ -351,6 +376,19 @@ interface Store {
    * message when a chat starts with a matching trigger (see `send`). */
   skills: Skill[];
   active: Conversation | null;
+  /** Every request to the model, in the order they run: the first one is
+   * running once it's `running`, the rest wait. The local engine takes one
+   * request at a time, so a chat reply, a Translate/Correct run or a Message
+   * improver request started while another runs waits here — shown as
+   * waiting where it was started, cancellable on its own — instead of being
+   * refused, and the rest of the app stays usable meanwhile. A request is
+   * only sent to Rust once it reaches the head; Rust's own queue
+   * (`crates/app/src/generation.rs`) is what guarantees the engine never
+   * sees two at once. See `runModelRequest`/`cancelModelRequest`. */
+  modelRequests: ModelRequest[];
+  /** Whether any request in `modelRequests` is in flight — running or
+   * waiting. Not "the chat shown is streaming": that's `chatRequestFor`
+   * on the active conversation. */
   streaming: boolean;
   /** Set by `openConversationAtMessage` right after switching `active` — the
    * id of the message `ChatView` should scroll to and briefly highlight once
@@ -607,8 +645,11 @@ interface Store {
   updateGeneration: (
     patch: Partial<Pick<Conversation, "sampling" | "contextLength" | "taskType">>,
   ) => void;
-  /** Returns the settled conversation once the turn finishes (or
-   * `undefined` if it never started — already streaming, or nothing to
+  /** Sends at once when nothing else is using the model, or queues the
+   * turn behind what is (see `modelRequests`) — shown in its conversation as
+   * waiting meanwhile. Returns the settled conversation once the turn
+   * finishes, cancelled-while-waiting included (or `undefined` if it never
+   * started — this conversation already has a turn in flight, or nothing to
    * send). Callers that need to act on exactly this turn's own result
    * (e.g. `editMessage`'s follow-up branch bookkeeping) should use this
    * return value rather than re-reading `get().active`, which could by
@@ -628,7 +669,20 @@ interface Store {
    * branch point keyed by `anchorKey` (see `branchAnchorKey`) — used by
    * the edit-history/retry-history arrow navigation. */
   setActiveVariant: (anchorKey: string, variantIndex: number) => Promise<void>;
+  /** Stop the chat reply running right now, if there is one. */
   stopGeneration: () => Promise<void>;
+  /** Queue `job` behind every request already in `modelRequests` and run it
+   * once they've all finished — Translate/Correct and the Message improver
+   * go through here; chat turns queue themselves (see `send`). Resolves to
+   * `job`'s result, or `undefined` if the request was cancelled before it
+   * started. `request.id` is the caller's, so it can show and cancel it. */
+  runModelRequest: <T>(
+    request: { id: string; kind: ModelRequestKind },
+    job: () => Promise<T>,
+  ) => Promise<T | undefined>;
+  /** Cancel one request: a waiting one leaves the queue without ever
+   * reaching the model; the running one is stopped, and the next starts. */
+  cancelModelRequest: (id: string) => Promise<void>;
   /** Marks `safetyAlerts[conversationId]`'s current turn as dismissed —
    * see that field's doc comment. No-op if there's no entry for it. */
   dismissSafetyAlert: (conversationId: string) => void;
@@ -781,11 +835,40 @@ const engineNames = new Map<string, string>();
 const announcedKeys = new Set<string>();
 const MAX_ANNOUNCED_KEYS = 64;
 
-/** Set by the `stopGeneration` action while a reply is streaming; cleared at
- * the start of every `runGeneration`. Pressing Stop makes the backend end the
+/** Set when the running chat reply is stopped (`cancelModelRequest`, which
+ * `stopGeneration` goes through); cleared as each chat turn starts running —
+ * only one ever runs at a time. Pressing Stop makes the backend end the
  * stream with a perfectly normal `done` event, so this is the only way to tell
  * a stopped reply from a finished one. */
 let stopRequestedForTurn = false;
+
+/** How each waiting request in `modelRequests` learns its fate: called with
+ * `true` once it reaches the head and runs, `false` if it's cancelled first.
+ * Keyed by request id. */
+const modelRequestStarts = new Map<string, (started: boolean) => void>();
+
+/** Conversations with a chat turn in flight, by id: the conversation as that
+ * turn currently has it (the reply so far, or the empty placeholder while it
+ * waits). `openConversation` shows this rather than the saved copy, which
+ * lags behind until the turn settles. */
+const liveTurns = new Map<string, () => Conversation>();
+
+/** Brand-new conversations whose first turn is in flight and which aren't
+ * saved yet, so the Sidebar doesn't list them. See `saveTurnEarly`. */
+const unlistedTurns = new Set<string>();
+
+/** The early saves `saveTurnEarly` started, by conversation id — the turn's
+ * own save waits for its conversation's, so the two can't land out of
+ * order. */
+const earlySaves = new Map<string, Promise<void>>();
+
+/** Conversations deleted while their turn was in flight: the turn still
+ * settles, but must not save the conversation back. */
+const discardedConversations = new Set<string>();
+
+/** A chat turn's error, kept for its conversation when it ended while the
+ * user was looking at another one — shown once they open it again. */
+const backgroundChatErrors = new Map<string, string>();
 
 /** Set once the Rust "engine status changed" listener is registered (by
  * `finishBootAfterUnlock`), so a second boot path can't stack a second one. */
@@ -828,6 +911,12 @@ export function resetAlertTracking(): void {
   engineNames.clear();
   announcedKeys.clear();
   stopRequestedForTurn = false;
+  modelRequestStarts.clear();
+  liveTurns.clear();
+  unlistedTurns.clear();
+  earlySaves.clear();
+  discardedConversations.clear();
+  backgroundChatErrors.clear();
   engineNudgeRegistered = false;
   clickNudgeRegistered = false;
   updateRestarting = false;
@@ -904,6 +993,77 @@ function resetPerConversationUiState(get: GetState) {
   };
 }
 
+/** Replace `modelRequests` — and `streaming` with it — plus whatever else
+ * `extra` sets, in one update. */
+function setModelRequests(
+  set: SetState,
+  update: (requests: ModelRequest[]) => ModelRequest[],
+  extra?: (s: Store) => Partial<Store>,
+) {
+  set((s) => {
+    const modelRequests = update(s.modelRequests);
+    return { ...extra?.(s), modelRequests, streaming: modelRequests.length > 0 };
+  });
+}
+
+/** Save a brand-new conversation whose first turn is still in flight, as it
+ * stands without its unfinished reply, the moment it would otherwise be out
+ * of reach — its turn has to wait behind another request, or the user moves
+ * to another conversation — so the Sidebar can lead back to it (and its
+ * waiting turn can be cancelled from there). A no-op for anything already
+ * saved. The turn removes this copy again if nothing comes of it. */
+function saveTurnEarly(set: SetState, conversationId: string | undefined) {
+  if (!conversationId || !unlistedTurns.has(conversationId)) return;
+  const live = liveTurns.get(conversationId);
+  if (!live) return;
+  unlistedTurns.delete(conversationId);
+  const conversation = live();
+  const saving = (async () => {
+    try {
+      await api.saveConversation({ ...conversation, messages: conversation.messages.slice(0, -1) });
+      set({ conversations: await api.listConversations() });
+    } catch {
+      // A convenience; the turn still saves when it settles.
+    }
+  })();
+  earlySaves.set(conversationId, saving);
+}
+
+/** Start the request at the head of `modelRequests` if it's still waiting. */
+function startNextModelRequest(set: SetState, get: GetState) {
+  const head = get().modelRequests[0];
+  if (!head || head.status === "running") return;
+  setModelRequests(set, (requests) =>
+    requests.map((r, i) => (i === 0 ? { ...r, status: "running" as const } : r)),
+  );
+  const start = modelRequestStarts.get(head.id);
+  modelRequestStarts.delete(head.id);
+  start?.(true);
+}
+
+/** Add a request to the back of `modelRequests` (with `extra` in the same
+ * update) and resolve once it's its turn — `true` — or it was cancelled
+ * while waiting — `false`. Whoever gets `true` must call
+ * `finishModelRequest` when done, however the request ends. */
+function enqueueModelRequest(
+  set: SetState,
+  get: GetState,
+  request: Omit<ModelRequest, "status">,
+  extra?: (s: Store) => Partial<Store>,
+): Promise<boolean> {
+  const started = new Promise<boolean>((resolve) => modelRequestStarts.set(request.id, resolve));
+  setModelRequests(set, (requests) => [...requests, { ...request, status: "waiting" }], extra);
+  startNextModelRequest(set, get);
+  return started;
+}
+
+/** Take a finished request out of `modelRequests` and start the next. */
+function finishModelRequest(set: SetState, get: GetState, id: string) {
+  modelRequestStarts.delete(id);
+  setModelRequests(set, (requests) => requests.filter((r) => r.id !== id));
+  startNextModelRequest(set, get);
+}
+
 /** The shared core of `send()` and `retryMessage()`: streams a reply for
  * `history` into `conversation` (whose last message must already be the
  * empty assistant placeholder the UI fills in as it streams — same shape
@@ -921,6 +1081,15 @@ function resetPerConversationUiState(get: GetState) {
  * this hook available (it goes through the public `send()` action, to
  * reuse `send()`'s own skill-invocation/title logic untouched) and so
  * issues its own follow-up save instead — see `editMessage`'s own comment.
+ *
+ * The turn shows `conversation` as `active` and queues itself in
+ * `modelRequests`, in one update, and only streams once it reaches the
+ * head. `beforeStream`, if given, runs right then, while nothing else is
+ * using the model (`send()`'s safety check). Until it settles the turn is
+ * the source of truth for its conversation: `openConversation` shows it via
+ * `liveTurns`, and a brand-new conversation is saved early if it would
+ * otherwise be out of reach (`saveTurnEarly`). A turn cancelled while it
+ * waits settles exactly like one stopped before its first token.
  */
 async function runGeneration(
   set: SetState,
@@ -928,6 +1097,7 @@ async function runGeneration(
   conversation: Conversation,
   history: ChatMessage[],
   finalize?: (settled: Conversation) => Conversation,
+  beforeStream?: () => Promise<void>,
 ): Promise<Conversation> {
   // The model actually answering this turn, stamped on the placeholder by
   // the caller — read back off it rather than re-threading it as its own
@@ -948,7 +1118,6 @@ async function runGeneration(
   // How the stream ended, for deciding whether this turn earns an "Answer
   // ready" alert (see where it is announced, below). A `done` event alone
   // doesn't: the backend also sends it when the user presses Stop.
-  stopRequestedForTurn = false;
   let sawDone = false;
   let sawError = false;
   let streamThrew = false;
@@ -1034,13 +1203,52 @@ async function runGeneration(
   // answered (e.g. the turn was stopped while it was pending).
   const askedQuestions = new Map<string, string>();
 
+  // An error belongs to this turn's conversation: shown at once if it's
+  // the one on screen, else kept until the user opens it again. The first
+  // error of a turn wins.
+  const setTurnError = (message: string) => {
+    if (get().active?.id === conversation.id) {
+      set((s) => ({ chatError: s.chatError || message }));
+    } else if (!backgroundChatErrors.has(conversation.id)) {
+      backgroundChatErrors.set(conversation.id, message);
+    }
+  };
+
+  // Queue the turn, showing it at once. Everything above was captured from
+  // the conversation on screen now: by the time a waiting turn runs, the
+  // user may be somewhere else entirely.
+  liveTurns.set(conversation.id, () => ({
+    ...conversation,
+    messages: [...conversation.messages.slice(0, -1), assistantMessage()],
+  }));
+  const requestId = crypto.randomUUID();
+  const turnStarted = enqueueModelRequest(
+    set,
+    get,
+    { id: requestId, kind: "chat", conversationId: conversation.id },
+    () => ({ active: conversation, chatError: null }),
+  );
+  // Its first turn: not listed until saved, and saved early only if it
+  // would otherwise be out of reach — starting with having to wait.
+  if (!get().conversations.some((c) => c.id === conversation.id)) {
+    unlistedTurns.add(conversation.id);
+    if (get().modelRequests[0]?.id !== requestId) saveTurnEarly(set, conversation.id);
+  }
+  const started = await turnStarted;
+  if (started) {
+    stopRequestedForTurn = false;
+    if (beforeStream) await beforeStream();
+  }
+
   // Always go through chatStream. With web search on, Rust routes the turn to
   // the enabled, ready web-search plugin (which streams the search/citation
   // events below); with agent tools on (and no web search plugin routing),
   // it routes through the agent-mode loop (the toolConsent*/toolCall* events
   // below); otherwise it answers with the plain engine.
   try {
-    await api.chatStream(
+    // Stop pressed while the turn was getting ready (the safety check) had
+    // nothing in Rust to stop yet.
+    if (started && !stopRequestedForTurn) await api.chatStream(
       conversation.id,
       history,
       useWebSearch,
@@ -1287,7 +1495,7 @@ async function runGeneration(
         }
         case "error":
           sawError = true;
-          set({ chatError: event.data.message });
+          setTurnError(event.data.message);
           break;
         case "done":
           // Stream closes on "done"; the turn is settled below, where
@@ -1300,7 +1508,7 @@ async function runGeneration(
     );
   } catch (err: unknown) {
     streamThrew = true;
-    set((s) => ({ chatError: s.chatError || String(err) }));
+    setTurnError(String(err));
   }
 
   // A subagent step still `ok: null` here means the stream ended (error or
@@ -1332,33 +1540,55 @@ async function runGeneration(
   } else {
     messages[messages.length - 1] = assistantMessage();
   }
+  // Renaming, pinning or filing the conversation in a project is allowed
+  // while its turn is in flight; keep what the user set meanwhile.
+  const meta = get().conversations.find((c) => c.id === conversation.id);
   let settled: Conversation = {
     ...conversation,
+    ...(meta ? { title: meta.title, projectId: meta.projectId, pinned: meta.pinned } : {}),
     messages,
     updatedAtMs: Date.now(),
   };
   if (finalize) settled = finalize(settled);
+  const discarded = discardedConversations.has(conversation.id);
+  liveTurns.delete(conversation.id);
+  unlistedTurns.delete(conversation.id);
   set((s) => ({
-    streaming: false,
-    liveActivity: null,
-    // A turn always ends with every tool call resolved one way or another
-    // (denied on Stop included, per the orchestrator's contract) — clear
-    // defensively so a card can never linger past its own turn.
-    pendingToolConsent: null,
-    pendingClarifyingQuestion: null,
-    pendingInjectionReview: null,
-    active: s.active?.id === conversation.id ? settled : s.active,
+    // Only the turn that ran owns the live activity and the cards: a turn
+    // cancelled while it waited leaves the running one's alone.
+    ...(started
+      ? {
+          liveActivity: null,
+          // A turn always ends with every tool call resolved one way or
+          // another (denied on Stop included, per the orchestrator's
+          // contract) — clear defensively so a card can never linger past
+          // its own turn.
+          pendingToolConsent: null,
+          pendingClarifyingQuestion: null,
+          pendingInjectionReview: null,
+        }
+      : {}),
+    active: s.active?.id === conversation.id && !discarded ? settled : s.active,
   }));
+  if (started) finishModelRequest(set, get, requestId);
 
   // "Answer ready" — only for a turn that really ran to its end: the stream
   // closed with `done` and no error, the user didn't press Stop, and there is
   // reply text (a turn of thinking or tool steps only isn't an answer yet).
-  // Announced here, once per call and after `streaming` is false, and not from
-  // the `done` event or a `streaming` true->false subscription: the former is
-  // too early to know how the turn ended, the latter also fires for
-  // Translate/Correct, which toggle `streaming` themselves. Before the save
-  // below so a failing save can't swallow it; `announceAppEvent` can't throw.
-  if (sawDone && !sawError && !streamThrew && !stopRequestedForTurn && reply.trim() !== "") {
+  // Announced here, once per call and after the turn left `modelRequests`,
+  // and not from the `done` event or a `streaming` true->false subscription:
+  // the former is too early to know how the turn ended, the latter also
+  // fires for Translate/Correct, and not at all while other requests wait.
+  // Before the save below so a failing save can't swallow it;
+  // `announceAppEvent` can't throw.
+  if (
+    sawDone &&
+    !sawError &&
+    !streamThrew &&
+    !stopRequestedForTurn &&
+    !discarded &&
+    reply.trim() !== ""
+  ) {
     announceAppEvent(get, {
       kind: "answerReady",
       key: `answer:${assistantId}`,
@@ -1366,9 +1596,32 @@ async function runGeneration(
     });
   }
 
-  if (messages.some((m) => m.role === "assistant")) {
+  const earlySave = earlySaves.get(conversation.id);
+  earlySaves.delete(conversation.id);
+  if (earlySave) await earlySave;
+  if (discarded) {
+    discardedConversations.delete(conversation.id);
+    // Its early save may have landed after the delete.
+    if (earlySave) {
+      try {
+        await api.deleteConversation(conversation.id);
+        set({ conversations: await api.listConversations() });
+      } catch {
+        // Already gone.
+      }
+    }
+  } else if (messages.some((m) => m.role === "assistant")) {
     try {
       await api.saveConversation(settled);
+      set({ conversations: await api.listConversations() });
+    } catch {
+      // Saving history must never interrupt a chat.
+    }
+  } else if (earlySave) {
+    // Nothing came of its first turn: take back the early save, so it ends
+    // exactly as if it had never been saved early.
+    try {
+      await api.deleteConversation(conversation.id);
       set({ conversations: await api.listConversations() });
     } catch {
       // Saving history must never interrupt a chat.
@@ -1633,6 +1886,7 @@ export const useStore = create<Store>()((set, get) => ({
   sidebarSearchResults: [],
   skills: [],
   active: null,
+  modelRequests: [],
   streaming: false,
   scrollToMessageId: null,
   liveActivity: null,
@@ -2297,9 +2551,9 @@ export const useStore = create<Store>()((set, get) => ({
   },
 
   newChat: () => {
-    // While a reply is streaming the sidebar is disabled; this guard keeps
-    // the in-flight turn safe even if a stray call slips through.
-    if (get().streaming) return;
+    // A reply still in flight carries on in its own conversation (see
+    // `runGeneration`), which stays reachable from the Sidebar.
+    saveTurnEarly(set, get().active?.id);
     const { models, settings } = get();
     // Seed the new conversation with its model's curated sampling
     // recommendation (task type is always "general" for now) rather than one
@@ -2324,20 +2578,22 @@ export const useStore = create<Store>()((set, get) => ({
 
   startChatWithDraft: (text) => {
     get().newChat();
-    // `newChat()` no-ops (leaving `streaming` unchanged) while a reply is
-    // in flight — checking it here, right after, is how we tell whether it
-    // actually proceeded without duplicating its own guard.
-    if (get().streaming) return;
     set({ draftToPrefill: text });
   },
 
   openConversation: async (id) => {
-    if (get().streaming) return;
     try {
-      const active = await api.getConversation(id);
+      // A conversation whose turn is still in flight is shown as that turn
+      // has it — its saved copy lags behind until the turn settles.
+      const live = liveTurns.get(id);
+      const active = live ? live() : await api.getConversation(id);
+      // Same as `newChat`: the conversation left behind stays reachable.
+      if (get().active?.id !== id) saveTurnEarly(set, get().active?.id);
+      const chatError = backgroundChatErrors.get(id) ?? null;
+      backgroundChatErrors.delete(id);
       set({
         active,
-        chatError: null,
+        chatError,
         view: "chat",
         // Same reasoning as `newChat` — reset per open, never inherited.
         ...resetPerConversationUiState(get),
@@ -2361,7 +2617,18 @@ export const useStore = create<Store>()((set, get) => ({
   clearScrollToMessage: () => set({ scrollToMessageId: null }),
 
   deleteConversation: async (id) => {
-    if (get().streaming) return;
+    // Its turn in flight, if any, goes with it: cancelled while it waits,
+    // stopped if it runs — and never saved back.
+    const request = chatRequestFor(get(), id);
+    if (request) {
+      discardedConversations.add(id);
+      try {
+        await get().cancelModelRequest(request.id);
+      } catch {
+        // Not stopped: it runs to its end, still never saved.
+      }
+    }
+    backgroundChatErrors.delete(id);
     try {
       await api.deleteConversation(id);
       set((s) => {
@@ -2589,7 +2856,9 @@ export const useStore = create<Store>()((set, get) => ({
     // A turn needs either text or at least one attachment (e.g. an image with
     // no caption).
     const atts = attachments?.length ? attachments : undefined;
-    if ((!trimmed && !atts) || get().streaming) return;
+    if (!trimmed && !atts) return;
+    // One turn in flight per conversation: its composer waits (Stop/Cancel).
+    if (chatRequestFor(get(), get().active?.id)) return;
 
     // A `/<slug>` prefix invokes a saved skill: its body is folded in ahead of
     // the rest of the user's words — the same way a document attachment is
@@ -2641,31 +2910,32 @@ export const useStore = create<Store>()((set, get) => ({
         },
       ],
     };
-    set({ active: conversation, streaming: true, chatError: null, liveActivity: null });
-
     // Best-effort safety check on the user's own words (not a `/slug`
     // invocation's expanded skill body) — never blocks or errors out the
-    // chat. Must run — and be awaited — here, before `api.chatStream`
-    // below, not after the reply settles: the engine has a single
-    // inference slot, so `classify_risk` silently no-ops (returns `None`)
-    // whenever a real chat turn is already generating (see
-    // `EngineManager::raw_classify` in `crates/core/src/engine.rs`).
-    // Running it first also means someone sending a message that needs
-    // this doesn't have to wait through a possibly long reply to see it.
-    // `streaming` already blocks a second `send()` call for the whole
-    // duration of this one, so unlike a check made after settling, this
-    // can't race a later turn's classification — always safe to just set
-    // the result. Front-loading the settings/backend check is purely an
-    // optimization (skip the IPC round trip when nothing would use the
-    // result); `classify_risk` re-checks both itself. Only a "risk" result
-    // touches `safetyAlerts` — see that field's doc comment for why a
-    // later "safe" turn never clears it.
+    // chat. Runs once this turn reaches the head of `modelRequests`, right
+    // before its `api.chatStream`, not when the message is sent nor after the
+    // reply settles: the engine has a single inference slot, so the check
+    // waits its turn like any request (see `classify_risk`), and asking while
+    // the turn's own reply already streams would have it wait through the
+    // whole reply. A message sent while another reply runs is checked just
+    // the same, once that reply is done. Running it first also means someone
+    // sending a message that needs this doesn't have to wait through a
+    // possibly long reply to see it. A conversation has one turn in flight at
+    // a time, so this can't race a later turn's classification of the same
+    // conversation — always safe to just set the result. Front-loading the
+    // settings/backend check is purely an optimization (skip the IPC round
+    // trip when nothing would use the result); `classify_risk` re-checks both
+    // itself. Only a "risk" result touches `safetyAlerts` — see that field's
+    // doc comment for why a later "safe" turn never clears it.
     const textToClassify = userMessage.displayContent ?? userMessage.content;
-    if (
-      textToClassify.trim() !== "" &&
-      get().settings?.riskDetectionEnabled !== false &&
-      get().settings?.chatBackend !== "cloud"
-    ) {
+    const checkRisk = async () => {
+      if (
+        textToClassify.trim() === "" ||
+        get().settings?.riskDetectionEnabled === false ||
+        get().settings?.chatBackend === "cloud"
+      ) {
+        return;
+      }
       try {
         const signal = await api.classifyRisk(textToClassify);
         if (signal === "risk") {
@@ -2680,9 +2950,9 @@ export const useStore = create<Store>()((set, get) => ({
       } catch {
         // A missed safety check must never interrupt or error the chat.
       }
-    }
+    };
 
-    return await runGeneration(set, get, conversation, history);
+    return await runGeneration(set, get, conversation, history, undefined, checkRisk);
   },
 
   // Editing a past user turn rewinds the conversation to just before it,
@@ -2694,7 +2964,7 @@ export const useStore = create<Store>()((set, get) => ({
   editMessage: async (index, text) => {
     const trimmed = text.trim();
     const base = get().active;
-    if (!base || get().streaming) return;
+    if (!base || chatRequestFor(get(), base.id)) return;
     const target = base.messages[index];
     if (target?.role !== "user") return;
     // Carry the original turn's attachments through the edit, so editing the
@@ -2737,7 +3007,7 @@ export const useStore = create<Store>()((set, get) => ({
     // result) rather than re-reading `get().active` — the latter could, by
     // the time this line runs, already reflect a LATER action (e.g. the
     // user firing `retryMessage`/`setActiveVariant` in the brief window
-    // after `send()` flips `streaming` back to `false` but before its own
+    // after `send()`'s turn leaves `modelRequests` but before its own
     // trailing save finishes), which would mislabel that other action's
     // result as this edit's new tail.
     if (!settledBase || settledBase.id !== base.id) return;
@@ -2759,7 +3029,7 @@ export const useStore = create<Store>()((set, get) => ({
 
   retryMessage: async (index) => {
     const base = get().active;
-    if (!base || get().streaming) return;
+    if (!base || chatRequestFor(get(), base.id)) return;
     if (base.messages[index]?.role !== "assistant") return;
 
     const anchorKey = branchAnchorKey(base.messages, index);
@@ -2807,8 +3077,6 @@ export const useStore = create<Store>()((set, get) => ({
         },
       ],
     };
-    set({ active: conversation, streaming: true, chatError: null, liveActivity: null });
-
     // Folding the new tail into `branches` via `finalize` (rather than a
     // second save, unlike `editMessage`) is possible here because this
     // action calls `runGeneration` directly instead of going through the
@@ -2839,8 +3107,11 @@ export const useStore = create<Store>()((set, get) => ({
 
   forkConversation: async (index) => {
     const base = get().active;
-    if (!base || get().streaming) return;
+    if (!base) return;
     if (base.messages[index]?.role !== "assistant") return;
+    // Every settled reply can be forked while this conversation's own turn
+    // is in flight — just not that turn's reply, which isn't one yet.
+    if (chatRequestFor(get(), base.id) && index === base.messages.length - 1) return;
 
     const now = Date.now();
     const forked: Conversation = {
@@ -2897,7 +3168,7 @@ export const useStore = create<Store>()((set, get) => ({
 
   setActiveVariant: async (anchorKey, variantIndex) => {
     const base = get().active;
-    if (!base || get().streaming) return;
+    if (!base || chatRequestFor(get(), base.id)) return;
     const group = base.branches[anchorKey];
     if (!group || variantIndex < 0 || variantIndex >= group.variants.length) return;
 
@@ -2930,16 +3201,41 @@ export const useStore = create<Store>()((set, get) => ({
   },
 
   stopGeneration: async () => {
-    // Only the chat Stop button comes through here (Translate/Correct/Improve
-    // call the api directly). The backend ends a stopped reply with a normal
-    // `done`, so remember the press — see where `runGeneration` announces
-    // "Answer ready", and resets this for the next turn.
-    stopRequestedForTurn = true;
+    const running = get().modelRequests[0];
+    if (running?.kind !== "chat" || running.status !== "running") return;
+    await get().cancelModelRequest(running.id);
+  },
+
+  runModelRequest: async (request, job) => {
+    const started = await enqueueModelRequest(set, get, { ...request, conversationId: null });
+    if (!started) return undefined;
+    try {
+      return await job();
+    } finally {
+      finishModelRequest(set, get, request.id);
+    }
+  },
+
+  cancelModelRequest: async (id) => {
+    const request = get().modelRequests.find((r) => r.id === id);
+    if (!request) return;
+    if (request.status === "waiting") {
+      const start = modelRequestStarts.get(id);
+      modelRequestStarts.delete(id);
+      setModelRequests(set, (requests) => requests.filter((r) => r.id !== id));
+      start?.(false);
+      return;
+    }
+    // A chat reply's Stop ends its stream with a normal `done`, so remember
+    // the press — see where `runGeneration` announces "Answer ready", and
+    // resets this for the next turn. Rust stops whatever request runs, which
+    // is this one: only the head of `modelRequests` ever reaches it.
+    if (request.kind === "chat") stopRequestedForTurn = true;
     try {
       await api.stopGeneration();
     } catch (err: unknown) {
       // The stop didn't happen, so the reply will run to its end.
-      stopRequestedForTurn = false;
+      if (request.kind === "chat") stopRequestedForTurn = false;
       throw err;
     }
   },

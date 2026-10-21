@@ -10,6 +10,21 @@ cited file:line before writing this down).
 > Correct, just a name that no longer implies "Writing Tools only." Every
 > `run_writing_tool_stream` reference below is historical.
 
+> **2026-10 update (#7): busy requests queue now — they're no longer rejected
+> up front.** Every request that uses the model (chat on every route, Translate/
+> Correct, the Message improver, the safety classifier) waits its turn, first
+> in first out, in one queue: `GenerationQueue` in
+> `crates/app/src/generation.rs` (which replaced the `chat_cancel` slot and
+> `try_claim_generation_slot`), with the frontend's own ordered
+> `modelRequests` in `ui/src/state/store.ts` in front of it. Translate/Correct
+> started while a chat reply is running shows "Waiting for the model to
+> finish its current task…" with a Cancel of its own, then runs; the rest of
+> the app stays usable meanwhile. Stop stops only the request that's running.
+> The engine still never sees two requests at once — OpenPal stays
+> mono-model. Every "reject up front", "no queue", busy-error and
+> `chat_cancel` passage below records the design as it was planned in
+> 2026-08, not current behaviour.
+
 ## Verdict
 
 **Feasible with no new subprocess, no second model, and mostly-existing
@@ -807,6 +822,9 @@ primitive, unchanged by the refactor.
 
 #### Adopted design — `run_writing_tool_stream`, reject-up-front busy handling, hardened bidirectionally
 
+> **Superseded (2026-10, #7):** busy handling is a FIFO queue now, not a
+> rejection — see the 2026-10 update at the top of this file.
+
 Recommendation: the shared helper lives in `crates/app/src/commands.rs` (a
 new private fn), not in `crates/core`'s engine layer — it needs `AppState`
 (settings, account, `chat_cancel`, http, engine), which core deliberately
@@ -899,7 +917,7 @@ async fn resolve_cloud_access(state: &AppState, settings: &Settings) -> Result<(
 
 /// Shared streamed one-shot-completion path for Translate/Correct. Never
 /// references `settings.system_prompt` — callers pass a complete, already-
-/// built `messages` array. Rejects up front (no queue) via
+/// built `messages` array. Rejects up front (no queue — superseded by #7's queue) via
 /// `try_claim_generation_slot` if the app's single foreground-generation
 /// slot is already claimed by a chat turn (or vice versa, once the four
 /// existing turn-runners are updated to claim through the same helper).

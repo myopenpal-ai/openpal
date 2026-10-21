@@ -331,7 +331,8 @@ calls it lazily, only when its `"web-research"` kind is actually invoked —
 so a full agent-mode turn that never touches web search never pays the
 start-up cost. Either way the resolved base URL lands in `AgentDeps::search_service_url`
 / a freshly built `WebSearchTool`. The webview never reaches the service
-directly (CSP forbids it); only Rust does. Cancellation reuses `chat_cancel`.
+directly (CSP forbids it); only Rust does. Cancellation reuses the turn's claim
+on the generation queue (`crates/app/src/generation.rs`).
 Packaging plugins + their venvs into the signed `.app` (PyInstaller /
 inside-out signing) is deferred; in dev the manager builds venvs with
 `python3` (override via `OPENPAL_PYTHON`) — though this plugin (no

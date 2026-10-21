@@ -335,7 +335,6 @@ export default function Sidebar() {
   const setConversationPinned = useStore((s) => s.setConversationPinned);
   const active = useStore((s) => s.active);
   const view = useStore((s) => s.view);
-  const streaming = useStore((s) => s.streaming);
   const newChat = useStore((s) => s.newChat);
   const openConversation = useStore((s) => s.openConversation);
   const deleteConversation = useStore((s) => s.deleteConversation);
@@ -594,8 +593,6 @@ export default function Sidebar() {
         <span className="sidebar-brand" id="sidebar-brand">OpenPal</span>
       </div>
 
-      {/* While a reply is streaming, switching chats would lose the turn —
-          rest these quietly until it finishes. */}
       <button
         className="new-chat"
         onClick={() => {
@@ -603,7 +600,6 @@ export default function Sidebar() {
           exitSelectionMode();
           newChat();
         }}
-        disabled={streaming}
       >
         <ChatIcon /> {t("sidebar.newChat")}
       </button>
@@ -616,7 +612,6 @@ export default function Sidebar() {
           <button
             type="button"
             className={`sidebar-quick-action${view === "improve" ? " sidebar-quick-action-active" : ""}`}
-            disabled={streaming}
             onClick={() => openViewAndClose("improve")}
           >
             <SparkleIcon /> {t("improveView.title")}
@@ -634,7 +629,6 @@ export default function Sidebar() {
           <button
             type="button"
             className={`sidebar-quick-action${view === "translate" ? " sidebar-quick-action-active" : ""}`}
-            disabled={streaming}
             onClick={() => openViewAndClose("translate")}
           >
             <LanguagesIcon /> {t("writingTools.modeTranslate")}
@@ -642,7 +636,6 @@ export default function Sidebar() {
           <button
             type="button"
             className={`sidebar-quick-action${view === "correct" ? " sidebar-quick-action-active" : ""}`}
-            disabled={streaming}
             onClick={() => openViewAndClose("correct")}
           >
             <CorrectIcon /> {t("writingTools.modeCorrect")}
@@ -675,7 +668,6 @@ export default function Sidebar() {
                 conversations={pinned}
                 active={active}
                 view={view}
-                streaming={streaming}
                 projects={projects}
                 selectionMode={false}
                 selectedIds={selectedIds}
@@ -706,7 +698,6 @@ export default function Sidebar() {
             <button
               type="button"
               className="btn-quiet project-add-btn"
-              disabled={streaming}
               onClick={() => {
                 setCreatingProject(true);
                 setProjectsCollapsed(false);
@@ -734,7 +725,6 @@ export default function Sidebar() {
               )}
               active={active}
               view={view}
-              streaming={streaming}
               projects={projects}
               selectedIds={selectedIds}
               onOpen={openConversationAndClose}
@@ -767,7 +757,6 @@ export default function Sidebar() {
                   type="checkbox"
                   className="sidebar-select-all-checkbox"
                   checked={allSelected}
-                  disabled={streaming}
                   aria-label={t(allSelected ? "sidebar.deselectAll" : "sidebar.selectAll")}
                   onChange={toggleSelectAll}
                 />
@@ -788,7 +777,7 @@ export default function Sidebar() {
                 <button
                   type="button"
                   className="btn-quiet sidebar-toolbar-btn"
-                  disabled={selectedIds.size === 0 || streaming}
+                  disabled={selectedIds.size === 0}
                   aria-label={t("sidebar.deleteSelected")}
                   onClick={requestBulkDelete}
                 >
@@ -809,7 +798,7 @@ export default function Sidebar() {
               <button
                 type="button"
                 className="btn-quiet sidebar-toolbar-btn"
-                disabled={streaming || conversations.length === 0}
+                disabled={conversations.length === 0}
                 aria-label={t("sidebar.selectConversations")}
                 title={t("sidebar.selectConversations")}
                 onClick={() => setSelectionMode(true)}
@@ -836,7 +825,6 @@ export default function Sidebar() {
           conversations={ungrouped}
           active={active}
           view={view}
-          streaming={streaming}
           projects={projects}
           selectionMode={selectionMode}
           selectedIds={selectedIds}
@@ -958,7 +946,6 @@ function ConvList({
   conversations,
   active,
   view,
-  streaming,
   projects,
   selectionMode,
   selectedIds,
@@ -974,7 +961,6 @@ function ConvList({
   conversations: ConversationMeta[];
   active: Conversation | null;
   view: View;
-  streaming: boolean;
   projects: Project[];
   selectionMode: boolean;
   selectedIds: Set<string>;
@@ -1005,7 +991,6 @@ function ConvList({
       key={conv.id}
       conv={conv}
       isActive={view === "chat" && active?.id === conv.id}
-      streaming={streaming}
       projects={projects}
       selectionMode={selectionMode}
       selected={selectedIds.has(conv.id)}
@@ -1058,7 +1043,6 @@ function ConvList({
 function ConvRow({
   conv,
   isActive,
-  streaming,
   projects,
   selectionMode,
   selected,
@@ -1072,7 +1056,6 @@ function ConvRow({
 }: {
   conv: ConversationMeta;
   isActive: boolean;
-  streaming: boolean;
   projects: Project[];
   selectionMode: boolean;
   selected: boolean;
@@ -1138,7 +1121,6 @@ function ConvRow({
           type="checkbox"
           className="conv-row-checkbox"
           checked={selected}
-          disabled={streaming}
           aria-label={t("sidebar.selectConversation", { title: conv.title })}
           onChange={onToggleSelect}
         />
@@ -1160,7 +1142,6 @@ function ConvRow({
         <button
           ref={openButtonRef}
           className="conv-open"
-          disabled={streaming}
           aria-current={isActive ? "page" : undefined}
           onClick={selectionMode ? onToggleSelect : onOpen}
           title={conv.title}
@@ -1173,7 +1154,6 @@ function ConvRow({
           <ConvRowMenu
             conv={conv}
             projects={projects}
-            streaming={streaming}
             onDelete={onDelete}
             onMoveToProject={onMoveToProject}
             onRename={startRename}
@@ -1205,7 +1185,6 @@ const MENU_HEIGHT_ESTIMATE = 260;
 function ConvRowMenu({
   conv,
   projects,
-  streaming,
   onDelete,
   onMoveToProject,
   onRename,
@@ -1215,7 +1194,6 @@ function ConvRowMenu({
 }: {
   conv: ConversationMeta;
   projects: Project[];
-  streaming: boolean;
   onDelete: () => void;
   onMoveToProject: (projectId: string | null) => void;
   onRename: () => void;
@@ -1327,7 +1305,6 @@ function ConvRowMenu({
         ref={triggerRef}
         type="button"
         className={`btn-quiet conv-row-menu-trigger${open ? " sidebar-action-active" : ""}`}
-        disabled={streaming}
         aria-haspopup="true"
         aria-expanded={open}
         aria-label={t("sidebar.rowMenu.ariaLabel", { title: conv.title })}
@@ -1482,7 +1459,6 @@ function ProjectGroup({
   conversations,
   active,
   view,
-  streaming,
   projects,
   selectedIds,
   onOpen,
@@ -1499,7 +1475,6 @@ function ProjectGroup({
   conversations: ConversationMeta[];
   active: Conversation | null;
   view: View;
-  streaming: boolean;
   projects: Project[];
   selectedIds: Set<string>;
   onOpen: (id: string) => void;
@@ -1599,7 +1574,6 @@ function ProjectGroup({
             <button
               type="button"
               className="btn-quiet project-action-btn"
-              disabled={streaming}
               onClick={startRename}
               aria-label={t("sidebar.renameProject", { name: project.name })}
             >
@@ -1608,7 +1582,6 @@ function ProjectGroup({
             <button
               type="button"
               className="btn-quiet project-action-btn"
-              disabled={streaming}
               onClick={onDeleteProject}
               aria-label={t("sidebar.deleteProjectAriaLabel", { name: project.name })}
             >
@@ -1631,7 +1604,6 @@ function ProjectGroup({
             conversations={conversations}
             active={active}
             view={view}
-            streaming={streaming}
             projects={projects}
             selectionMode={false}
             selectedIds={selectedIds}

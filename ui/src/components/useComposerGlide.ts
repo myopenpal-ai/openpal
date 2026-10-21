@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef } from "react";
-import { useStore } from "../state/store";
+import { chatRequestFor, useStore } from "../state/store";
 
 /** How long the composer takes to settle into its place at the bottom. */
 const GLIDE_MS = 450;
@@ -22,10 +22,11 @@ const GLIDE_MS = 450;
  *
  * Only a send out of an empty chat glides. Opening a conversation, or starting
  * a new chat, still swaps instantly, and so does a reader who has asked the OS
- * for reduced motion. A send is told apart from an open by `streaming`:
- * `send()` flips it in the very update that adds the first message, whereas
- * opening a conversation also takes `active` from nothing to something, as it
- * does from the empty screen at launch, but never touches it.
+ * for reduced motion. A send is told apart from an open by the conversation's
+ * own request appearing in `modelRequests`: `send()` queues it in the very
+ * update that adds the first message, whereas opening a conversation also
+ * takes `active` from nothing to something, as it does from the empty screen
+ * at launch, but never queues anything.
  *
  * @param isEmpty whether the chat being shown has no messages yet
  * @returns a ref for the element that moves, the composer's wrapper
@@ -45,8 +46,8 @@ export function useComposerGlide<T extends HTMLElement>(isEmpty: boolean) {
         const before = prev.active;
         const after = state.active;
         const isFirstSend =
-          state.streaming &&
-          !prev.streaming &&
+          chatRequestFor(state, after?.id) !== undefined &&
+          chatRequestFor(prev, after?.id) === undefined &&
           (before?.messages.length ?? 0) === 0 &&
           (after?.messages.length ?? 0) > 0 &&
           // The same conversation, or the very first one, created by this send.

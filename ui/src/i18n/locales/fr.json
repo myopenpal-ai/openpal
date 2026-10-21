@@ -988,6 +988,10 @@
     }
   },
   "chatView": {
+    "queued": {
+      "waiting": "En attente que le modèle termine sa tâche en cours…",
+      "cancel": "Annuler cette demande"
+    },
     "sources": {
       "label": "Sources"
     },
@@ -1178,7 +1182,6 @@
         "offSkillOnly": "Écrivez d'abord un message après la /compétence",
         "offNotReady": "Choisissez d'abord un modèle",
         "offStarting": "Préchauffage, réessayez dans un instant",
-        "offBusy": "Attendez la fin de la réponse en cours",
         "offTooLong": "Ce message est trop long pour être amélioré. Envoyez-le tel quel.",
         "offDiskSlow": "Indisponible quand un modèle tourne depuis le disque",
         "offImproving": "Amélioration de votre message…",
@@ -1257,7 +1260,6 @@
     "rejectAllChanges": "Tout rejeter",
     "acceptChange": "Appliquer cette suggestion",
     "rejectChange": "Revenir à l'original",
-    "engineBusy": "Votre IA est occupée avec une autre réponse pour le moment. Ceci démarrera dès qu'elle sera libre.",
     "stop": "Arrêter",
     "runTranslate": "Traduire",
     "runCorrect": "Corriger",
@@ -1276,7 +1278,6 @@
     "copied": "Copié",
     "startChat": "Démarrer une discussion avec ce texte",
     "tooLong": "Ce message est trop long à améliorer. Essayez quelque chose de plus court.",
-    "engineBusy": "Votre IA est occupée à répondre. Ceci démarrera dès qu'elle sera libre.",
     "localNote": "Ceci utilise la même IA que celle avec qui vous discutez déjà, jamais un second modèle."
   },
   "markdown": {

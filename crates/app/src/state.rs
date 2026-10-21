@@ -1,4 +1,5 @@
 use crate::audio::AudioPlayer;
+use crate::generation::GenerationQueue;
 use openpal_core::account::AccountManager;
 use openpal_core::agent::{audit::AuditLog, ConsentBroker};
 use openpal_core::catalog::Catalog;
@@ -456,7 +457,7 @@ pub fn finish_unlock(
         parental_state_path,
         custom: tokio::sync::Mutex::new(custom),
         downloads: tokio::sync::Mutex::new(HashMap::new()),
-        chat_cancel: tokio::sync::Mutex::new(None),
+        generation: GenerationQueue::default(),
         dictation_stop: tokio::sync::Mutex::new(None),
         audio: AudioPlayer::new(),
         http,
@@ -574,8 +575,10 @@ pub struct AppState {
     pub injection: Arc<openpal_core::injection::Detector>,
     /// model_id -> cancel flag for in-flight downloads.
     pub downloads: tokio::sync::Mutex<HashMap<String, Arc<AtomicBool>>>,
-    /// Cancel flag for the in-flight chat generation, if any.
-    pub chat_cancel: tokio::sync::Mutex<Option<Arc<AtomicBool>>>,
+    /// The single queue every request that uses the model waits in — chat
+    /// turns, Writing Tools, the Message improver, the safety classifier.
+    /// See `crate::generation`.
+    pub generation: GenerationQueue,
     /// Stop flag for an in-flight voice-typing recording, if any (set by
     /// `stop_dictation` to end recording and transcribe what was captured).
     pub dictation_stop: tokio::sync::Mutex<Option<Arc<AtomicBool>>>,

@@ -64,9 +64,23 @@ function setActive(active: Conversation | null) {
   act(() => useStore.setState({ active }));
 }
 
-/** What `send()` does to the store: the message and `streaming` in one update. */
+/** What `send()` does to the store: the message and its queued request in
+ * one update. */
 function sendFirstMessage(active: Conversation) {
-  act(() => useStore.setState({ active, streaming: true }));
+  act(() =>
+    useStore.setState({
+      active,
+      modelRequests: [
+        { id: `turn-${active.id}`, kind: "chat", conversationId: active.id, status: "running" },
+      ],
+      streaming: true,
+    }),
+  );
+}
+
+/** The turn settling: its request leaves the queue. */
+function settle() {
+  act(() => useStore.setState({ modelRequests: [], streaming: false }));
 }
 
 function reducedMotion(on: boolean) {
@@ -76,7 +90,7 @@ function reducedMotion(on: boolean) {
 beforeEach(() => {
   animate.mockReset();
   reducedMotion(false);
-  useStore.setState({ active: conversation("a"), streaming: false });
+  useStore.setState({ active: conversation("a"), modelRequests: [], streaming: false });
 });
 
 afterEach(() => {
@@ -182,7 +196,7 @@ describe("useComposerGlide", () => {
   it("does not carry a send's start position over into a chat opened later", () => {
     mount();
     sendFirstMessage(conversation("a", [message("user", "hi")]));
-    act(() => useStore.setState({ streaming: false }));
+    settle();
     setActive(conversation("c"));
     animate.mockClear();
 
@@ -199,7 +213,7 @@ describe("useComposerGlide", () => {
     expect(animate).toHaveBeenCalledTimes(1);
     expect(cancel).not.toHaveBeenCalled();
 
-    act(() => useStore.setState({ streaming: false }));
+    settle();
     setActive(conversation("c"));
 
     expect(screen.getByTestId("slot")).toHaveAttribute("data-empty", "true");

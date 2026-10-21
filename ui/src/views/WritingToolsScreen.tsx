@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { api } from "../lib/api";
 import { copyText } from "../lib/clipboard";
 import type { ChatEvent } from "../lib/types";
+import QueuedNotice from "../components/QueuedNotice";
 import { useStore } from "../state/store";
 import { WRITING_TOOL_LANGUAGES } from "../lib/writingToolsLanguages";
 import { chunkText } from "../lib/writingToolsChunking";
@@ -25,13 +26,14 @@ export type WritingToolsMode = "translate" | "correct";
  * directly rather than going through a store action the way ordinary chat's
  * `send` does.
  *
- * Sets the store's top-level `streaming` flag around its own request so the
- * *existing* chat-side guards (sidebar/composer disabling while a reply
- * streams) transparently also cover Writing Tools, and vice versa — a UX
- * nicety layered on top of the real backend guarantee: `translate_stream`/
- * `correct_stream` claim the same shared `state.chat_cancel` slot every
- * chat/agent/web-search turn claims, so `api.stopGeneration()` correctly
- * cancels an in-flight translation too.
+ * Runs as one request in the store's `modelRequests` queue (every chunk of
+ * a long document included), so started while a chat reply is running it
+ * shows as waiting — cancellable — and then runs once the model is free,
+ * and a chat sent meanwhile waits for it in turn. `translate_stream`/
+ * `correct_stream` claim the same Rust-side queue every chat/agent/
+ * web-search turn claims (`crates/app/src/generation.rs`), so Stop reaches
+ * an in-flight translation exactly like a chat reply. Leaving the screen
+ * cancels its request: the result would have nowhere to show.
  *
  * Two later additions on top of the original paste-box:
  * - **Document translation/correction**: "Upload a document" reuses the
@@ -50,13 +52,21 @@ export type WritingToolsMode = "translate" | "correct";
  */
 export default function WritingToolsScreen({ mode }: { mode: WritingToolsMode }) {
   const { t } = useTranslation();
-  const engineStreaming = useStore((s) => s.streaming);
+  const runModelRequest = useStore((s) => s.runModelRequest);
+  const cancelModelRequest = useStore((s) => s.cancelModelRequest);
 
   const [sourceText, setSourceText] = useState("");
   const [sourceLang, setSourceLang] = useState<string | null>(null); // null = Detect
   const [targetLang, setTargetLang] = useState<string | null>(null);
   const [resultText, setResultText] = useState("");
   const [busy, setBusy] = useState(false);
+  // This screen's request in `modelRequests` while `busy`, to show it
+  // waiting and to stop or cancel it.
+  const [requestId, setRequestId] = useState<string | null>(null);
+  const waiting = useStore(
+    (s) =>
+      requestId !== null && s.modelRequests.some((r) => r.id === requestId && r.status === "waiting"),
+  );
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
@@ -83,18 +93,20 @@ export default function WritingToolsScreen({ mode }: { mode: WritingToolsMode })
   // never touches state.
   const requestSeq = useRef(0);
   const alive = useRef(true);
+  const requestIdRef = useRef<string | null>(null);
+  // Set by Stop, so a long document doesn't go on to its next chunk.
+  const stopRequested = useRef(false);
   useEffect(() => {
     alive.current = true;
     return () => {
       alive.current = false;
+      const id = requestIdRef.current;
+      if (id) void useStore.getState().cancelModelRequest(id).catch(() => {});
     };
   }, []);
 
-  // Something ELSE (not this screen's own request) is streaming.
-  const blockedByChat = engineStreaming && !busy;
   const trimmed = sourceText.trim();
-  const canRun =
-    trimmed.length > 0 && !busy && !blockedByChat && (mode === "correct" || !!targetLang);
+  const canRun = trimmed.length > 0 && !busy && (mode === "correct" || !!targetLang);
 
   // The text Copy/Download actually act on: the reconciled diff (respecting
   // each change's current accept/reject state) once one exists, otherwise
@@ -136,14 +148,19 @@ export default function WritingToolsScreen({ mode }: { mode: WritingToolsMode })
 
     setBusy(true);
     resetOutputs();
-    useStore.setState({ streaming: true });
+    const id = crypto.randomUUID();
+    requestIdRef.current = id;
+    setRequestId(id);
+    stopRequested.current = false;
 
     const chunks = chunkText(trimmed);
     let accumulated = "";
 
-    try {
+    // The whole document is one request: its chunks run back to back, with
+    // nothing else using the model in between.
+    const runChunks = async (): Promise<true> => {
       for (let i = 0; i < chunks.length; i++) {
-        if (isStale()) return;
+        if (isStale() || stopRequested.current) break;
         if (chunks.length > 1) setChunkProgress({ current: i + 1, total: chunks.length });
 
         const onEvent = (event: ChatEvent) => {
@@ -162,13 +179,18 @@ export default function WritingToolsScreen({ mode }: { mode: WritingToolsMode })
           await api.correctStream(chunks[i], onEvent);
         }
 
-        if (isStale()) return;
+        if (isStale() || stopRequested.current) break;
         if (i < chunks.length - 1) {
           accumulated += "\n\n";
           setResultText(accumulated);
         }
       }
+      return true;
+    };
 
+    try {
+      const ran = await runModelRequest({ id, kind: "writingTool" }, runChunks);
+      if (ran === undefined) return; // cancelled before it started
       if (!isStale() && mode === "correct") {
         const parts = computeWordDiff(trimmed, accumulated);
         setDiffParts(parts);
@@ -177,15 +199,20 @@ export default function WritingToolsScreen({ mode }: { mode: WritingToolsMode })
     } catch (err: unknown) {
       if (!isStale()) setError(String(err));
     } finally {
+      if (requestIdRef.current === id) requestIdRef.current = null;
       if (!isStale()) {
         setBusy(false);
+        setRequestId(null);
         setChunkProgress(null);
       }
-      useStore.setState({ streaming: false });
     }
   };
 
-  const stop = () => void api.stopGeneration();
+  const stop = () => {
+    if (!requestId) return;
+    stopRequested.current = true;
+    void cancelModelRequest(requestId);
+  };
 
   const copy = async () => {
     if (await copyText(finalText)) {
@@ -396,11 +423,6 @@ export default function WritingToolsScreen({ mode }: { mode: WritingToolsMode })
               {t("writingTools.chunkProgress", chunkProgress)}
             </p>
           )}
-          {blockedByChat && (
-            <p className="writing-tools-notice" role="status">
-              {t("writingTools.engineBusy")}
-            </p>
-          )}
           {error && (
             <p className="writing-tools-error" role="alert">
               {error}
@@ -408,7 +430,9 @@ export default function WritingToolsScreen({ mode }: { mode: WritingToolsMode })
           )}
 
           <div className="writing-tools-actions">
-            {busy ? (
+            {busy && waiting ? (
+              <QueuedNotice onCancel={stop} />
+            ) : busy ? (
               <button type="button" className="btn-ghost" onClick={stop}>
                 {t("writingTools.stop")}
               </button>

@@ -52,7 +52,6 @@ export function joinImproved(prefix: string, text: string): string {
 export type ImproveBlocker =
   | "locked"
   | "improving"
-  | "busy"
   | "empty"
   | "skillOnly"
   | "tooLong"
@@ -65,11 +64,6 @@ export interface ImproveBlockerInput {
   locked: boolean;
   /** An improve request from THIS composer is in flight. */
   improving: boolean;
-  /** `store.streaming` — some other turn (chat, agent, web search, Writing
-   * Tools) currently holds the single generation slot. Named `streaming`
-   * here (matching the store field it reads), even though the blocker
-   * value it produces is `"busy"`. */
-  streaming: boolean;
   /** Mirrors the composer's own `ready` (engine running, or cloud mode). */
   ready: boolean;
   /** The local engine is starting up. */
@@ -93,7 +87,6 @@ export interface ImproveBlockerInput {
 export function improveBlocker(input: ImproveBlockerInput): ImproveBlocker | null {
   if (input.locked) return "locked";
   if (input.improving) return "improving";
-  if (input.streaming) return "busy";
   if (input.draftText.trim() === "" && !input.hadSkillPrefix) return "empty";
   if (input.slashMatch || (input.hadSkillPrefix && input.draftText.trim() === "")) {
     return "skillOnly";
@@ -120,7 +113,6 @@ export type ImproveStatusKey = `chatView.composer.improve.${
 export type ImproveBlockerI18nKey =
   | `chatView.composer.improve.${
       | "offImproving"
-      | "offBusy"
       | "offEmpty"
       | "offSkillOnly"
       | "offTooLong"
@@ -135,8 +127,6 @@ export function improveBlockerKey(b: ImproveBlocker): ImproveBlockerI18nKey {
       return "chatView.parentalLock.placeholder";
     case "improving":
       return "chatView.composer.improve.offImproving";
-    case "busy":
-      return "chatView.composer.improve.offBusy";
     case "empty":
       return "chatView.composer.improve.offEmpty";
     case "skillOnly":

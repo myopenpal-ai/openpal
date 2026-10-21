@@ -1985,6 +1985,37 @@
   to { transform: rotate(360deg); }
 }
 
+/* A request waiting behind another one (components/QueuedNotice.tsx): the
+   waiting line plus its own Cancel, wherever the request was started. */
+.queued-notice {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  padding: 6px 0;
+  color: var(--ink-soft);
+  font-size: 14px;
+}
+
+.queued-notice-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.queued-notice-cancel {
+  font: inherit;
+  font-weight: 600;
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  border-radius: 4px;
+}
+
+.queued-notice-cancel:hover {
+  color: var(--accent-hover);
+}
+
 .searching-label {
   overflow: hidden;
   text-overflow: ellipsis;

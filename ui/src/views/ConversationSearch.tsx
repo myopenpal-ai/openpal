@@ -101,7 +101,6 @@ export default function ConversationSearch() {
   const conversations = useStore((s) => s.conversations);
   const activeId = useStore((s) => s.active?.id);
   const setQuery = useStore((s) => s.setSidebarSearchQuery);
-  const streaming = useStore((s) => s.streaming);
   const openConversation = useStore((s) => s.openConversation);
   const setOpen = useStore((s) => s.setConversationSearchOpen);
   const setMoreDialogPage = useStore((s) => s.setMoreDialogPage);
@@ -175,7 +174,7 @@ export default function ConversationSearch() {
   const onInputKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key !== "Enter" || e.nativeEvent.isComposing || !trimmed) return;
     const top = results[0];
-    if (!top || streaming) return;
+    if (!top) return;
     e.preventDefault();
     void pick(top.id);
   };
@@ -185,7 +184,6 @@ export default function ConversationSearch() {
       key={c.id}
       type="button"
       className="conv-open conv-open-search conv-search-result"
-      disabled={streaming}
       onClick={() => void pick(c.id)}
       title={c.title}
     >

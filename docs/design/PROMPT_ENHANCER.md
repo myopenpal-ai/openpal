@@ -2,6 +2,17 @@
 
 Plan produced 2026-09-01. Method: an eight-area codebase research pass (backend one-shot path, Settings plumbing, composer UI, prompt design, tests/CI/docs conventions, cross-cutting constraints, skills/context and KV-cache measurements, UX precedents in shipped products) → four independent designs → three judges → one synthesis → an independent adversarial re-verification of every file:line citation against this worktree (branch `prompt-enhancer-toggle`). Line numbers refer to this checkout and will drift as `main` moves; treat them as pointers, not contracts.
 
+> **2026-10 update (#7): the improver queues now instead of being disabled
+> while the model is busy.** Started while a chat reply is running — from the
+> composer or from the "Improve a message" screen — it shows "Waiting for the
+> model to finish its current task…" with a Cancel of its own, then runs. The
+> single generation slot it claims (`try_claim_generation_slot`/`chat_cancel`)
+> became a FIFO queue, `GenerationQueue` in `crates/app/src/generation.rs`,
+> fronted by the store's ordered `modelRequests`; the `"busy"` improve
+> blocker and its `offBusy` string are gone. The "busy error", "rejects up
+> front" and `streaming`-blocker passages below are the 2026-09 plan, not
+> current behaviour.
+
 The user's request, verbatim: **"add a lightweight prompt enhancer (togglable by the user)"**. Read against AGENTS.md's two overriding rules (beginner-first / mono-model first) this means: a way for the *already-loaded* model to rewrite the user's draft chat message so it is clearer, more specific and better structured before it is sent — no second model, no sidecar, nothing automatic — with an on/off switch a beginner can find and flip on every platform OpenPal runs on. User-facing, the feature is never called a "prompt enhancer": the switch is **"Message improver"** and the action is **"Improve my message"**, because the primary user does not know what a prompt is (ARCHITECTURE.md L40-47).
 
 ## Verdict

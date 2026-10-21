@@ -8,6 +8,7 @@
 //!   in [`AppState`].
 
 use crate::agent_bridge;
+use crate::generation::GenerationQueue;
 use crate::logging;
 use crate::notify::{Notification, NotificationClick, NotificationPermission, Notifications};
 use crate::parental;
@@ -1363,7 +1364,7 @@ fn prescan_attachments(state: &AppState, prescan: bool, attachments: &[Attachmen
 /// What [`prescan_attachments`] scores: nothing unless `prescan`, else each
 /// document's text, in the form the turn will check it in (images carry
 /// nothing to read). Factored out so it's unit-testable without a live
-/// `AppState` (same reasoning as [`claim_generation_slot`]).
+/// `AppState`, which needs a live Tauri app to construct.
 fn prescan_texts_if(prescan: bool, attachments: &[Attachment]) -> Vec<String> {
     if !prescan {
         return Vec::new();
@@ -1908,11 +1909,12 @@ pub async fn list_cloud_models(state: State<'_, AppState>) -> Result<Vec<CloudMo
 /// One chat turn: decide its [`TurnRoute`], then — for a turn that uses
 /// tools — the prompt-injection review gate, then [`route_turn`].
 ///
-/// The turn claims the app's generation slot first, before anything else
-/// can wait, and releases it once at the very end, whichever way the turn
-/// ends — so `stop_generation` reaches it from the first moment, including
-/// while it's paused on a review card, and every route shares that one
-/// cancel flag instead of claiming its own.
+/// The turn first waits its turn in the app's generation queue (see
+/// `crate::generation`), before anything else can wait, and releases its
+/// claim once at the very end, whichever way the turn ends — so
+/// `stop_generation` reaches it from the moment it runs, including while
+/// it's paused on a review card, and every route shares that one cancel flag
+/// instead of claiming its own.
 ///
 /// Only agent and web-search turns are checked for prompt injection
 /// ([`TurnRoute::scans`]): their model has tools, so injected text could act
@@ -1951,7 +1953,7 @@ pub async fn chat_stream(
     let settings = state.settings.lock().await.clone();
     let state = state.inner();
 
-    with_generation_slot(&state.chat_cancel, |cancel| async move {
+    with_generation_slot(&state.generation, |cancel| async move {
         let route = TurnRoute::for_turn(state, &settings, web_search, agent_tools).await;
         if !route.scans() {
             return route_turn(
@@ -2141,7 +2143,8 @@ async fn route_turn(
 /// nothing to suggest: neither `auto_pick_sampling` nor the `smart-model-router`
 /// plugin is on (nothing would use the result; the plugin is experimental,
 /// so it also counts as off while experimental features are), the chat
-/// backend is Cloud (no local engine to ask), or the engine itself has
+/// backend is Cloud (no local engine to ask), another request is using the
+/// model or waiting to (see `crate::generation`), or the engine itself has
 /// nothing useful to say right now (not running, or mid-generation — see
 /// [`engine::EngineManager::classify`]). The frontend treats `None` as "no
 /// suggestion this time", not an error to surface.
@@ -2158,6 +2161,11 @@ pub async fn classify_message(
     if !settings.auto_pick_sampling && !smart_model_router_on {
         return Ok(None);
     }
+    // A hint, not worth waiting for: skip it while any request uses the model
+    // or waits to.
+    let Some(_claim) = state.generation.try_claim() else {
+        return Ok(None);
+    };
     state.engine.classify(&text).await.map_err(friendly)
 }
 
@@ -2179,6 +2187,11 @@ pub fn log_triage_action(message: String) -> Result<(), String> {
 /// itself has nothing useful to say right now (see
 /// [`engine::EngineManager::classify_risk`]). The frontend treats both
 /// `None` and `Some(RiskSignal::Safe)` as "no banner".
+///
+/// It's a request to the model like any other, so it waits its turn in the
+/// generation queue (see `crate::generation`) rather than ever sharing the
+/// engine with a reply. The frontend asks once the message's own turn reaches
+/// the head of its queue, so in practice it finds the engine free.
 #[tauri::command]
 pub async fn classify_risk(
     state: State<'_, AppState>,
@@ -2188,6 +2201,9 @@ pub async fn classify_risk(
     if !settings.risk_detection_enabled || settings.chat_backend == ChatBackend::Cloud {
         return Ok(None);
     }
+    let Some(_claim) = state.generation.claim().await else {
+        return Ok(None);
+    };
     state.engine.classify_risk(&text).await.map_err(friendly)
 }
 
@@ -2195,8 +2211,8 @@ pub async fn classify_risk(
 /// system-managed, per-conversation workspace folder + the long-lived
 /// consent/audit state in `AppState`, then hand off to
 /// `agent_bridge::run_turn`. Mirrors `plugin_chat_turn`'s shape (engine
-/// endpoint, the turn's `cancel` from `chat_stream`'s claim of
-/// `chat_cancel`, begin/end_generation bracketing the auto-unload idle
+/// endpoint, the turn's `cancel` from `chat_stream`'s claim of the
+/// generation queue, begin/end_generation bracketing the auto-unload idle
 /// timer).
 ///
 /// The workspace is never user-configurable: it's always
@@ -2386,58 +2402,29 @@ async fn resolve_cloud_access(
     Ok((model_id, access_token))
 }
 
-/// Atomically claim the app's single foreground-generation slot, or return a
-/// friendly busy error if something else already holds it. Every turn-runner
-/// (a chat turn via [`with_generation_slot`], Writing Tools, and the Message
-/// improver) goes through this instead of assigning `state.chat_cancel`
-/// directly, so a Translate/Correct/Improve request and an ordinary chat
-/// turn started concurrently can never silently clobber each other's cancel
-/// handle — the loser gets a friendly error up front instead of a stuck Stop
-/// button or a leaked idle-timer bracket.
-async fn try_claim_generation_slot(state: &AppState) -> Result<Arc<AtomicBool>, String> {
-    claim_generation_slot(&state.chat_cancel).await
-}
-
-/// The actual check-and-claim, factored out of [`try_claim_generation_slot`]
-/// so it's unit-testable against a bare `Mutex` — `AppState` itself needs a
-/// live Tauri app to construct, which nothing else in this file's test
-/// module does either.
-async fn claim_generation_slot(
-    slot: &tokio::sync::Mutex<Option<Arc<AtomicBool>>>,
-) -> Result<Arc<AtomicBool>, String> {
-    let cancel = Arc::new(AtomicBool::new(false));
-    let mut guard = slot.lock().await;
-    if guard.is_some() {
-        return Err(
-            "OpenPal is busy replying to a chat message right now. Try again in a moment."
-                .to_string(),
-        );
-    }
-    *guard = Some(cancel.clone());
-    Ok(cancel)
-}
-
-/// Claim `slot` ([`claim_generation_slot`]), run `turn` with the claimed
-/// cancel flag, and release the slot once `turn` is done — whether it
-/// returned `Ok` or `Err`. The one claim and the one release of a chat turn
-/// (`chat_stream`): nothing `turn` calls may claim or release it again. A
-/// busy slot returns its error without running `turn`.
-async fn with_generation_slot<T, F, Fut>(
-    slot: &tokio::sync::Mutex<Option<Arc<AtomicBool>>>,
-    turn: F,
-) -> Result<T, String>
+/// Wait for the app's generation queue ([`GenerationQueue`]), run `turn`
+/// with the claim's cancel flag, and release the claim once `turn` is done —
+/// whether it returned `Ok` or `Err`. The one claim and the one release of a
+/// chat turn (`chat_stream`): nothing `turn` calls may claim again. A claim
+/// cancelled while it waits (a reload of the window) returns `T::default()`
+/// without running `turn` — the same result as a turn stopped before its
+/// first token.
+async fn with_generation_slot<T, F, Fut>(queue: &GenerationQueue, turn: F) -> Result<T, String>
 where
+    T: Default,
     F: FnOnce(Arc<AtomicBool>) -> Fut,
     Fut: std::future::Future<Output = Result<T, String>>,
 {
-    let cancel = claim_generation_slot(slot).await?;
-    let result = turn(cancel).await;
-    *slot.lock().await = None;
+    let Some(claim) = queue.claim().await else {
+        return Ok(T::default());
+    };
+    let result = turn(claim.cancel_flag()).await;
+    drop(claim);
     result
 }
 
 /// Drive one chat turn against a signed-in account's cloud model, under the
-/// turn's `cancel` from `chat_stream`'s claim of `chat_cancel`.
+/// turn's `cancel` from `chat_stream`'s claim of the generation queue.
 async fn cloud_chat_turn(
     state: &AppState,
     settings: &Settings,
@@ -2635,24 +2622,13 @@ async fn plain_chat(
     result.map_err(friendly)
 }
 
+/// Stop the request running in the engine — the Stop button. Only that one:
+/// requests waiting their turn are cancelled from the frontend's own queue
+/// before they ever reach Rust, and the next one starts once this ends.
 #[tauri::command]
 pub async fn stop_generation(state: State<'_, AppState>) -> Result<(), String> {
-    stop_current_turn(&state.chat_cancel).await;
+    state.generation.stop_running();
     Ok(())
-}
-
-/// Set the cancel flag of whatever holds the generation slot, if anything:
-/// the Stop button ([`stop_generation`]), and a (re)load of the main window
-/// (`lib.rs`'s `create_main_window`). A reload drops the page a running turn
-/// streams to — and with it the card a paused turn waits on and the Stop
-/// button that could end it — so a turn waiting on a review, consent or
-/// `ask_user` answer would otherwise hold the slot (every later Send
-/// "busy") until the app restarts. Every such wait also listens for this
-/// flag, so the turn ends as if Stop had been pressed and frees the slot.
-pub(crate) async fn stop_current_turn(slot: &tokio::sync::Mutex<Option<Arc<AtomicBool>>>) {
-    if let Some(cancel) = slot.lock().await.as_ref() {
-        cancel.store(true, Ordering::SeqCst);
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2721,15 +2697,15 @@ enum ParentalGate {
 /// — callers pass a complete, already-built `messages` array of exactly a
 /// system + user message. `gate` selects `parental::enforce_send` (counts as
 /// one message) or `parental::check_send` (lock-only) — callers must
-/// validate input first either way, same reasoning as before. Rejects up
-/// front via `try_claim_generation_slot` if the app's single
-/// foreground-generation slot is already claimed by a chat turn (or vice
-/// versa — every turn-runner claims through the same helper), brackets the
-/// local engine with begin/end_generation so auto-unload can't fire
-/// mid-request, and clears `chat_cancel` on exit so `stop_generation`
-/// cancels it like any turn. Returns `Ok(true)` when the request was
-/// cancelled mid-stream (`sse::drain_sse` never turns a cancel into an
-/// `Error`), so callers can tell "no usable output" apart from "the user
+/// validate input first either way, same reasoning as before. Waits its turn
+/// in the app's generation queue (see `crate::generation`) behind any chat
+/// turn or other utility request already there — every request that uses the
+/// model claims the same queue — so `stop_generation` cancels it like any
+/// turn once it runs, brackets the local engine with begin/end_generation so
+/// auto-unload can't fire mid-request, and releases its claim on exit.
+/// Returns `Ok(true)` when the request was cancelled — mid-stream
+/// (`sse::drain_sse` never turns a cancel into an `Error`) or while it still
+/// waited — so callers can tell "no usable output" apart from "the user
 /// pressed Stop".
 async fn run_one_shot_completion(
     state: &AppState,
@@ -2750,7 +2726,10 @@ async fn run_one_shot_completion(
         None
     };
 
-    let cancel = try_claim_generation_slot(state).await?;
+    let Some(claim) = state.generation.claim().await else {
+        return Ok(true);
+    };
+    let cancel = claim.cancel_flag();
     let cancel_flag = cancel.clone();
 
     let result = if let Some((model_id, access_token)) = cloud_access {
@@ -2774,7 +2753,7 @@ async fn run_one_shot_completion(
         r
     };
 
-    *state.chat_cancel.lock().await = None;
+    drop(claim);
     result.map_err(friendly)?;
     Ok(cancel_flag.load(Ordering::SeqCst))
 }
@@ -2792,8 +2771,8 @@ fn validate_draft_length(draft: &str) -> Result<(), String> {
 }
 
 /// Trim `text` and reject it if empty. Factored out of the one-shot utility
-/// commands below so it's unit-testable without a live `AppState` (same
-/// reasoning as [`claim_generation_slot`]).
+/// commands below so it's unit-testable without a live `AppState`, which
+/// needs a live Tauri app to construct.
 fn validate_writing_tool_text(text: &str, empty_message: &str) -> Result<String, String> {
     let trimmed = text.trim().to_string();
     if trimmed.is_empty() {
@@ -5500,54 +5479,31 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn claim_generation_slot_rejects_a_second_claim_while_the_first_is_held() {
-        let slot: tokio::sync::Mutex<Option<Arc<AtomicBool>>> = tokio::sync::Mutex::new(None);
-
-        let first = claim_generation_slot(&slot)
-            .await
-            .expect("first claim should succeed on a free slot");
-
-        let second = claim_generation_slot(&slot).await;
-        assert!(
-            second.is_err(),
-            "a second claim must be rejected while the first is still held"
-        );
-
-        drop(first);
-        *slot.lock().await = None; // simulate the holder's own cleanup on completion
-        claim_generation_slot(&slot)
-            .await
-            .expect("a claim must succeed again once the slot is released");
-    }
-
-    #[tokio::test]
     async fn with_generation_slot_releases_the_slot_however_the_turn_ends() {
-        let slot: tokio::sync::Mutex<Option<Arc<AtomicBool>>> = tokio::sync::Mutex::new(None);
+        let queue = GenerationQueue::default();
 
-        let ok = with_generation_slot(&slot, |_| async { Ok(7) }).await;
+        let ok = with_generation_slot(&queue, |_| async { Ok(7) }).await;
         assert_eq!(ok, Ok(7));
-        assert!(slot.lock().await.is_none(), "released after Ok");
+        assert!(queue.try_claim().is_some(), "released after Ok");
 
         let err: Result<(), String> =
-            with_generation_slot(&slot, |_| async { Err("no model".to_string()) }).await;
+            with_generation_slot(&queue, |_| async { Err("no model".to_string()) }).await;
         assert_eq!(err, Err("no model".to_string()));
-        assert!(slot.lock().await.is_none(), "released after Err");
+        assert!(queue.try_claim().is_some(), "released after Err");
     }
 
     #[tokio::test]
     async fn with_generation_slot_holds_the_flag_stop_generation_sets_for_the_whole_turn() {
-        let slot: tokio::sync::Mutex<Option<Arc<AtomicBool>>> = tokio::sync::Mutex::new(None);
+        let queue = GenerationQueue::default();
 
-        let result = with_generation_slot(&slot, |cancel| {
-            let slot = &slot;
+        let result = with_generation_slot(&queue, |cancel| {
+            let queue = &queue;
             async move {
                 // What `stop_generation` does while the turn is waiting —
                 // e.g. on a review card, before any route has run.
-                let held = slot.lock().await.clone().expect("held while running");
-                assert!(Arc::ptr_eq(&held, &cancel));
-                held.store(true, Ordering::SeqCst);
+                queue.stop_running();
                 assert!(
-                    claim_generation_slot(slot).await.is_err(),
+                    queue.try_claim().is_none(),
                     "nothing else may claim it mid-turn"
                 );
                 Ok(cancel.load(Ordering::SeqCst))
@@ -5556,20 +5512,19 @@ mod tests {
         .await;
 
         assert_eq!(result, Ok(true), "the turn sees the stop");
-        assert!(slot.lock().await.is_none());
+        assert!(queue.try_claim().is_some());
     }
 
     #[tokio::test]
-    async fn stop_current_turn_frees_the_slot_a_turn_waiting_on_an_answer_holds() {
-        let slot: Arc<tokio::sync::Mutex<Option<Arc<AtomicBool>>>> =
-            Arc::new(tokio::sync::Mutex::new(None));
-        stop_current_turn(&slot).await; // nothing running: a no-op
+    async fn stop_all_frees_the_queue_a_turn_waiting_on_an_answer_holds() {
+        let queue = Arc::new(GenerationQueue::default());
+        queue.stop_all(); // nothing running: a no-op
 
         let (waiting_tx, waiting) = tokio::sync::oneshot::channel();
         let turn = tokio::spawn({
-            let slot = slot.clone();
+            let queue = queue.clone();
             async move {
-                with_generation_slot(&slot, |cancel| async move {
+                with_generation_slot(&queue, |cancel| async move {
                     // Like a review card nobody can answer any more (the
                     // page that showed it reloaded): only the flag ends it.
                     let _ = waiting_tx.send(());
@@ -5583,38 +5538,69 @@ mod tests {
         });
         waiting.await.unwrap();
         assert!(
-            claim_generation_slot(&slot).await.is_err(),
-            "the waiting turn holds the slot"
+            queue.try_claim().is_none(),
+            "the waiting turn holds the queue"
         );
 
         // What the reloaded window's page-load hook does.
-        stop_current_turn(&slot).await;
+        queue.stop_all();
         tokio::time::timeout(Duration::from_secs(5), turn)
             .await
             .expect("the turn ends once stopped")
             .unwrap()
             .unwrap();
-        claim_generation_slot(&slot)
-            .await
-            .expect("a new Send can claim the slot again");
+        assert!(
+            queue.try_claim().is_some(),
+            "a new Send can claim the queue again"
+        );
     }
 
     #[tokio::test]
-    async fn with_generation_slot_runs_nothing_and_releases_nothing_when_busy() {
-        let slot: tokio::sync::Mutex<Option<Arc<AtomicBool>>> = tokio::sync::Mutex::new(None);
-        let other = claim_generation_slot(&slot).await.unwrap();
+    async fn with_generation_slot_waits_its_turn_when_busy_instead_of_refusing() {
+        let queue = Arc::new(GenerationQueue::default());
+        let other = queue.claim().await.unwrap();
 
-        let mut ran = false;
-        let result = with_generation_slot(&slot, |_| {
-            ran = true;
-            async { Ok(()) }
-        })
-        .await;
+        let turn = tokio::spawn({
+            let queue = queue.clone();
+            async move { with_generation_slot(&queue, |_| async { Ok(1) }).await }
+        });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(!turn.is_finished(), "it waits while the other request runs");
 
-        assert!(result.is_err());
-        assert!(!ran);
-        let held = slot.lock().await.clone().expect("the other claim is kept");
-        assert!(Arc::ptr_eq(&held, &other));
+        drop(other);
+        let result = tokio::time::timeout(Duration::from_secs(5), turn)
+            .await
+            .expect("it runs once the other request ends")
+            .unwrap();
+        assert_eq!(result, Ok(1));
+    }
+
+    #[tokio::test]
+    async fn with_generation_slot_skips_a_turn_cancelled_while_it_waits() {
+        let queue = Arc::new(GenerationQueue::default());
+        let other = queue.claim().await.unwrap();
+
+        let turn = tokio::spawn({
+            let queue = queue.clone();
+            async move {
+                let mut ran = false;
+                let result = with_generation_slot(&queue, |_| {
+                    ran = true;
+                    async { Ok(()) }
+                })
+                .await;
+                (result, ran)
+            }
+        });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        queue.stop_all();
+        let (result, ran) = tokio::time::timeout(Duration::from_secs(5), turn)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(result, Ok(()));
+        assert!(!ran, "a turn cancelled before its turn never runs");
+        drop(other);
     }
 
     fn document(name: &str, text: Option<&str>) -> Attachment {

@@ -25,7 +25,6 @@ function baseInput(overrides: Partial<ImproveBlockerInput> = {}): ImproveBlocker
   return {
     locked: false,
     improving: false,
-    streaming: false,
     ready: true,
     starting: false,
     diskSlow: false,
@@ -110,16 +109,12 @@ describe("improveBlocker", () => {
 
   it("locked takes priority over everything else", () => {
     expect(
-      improveBlocker(baseInput({ locked: true, improving: true, streaming: true })),
+      improveBlocker(baseInput({ locked: true, improving: true, draftText: "" })),
     ).toBe("locked");
   });
 
-  it("improving takes priority over busy", () => {
-    expect(improveBlocker(baseInput({ improving: true, streaming: true }))).toBe("improving");
-  });
-
-  it("busy when another turn holds the generation slot", () => {
-    expect(improveBlocker(baseInput({ streaming: true }))).toBe("busy");
+  it("improving takes priority over the draft's own blockers", () => {
+    expect(improveBlocker(baseInput({ improving: true, draftText: "" }))).toBe("improving");
   });
 
   it("empty when there is no text and no skill prefix", () => {
@@ -171,7 +166,6 @@ describe("improveBlockerKey", () => {
   const cases: Array<[Parameters<typeof improveBlockerKey>[0], string]> = [
     ["locked", "chatView.parentalLock.placeholder"],
     ["improving", "chatView.composer.improve.offImproving"],
-    ["busy", "chatView.composer.improve.offBusy"],
     ["empty", "chatView.composer.improve.offEmpty"],
     ["skillOnly", "chatView.composer.improve.offSkillOnly"],
     ["tooLong", "chatView.composer.improve.offTooLong"],

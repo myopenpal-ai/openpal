@@ -64,6 +64,7 @@ describe("ConversationSearch", () => {
       moreDialogPage: null,
       active: { id: "current" } as Conversation,
       conversations: [],
+      modelRequests: [],
       streaming: false,
       sidebarSearchQuery: "",
       sidebarSearchResults: [],
@@ -106,6 +107,22 @@ describe("ConversationSearch", () => {
 
     expect(useStore.getState().openConversation).toHaveBeenCalledWith("lyon");
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.getByText("showing conversation: lyon")).toBeInTheDocument();
+  });
+
+  it("opens a result, by click or Enter, while a reply is still generating", async () => {
+    useStore.setState({
+      modelRequests: [{ id: "turn-1", kind: "chat", conversationId: "current", status: "running" }],
+      streaming: true,
+    });
+    const user = await openSearch();
+    useStore.setState({ sidebarSearchQuery: "lyon", sidebarSearchResults: [RESULT] });
+
+    const row = await screen.findByRole("button", { name: /Weekend in Lyon/ });
+    expect(row).toBeEnabled();
+    await user.keyboard("{Enter}");
+
+    expect(useStore.getState().openConversation).toHaveBeenCalledWith("lyon");
     expect(screen.getByText("showing conversation: lyon")).toBeInTheDocument();
   });
 

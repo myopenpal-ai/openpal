@@ -988,6 +988,10 @@
     }
   },
   "chatView": {
+    "queued": {
+      "waiting": "Waiting for the model to finish its current task…",
+      "cancel": "Cancel this request"
+    },
     "sources": {
       "label": "Sources"
     },
@@ -1178,7 +1182,6 @@
         "offSkillOnly": "Type a message after the /skill first",
         "offNotReady": "Pick a model first",
         "offStarting": "Warming up, try again in a moment",
-        "offBusy": "Wait for the current reply to finish",
         "offTooLong": "This message is too long to improve. Send it as it is.",
         "offDiskSlow": "Not available while a model runs from disk",
         "offImproving": "Improving your message…",
@@ -1257,7 +1260,6 @@
     "rejectAllChanges": "Reject all",
     "acceptChange": "Apply this suggestion",
     "rejectChange": "Revert to original",
-    "engineBusy": "Your AI is busy with another reply right now. This will run as soon as it's free.",
     "stop": "Stop",
     "runTranslate": "Translate",
     "runCorrect": "Correct",
@@ -1276,7 +1278,6 @@
     "copied": "Copied",
     "startChat": "Start a new chat with this",
     "tooLong": "This message is too long to improve. Try something shorter.",
-    "engineBusy": "Your AI is busy with another reply right now. This will run as soon as it's free.",
     "localNote": "This uses the same AI you're already chatting with, never a second model."
   },
   "markdown": {
