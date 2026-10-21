@@ -29,6 +29,7 @@ mod opener;
 mod opener;
 mod parental;
 mod portable;
+mod retention;
 // Desktop + iOS: the real OS keychain via `keyring` (secret_store.rs).
 // Android: a Tauri mobile-plugin bridge to Keystore-backed
 // EncryptedSharedPreferences (secret_store_android.rs) — `keyring` has no
@@ -243,6 +244,8 @@ pub fn run() {
             commands::get_conversation,
             commands::save_conversation,
             commands::delete_conversation,
+            commands::count_expired_conversations,
+            commands::delete_expired_conversations,
             commands::search_conversations,
             commands::get_artifact,
             commands::download_artifact,

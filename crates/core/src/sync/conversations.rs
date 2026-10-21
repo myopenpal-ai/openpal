@@ -291,6 +291,24 @@ pub fn apply_remote_unread(
     Ok(wins)
 }
 
+/// Applies (or rejects) a received pin/unpin — see [`apply_remote_title`]'s
+/// doc comment, same shape, independent register (`"conversation_pinned"`).
+pub fn apply_remote_pinned(
+    conn: &Connection,
+    conversation_id: &str,
+    hlc: Hlc,
+    pinned: bool,
+) -> Result<bool> {
+    let wins =
+        field_versions::try_apply_remote(conn, "conversation_pinned", conversation_id, &hlc)?;
+    if wins {
+        let mut conversation = crate::store::get(conn, conversation_id)?;
+        conversation.pinned = pinned;
+        crate::store::save(conn, &conversation)?;
+    }
+    Ok(wins)
+}
+
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------

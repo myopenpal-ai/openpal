@@ -3361,13 +3361,21 @@ pub async fn save_conversation(
 
 #[tauri::command]
 pub async fn delete_conversation(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    remove_conversation(&state, &id).await
+}
+
+/// A manual delete, shared with the automatic "Delete old conversations"
+/// cleanup (`crate::retention`) so both remove exactly the same things: with
+/// sync on, a tombstone that reaches every paired device; otherwise only the
+/// local row.
+pub(crate) async fn remove_conversation(state: &AppState, id: &str) -> Result<(), String> {
     let sync_enabled = state.settings.lock().await.sync_enabled;
     if sync_enabled {
-        if let Some(deps) = sync_deps(&state) {
+        if let Some(deps) = sync_deps(state) {
             let mut conn = state.app_db.lock().unwrap();
             return openpal_core::sync::capture::delete_conversation_synced(
                 &mut conn,
-                &id,
+                id,
                 &state.sync_clock,
                 &deps.sync_key,
                 &deps.mailbox_id,
@@ -3375,7 +3383,26 @@ pub async fn delete_conversation(state: State<'_, AppState>, id: String) -> Resu
             .map_err(friendly);
         }
     }
-    store::delete(&state.app_db.lock().unwrap(), &id).map_err(friendly)
+    store::delete(&state.app_db.lock().unwrap(), id).map_err(friendly)
+}
+
+/// How many conversations "Delete old conversations" would remove right now
+/// with a period of `after_days` — the number the Settings confirmation shows
+/// before the period is saved.
+#[tauri::command]
+pub fn count_expired_conversations(state: State<'_, AppState>, after_days: u32) -> usize {
+    let metas = store::list(&state.app_db.lock().unwrap());
+    openpal_core::retention::expired(&metas, crate::retention::now_ms(), Some(after_days)).len()
+}
+
+/// Run the "Delete old conversations" cleanup now, with the saved period —
+/// what Settings calls once the user confirms one, instead of waiting for
+/// the next `crate::retention` tick. Returns the deleted ids.
+#[tauri::command]
+pub async fn delete_expired_conversations(
+    state: State<'_, AppState>,
+) -> Result<Vec<String>, String> {
+    Ok(crate::retention::prune(&state).await)
 }
 
 /// Case-insensitive search over every conversation's title and message
@@ -3533,7 +3560,7 @@ pub async fn set_conversation_project(
 /// Rename a conversation from the sidebar's row menu. A read-modify-write on
 /// just the title — same reasoning as `set_conversation_project` (the
 /// sidebar only holds `ConversationMeta`, not the full conversation with its
-/// messages). Unlike `pinned` below, `title` already has full multi-device
+/// messages). Like `pinned` below, `title` has full multi-device
 /// sync support as an independent LWW register (`sync::conversations`'s
 /// `conversation_title` scope), so this routes through
 /// `sync::capture::save_conversation_synced` when sync is enabled, same as
@@ -3566,17 +3593,31 @@ pub async fn set_conversation_title(
     store::save(&conn, &conversation).map_err(friendly)
 }
 
-/// Pin/unpin a conversation from the sidebar's row menu. `pinned` isn't a
-/// synced field (see `app_db`'s `SCHEMA_V10` doc comment), so unlike
-/// `set_conversation_title`/`set_conversation_project` this never routes
-/// through `sync::capture` — a plain local read-modify-write regardless of
-/// whether sync is on. Plain `fn`, not `async` — nothing here awaits.
+/// Pin/unpin a conversation from the sidebar's row menu. Synced as its own
+/// LWW register (`sync::capture::set_conversation_pinned_synced`), so a pin
+/// keeps the conversation out of every paired device's automatic
+/// "Delete old conversations" cleanup, not just this one's.
 #[tauri::command]
-pub fn set_conversation_pinned(
+pub async fn set_conversation_pinned(
     state: State<'_, AppState>,
     conversation_id: String,
     pinned: bool,
 ) -> Result<(), String> {
+    let sync_enabled = state.settings.lock().await.sync_enabled;
+    if sync_enabled {
+        if let Some(deps) = sync_deps(&state) {
+            let mut conn = state.app_db.lock().unwrap();
+            return openpal_core::sync::capture::set_conversation_pinned_synced(
+                &mut conn,
+                &conversation_id,
+                pinned,
+                &state.sync_clock,
+                &deps.sync_key,
+                &deps.mailbox_id,
+            )
+            .map_err(friendly);
+        }
+    }
     let conn = state.app_db.lock().unwrap();
     let mut conversation = store::get(&conn, &conversation_id).map_err(friendly)?;
     conversation.pinned = pinned;
@@ -3585,7 +3626,7 @@ pub fn set_conversation_pinned(
 
 /// Set or clear a conversation's "New reply" hint in the sidebar — set when
 /// a reply finishes out of the user's sight, cleared when they look at it.
-/// Unlike `pinned`, this is synced (its own LWW register, see
+/// Like `pinned`, this is synced (its own LWW register, see
 /// `sync::capture::set_conversation_unread_synced`), so reading a
 /// conversation on one paired device clears the hint on the others.
 #[tauri::command]

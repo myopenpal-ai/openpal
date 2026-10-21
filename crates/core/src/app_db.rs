@@ -305,13 +305,14 @@ const SCHEMA_V9: &str = "
     );
     PRAGMA user_version = 9;";
 
-/// The sidebar's "Pin" conversation-row action. `pinned` deliberately does
-/// NOT get a `sync_field_versions` register of its own (unlike
-/// `conversation_title`/`conversation_project` — see
-/// `crate::sync::conversations`'s top doc comment): it rides along in
+/// The sidebar's "Pin" conversation-row action. It rides along in
 /// `crate::store::save`'s row the same way `sampling`/`context_length`/
-/// `task_type` already do, saved locally on every write but not itself
-/// broadcast to other paired devices. Same `INTEGER 0/1` convention as
+/// `task_type` already do, and is synced through its own
+/// `sync_field_versions` register (`"conversation_pinned"`, like
+/// `conversation_title`/`conversation_project`) so a pin keeps the
+/// conversation out of every paired device's "Delete old conversations"
+/// cleanup. It was device-local when this step shipped; a pin made before
+/// that changed syncs the next time it is toggled. Same `INTEGER 0/1` convention as
 /// `sync_devices.is_self` (SCHEMA_V5) — nothing in `app_db` uses SQLite's
 /// nonstandard `BOOLEAN` affinity name.
 const SCHEMA_V10: &str = "
@@ -337,7 +338,7 @@ const SCHEMA_V11: &str = "PRAGMA user_version = 11;";
 /// a conversation at points that have nothing to do with being read, so a
 /// field there would be flipped back by whichever stale copy saved last.
 /// `crate::store::set_unread` is its only writer (`store::save` leaves it
-/// alone). Unlike `pinned` (SCHEMA_V10) it IS synced, as its own
+/// alone). Like `pinned` (SCHEMA_V10) it is synced, as its own
 /// independent LWW register — see `crate::sync::field_versions`'s
 /// `"conversation_unread"` scope. `DEFAULT 0`, so every conversation that
 /// existed before this step upgrades as read.

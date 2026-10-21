@@ -182,6 +182,17 @@ fn deliver(from: &Connection, to: &mut Connection, sync_key: &SyncKey) {
                 ensure_conversation_placeholder(to, &conversation_id);
                 conversations::apply_remote_unread(to, &conversation_id, hlc, unread).unwrap();
             }
+            envelope::ChangeEnvelope::ConversationPinned {
+                conversation_id,
+                hlc,
+                pinned,
+            } => {
+                if is_stale_against_deletion(to, &conversation_id, &hlc) {
+                    continue;
+                }
+                ensure_conversation_placeholder(to, &conversation_id);
+                conversations::apply_remote_pinned(to, &conversation_id, hlc, pinned).unwrap();
+            }
             envelope::ChangeEnvelope::ConversationDeleted {
                 conversation_id,
                 hlc,
@@ -795,4 +806,64 @@ fn artifact_sync_sweep_never_syncs_an_oversized_artifact() {
         openpal_core::artifacts::get(&conn_b, "conv-1", "art-1").is_err(),
         "B must never receive an artifact that was never pushed"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Pinned: synced as its own LWW register, so a pin made on one device keeps
+// the conversation out of every device's automatic "Delete old
+// conversations" cleanup (`openpal_core::retention`), and an unpin there
+// lets it go again.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_pin_on_one_device_protects_the_conversation_from_the_other_devices_cleanup() {
+    let (mut conn_a, clock_a) = device("device-a");
+    let (mut conn_b, clock_b) = device("device-b");
+    let sync_key = SyncKey::random();
+    let day_ms = 24 * 60 * 60 * 1000;
+    let now_ms = 400 * day_ms;
+
+    // Last used 200 days before `now_ms`, well past a 90-day period.
+    let chat = Conversation {
+        updated_at_ms: 200 * day_ms,
+        ..conversation("conv-1", vec![msg("user", "hi")])
+    };
+    capture::save_conversation_synced(&mut conn_a, &chat, &clock_a, &sync_key, "mailbox").unwrap();
+    deliver(&conn_a, &mut conn_b, &sync_key);
+    let expired_on_a = |conn: &Connection| {
+        openpal_core::retention::expired(&openpal_core::store::list(conn), now_ms, Some(90))
+    };
+    assert_eq!(expired_on_a(&conn_a), ["conv-1"], "unpinned, it qualifies");
+
+    capture::set_conversation_pinned_synced(
+        &mut conn_b,
+        "conv-1",
+        true,
+        &clock_b,
+        &sync_key,
+        "mailbox",
+    )
+    .unwrap();
+    deliver(&conn_b, &mut conn_a, &sync_key);
+    assert!(
+        openpal_core::store::get(&conn_a, "conv-1").unwrap().pinned,
+        "B's pin must reach A"
+    );
+    assert!(expired_on_a(&conn_a).is_empty(), "so A's cleanup keeps it");
+
+    capture::set_conversation_pinned_synced(
+        &mut conn_b,
+        "conv-1",
+        false,
+        &clock_b,
+        &sync_key,
+        "mailbox",
+    )
+    .unwrap();
+    deliver(&conn_b, &mut conn_a, &sync_key);
+    assert!(
+        !openpal_core::store::get(&conn_a, "conv-1").unwrap().pinned,
+        "and so must B's unpin"
+    );
+    assert_eq!(expired_on_a(&conn_a), ["conv-1"]);
 }

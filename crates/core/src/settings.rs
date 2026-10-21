@@ -245,4 +245,39 @@ mod tests {
         assert_eq!(s.user_name.as_deref(), Some("Ada"));
         assert_eq!(s.theme, "sepia");
     }
+
+    #[test]
+    fn auto_delete_is_never_for_a_settings_row_predating_it() {
+        // An upgrade must never start deleting conversations: a row from
+        // before "Delete old conversations" shipped has no
+        // `autoDeleteAfterDays` key and must read as `None` (never), with the
+        // rest of the row intact so this isn't just the whole-row fallback.
+        let conn = test_conn();
+        write_raw(&conn, r#"{"onboardingCompleted": true, "userName": "Ada"}"#);
+
+        let s = load(&conn);
+        assert_eq!(s.auto_delete_after_days, None);
+        assert!(s.onboarding_completed);
+        assert_eq!(s.user_name.as_deref(), Some("Ada"));
+        assert_eq!(Settings::default().auto_delete_after_days, None);
+    }
+
+    #[test]
+    fn a_saved_auto_delete_period_survives_a_reload() {
+        // Same relaunch shape as the desktop-notifications test above.
+        let conn = test_conn();
+        let db_path = conn.path().expect("test_conn opens a file").to_owned();
+        let chosen = Settings {
+            onboarding_completed: true,
+            auto_delete_after_days: Some(45),
+            ..Settings::default()
+        };
+        save(&conn, &chosen).unwrap();
+        drop(conn);
+
+        let (reopened, _, _) = crate::app_db::open(std::path::Path::new(&db_path), None).unwrap();
+        let s = load(&reopened);
+        assert_eq!(s.auto_delete_after_days, Some(45));
+        assert!(s.onboarding_completed);
+    }
 }

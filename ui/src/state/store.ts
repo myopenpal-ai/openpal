@@ -622,6 +622,10 @@ interface Store {
    * requested — a no-op if there's nothing pending. */
   clearScrollToMessage: () => void;
   deleteConversation: (id: string) => Promise<void>;
+  /** Drop conversations the backend already deleted ("Delete old
+   * conversations") from everything the UI holds: the sidebar, the open
+   * chat, search results, and any turn still queued or running for one. */
+  forgetConversations: (ids: string[]) => void;
   /** Update the sidebar search box's text at once (for the input's own
    * value) and, debounced, run the actual search into `sidebarSearchResults`.
    * An empty (post-trim) query clears results immediately rather than
@@ -646,8 +650,8 @@ interface Store {
   moveConversationToProject: (conversationId: string, projectId: string | null) => Promise<void>;
   /** Rename a conversation from the sidebar's row menu. */
   renameConversation: (conversationId: string, title: string) => Promise<void>;
-  /** Pin/unpin a conversation from the sidebar's row menu. Device-local —
-   * not synced across paired devices (see `api.setConversationPinned`). */
+  /** Pin/unpin a conversation from the sidebar's row menu. Synced across
+   * paired devices (see `api.setConversationPinned`). */
   setConversationPinned: (conversationId: string, pinned: boolean) => Promise<void>;
   loadSkills: () => Promise<void>;
   /** Create (empty `slug`) or update (existing `slug`) a skill. Returns the
@@ -920,6 +924,7 @@ let engineNudgeRegistered = false;
 
 /** The same, for the "notification clicked" listener. */
 let clickNudgeRegistered = false;
+let prunedNudgeRegistered = false;
 
 /** True from the moment an app update has finished downloading until it fails
  * or the app is gone: the install that follows verifies, unpacks and — in the
@@ -1014,6 +1019,20 @@ function engineAppEvent(state: Store, e: EngineAlertEvent): AppEvent {
     kind: e.kind,
     key: `engine:${e.kind}:${e.occurrence}`,
     modelName: engineModelName(state.models, e.modelId) ?? engineNames.get(e.modelId) ?? null,
+  };
+}
+
+/** `s` with deleted conversations removed from everything that lists or
+ * shows them. Shared by a manual delete and `forgetConversations`. */
+function withoutConversations(s: Store, ids: string[]): Partial<Store> {
+  const gone = new Set(ids);
+  const safetyAlerts = { ...s.safetyAlerts };
+  for (const id of ids) delete safetyAlerts[id];
+  return {
+    conversations: s.conversations.filter((c) => !gone.has(c.id)),
+    active: s.active && gone.has(s.active.id) ? null : s.active,
+    safetyAlerts,
+    sidebarSearchResults: s.sidebarSearchResults.filter((r) => !gone.has(r.id)),
   };
 }
 
@@ -2091,6 +2110,20 @@ export const useStore = create<Store>()((set, get) => ({
     }
     void get().followNotificationClick();
 
+    // "Delete old conversations" runs in Rust on its own schedule; it says
+    // which ones it removed so they leave the sidebar (and an open one
+    // closes) without waiting for a reload.
+    if (!prunedNudgeRegistered) {
+      prunedNudgeRegistered = true;
+      try {
+        Promise.resolve(api.onConversationsPruned((ids) => get().forgetConversations(ids))).catch(
+          () => {},
+        );
+      } catch {
+        // Not callable here (a test mock).
+      }
+    }
+
     // Models + report + plugins can land after first paint.
     const modelsReady = get().refreshModels();
     // Silent, fire-and-forget backfill for custom models added before OpenPal
@@ -2713,19 +2746,25 @@ export const useStore = create<Store>()((set, get) => ({
     backgroundChatErrors.delete(id);
     try {
       await api.deleteConversation(id);
-      set((s) => {
-        const safetyAlerts = { ...s.safetyAlerts };
-        delete safetyAlerts[id];
-        return {
-          conversations: s.conversations.filter((c) => c.id !== id),
-          active: s.active?.id === id ? null : s.active,
-          safetyAlerts,
-          sidebarSearchResults: s.sidebarSearchResults.filter((r) => r.id !== id),
-        };
-      });
+      set((s) => withoutConversations(s, [id]));
     } catch (err: unknown) {
       set({ notice: String(err) });
     }
+  },
+
+  forgetConversations: (ids) => {
+    if (ids.length === 0) return;
+    for (const id of ids) {
+      // Same as a manual delete: a turn for it is cancelled and never saved
+      // back, which would otherwise recreate the row.
+      const request = chatRequestFor(get(), id);
+      if (request) {
+        discardedConversations.add(id);
+        Promise.resolve(get().cancelModelRequest(request.id)).catch(() => {});
+      }
+      backgroundChatErrors.delete(id);
+    }
+    set((s) => withoutConversations(s, ids));
   },
 
   setSidebarSearchQuery: (query) => {

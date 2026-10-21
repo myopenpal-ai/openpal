@@ -121,6 +121,22 @@
       "idleMinutes_one": "{{count}} min idle",
       "idleMinutes_other": "{{count}} min idle"
     },
+    "autoDelete": {
+      "label": "Delete old conversations",
+      "help": "Conversations you haven't used in this long are deleted automatically, on all your devices. Pinned conversations and those in a project are kept.",
+      "never": "Never",
+      "after30": "After 30 days",
+      "after90": "After 90 days",
+      "after365": "After 365 days",
+      "custom": "Custom…",
+      "customDays": "Number of days",
+      "customInvalid": "Enter a whole number of days, 1 or more.",
+      "confirmTitle": "Delete old conversations now?",
+      "confirmBody_one": "{{count}} conversation hasn't been used in this long and will be deleted now, on all your devices. This can't be undone.",
+      "confirmBody_other": "{{count}} conversations haven't been used in this long and will be deleted now, on all your devices. This can't be undone.",
+      "confirmAction": "Delete them",
+      "cancel": "Cancel"
+    },
     "autoLoadStartup": {
       "label": "Load model on startup",
       "hint": "Load an AI model automatically when OpenPal opens (your last-used model, or the fixed default below) so it's ready before you start typing. Turn this off to open to an idle chat instead."

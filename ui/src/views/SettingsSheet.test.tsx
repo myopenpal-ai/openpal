@@ -2,7 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import i18n from "../i18n";
-import SettingsSheet, { ExperimentalSection, YourDataSection } from "./SettingsSheet";
+import SettingsSheet, {
+  AutoDeleteSection,
+  ExperimentalSection,
+  YourDataSection,
+} from "./SettingsSheet";
 import { useStore } from "../state/store";
 import type { AppInfo, PluginInfo, Settings } from "../lib/types";
 
@@ -14,6 +18,8 @@ const {
   estimateExportSize,
   exportData,
   exportCounts,
+  countExpiredConversations,
+  deleteExpiredConversations,
 } = vi.hoisted(() => ({
   updateSettings: vi.fn(),
   notificationPermission: vi.fn(),
@@ -22,6 +28,8 @@ const {
   estimateExportSize: vi.fn(),
   exportData: vi.fn(),
   exportCounts: vi.fn(),
+  countExpiredConversations: vi.fn(),
+  deleteExpiredConversations: vi.fn(),
 }));
 
 // The only calls the pages rendered here may make are the write behind the theme
@@ -30,7 +38,8 @@ const {
 // does when it opens, the OS permission request that turning the switch on
 // makes, and the "blocked" line's button that opens the OS notification
 // settings, plus the Your data section's export size estimate, category
-// counts and export; any other still throws.
+// counts and export, and "Delete old conversations"' count and cleanup; any
+// other still throws.
 vi.mock("../lib/api", () => ({
   api: {
     updateSettings,
@@ -40,6 +49,8 @@ vi.mock("../lib/api", () => ({
     estimateExportSize,
     exportData,
     exportCounts,
+    countExpiredConversations,
+    deleteExpiredConversations,
   },
 }));
 
@@ -886,5 +897,170 @@ describe("YourDataSection", () => {
     }
     expect(screen.getByRole("button", { name: "Export data…" })).toBeDisabled();
     expect(screen.queryByText(/Estimat/)).toBeNull();
+  });
+});
+
+describe("AutoDeleteSection", () => {
+  // Saves into the store like the real `saveSettings`, so the section can
+  // see the period held before it runs the cleanup.
+  const savePeriod = vi.fn(async (patch: Partial<Settings>) => {
+    useStore.setState((s) => ({ settings: { ...(s.settings as Settings), ...patch } }));
+  });
+  const forgetConversations = vi.fn();
+
+  function renderSection(autoDeleteAfterDays?: number | null) {
+    useStore.setState({
+      settings: { autoDeleteAfterDays } as Settings,
+      saveSettings: savePeriod,
+      forgetConversations,
+    });
+    return render(<AutoDeleteSection />);
+  }
+  const select = () => screen.getByRole("combobox", { name: "Delete old conversations" });
+  const customInput = () => screen.getByRole("textbox", { name: "Number of days" });
+
+  beforeEach(() => {
+    savePeriod.mockClear();
+    forgetConversations.mockClear();
+    countExpiredConversations.mockReset().mockResolvedValue(0);
+    deleteExpiredConversations.mockReset().mockResolvedValue([]);
+  });
+
+  it("is on the Your data page, described by its help text", () => {
+    exportCounts.mockResolvedValue(null);
+    estimateExportSize.mockResolvedValue(0);
+    useStore.setState({
+      settings: { autoDeleteAfterDays: null } as Settings,
+      appInfo: null,
+      saveSettings: savePeriod,
+    });
+    render(<SettingsSheet section="data" />);
+    expect(select()).toHaveAccessibleDescription(/Pinned conversations and those in a project are kept/);
+  });
+
+  it("offers Never, 30, 90 and 365 days, and Custom", () => {
+    renderSection(null);
+    expect(within(select()).getAllByRole("option").map((o) => o.textContent)).toEqual([
+      "Never",
+      "After 30 days",
+      "After 90 days",
+      "After 365 days",
+      "Custom…",
+    ]);
+  });
+
+  it.each([
+    { saved: undefined, when: "a settings row saved before it existed has none" },
+    { saved: null, when: "it is saved off" },
+  ])("reads Never when $when", ({ saved }) => {
+    renderSection(saved);
+    expect(select()).toHaveValue("never");
+  });
+
+  it("shows a saved period that isn't a preset as Custom with its number", () => {
+    renderSection(45);
+    expect(select()).toHaveValue("custom");
+    expect(customInput()).toHaveValue("45");
+  });
+
+  it("saves a period without asking when nothing qualifies yet, then runs the cleanup", async () => {
+    renderSection(null);
+    await userEvent.selectOptions(select(), "90");
+
+    await waitFor(() => expect(savePeriod).toHaveBeenCalledWith({ autoDeleteAfterDays: 90 }));
+    expect(countExpiredConversations).toHaveBeenCalledWith(90);
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    await waitFor(() => expect(deleteExpiredConversations).toHaveBeenCalledTimes(1));
+    expect(select()).toHaveValue("90");
+  });
+
+  it("asks first, showing how many, when conversations already qualify", async () => {
+    countExpiredConversations.mockResolvedValue(3);
+    deleteExpiredConversations.mockResolvedValue(["a", "b", "c"]);
+    renderSection(null);
+    await userEvent.selectOptions(select(), "30");
+
+    const dialog = await screen.findByRole("alertdialog", { name: "Delete old conversations now?" });
+    expect(dialog).toHaveTextContent(
+      "3 conversations haven't been used in this long and will be deleted now, on all your devices. This can't be undone.",
+    );
+    // Nothing is saved, and nothing deleted, before the confirmation.
+    expect(savePeriod).not.toHaveBeenCalled();
+    expect(deleteExpiredConversations).not.toHaveBeenCalled();
+
+    await userEvent.click(within(dialog).getByRole("button", { name: "Delete them" }));
+    await waitFor(() => expect(forgetConversations).toHaveBeenCalledWith(["a", "b", "c"]));
+    expect(savePeriod).toHaveBeenCalledWith({ autoDeleteAfterDays: 30 });
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(select()).toHaveValue("30");
+  });
+
+  it("uses the singular for one conversation", async () => {
+    countExpiredConversations.mockResolvedValue(1);
+    renderSection(null);
+    await userEvent.selectOptions(select(), "30");
+    expect(await screen.findByRole("alertdialog")).toHaveTextContent(
+      "1 conversation hasn't been used in this long",
+    );
+  });
+
+  it("asks again when a period is shortened, and Cancel deletes nothing and keeps the old one", async () => {
+    countExpiredConversations.mockResolvedValue(2);
+    renderSection(365);
+    await userEvent.selectOptions(select(), "30");
+
+    const dialog = await screen.findByRole("alertdialog");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(savePeriod).not.toHaveBeenCalled();
+    expect(deleteExpiredConversations).not.toHaveBeenCalled();
+    expect(select()).toHaveValue("365");
+    expect(useStore.getState().settings?.autoDeleteAfterDays).toBe(365);
+  });
+
+  it("turns it off with Never, without asking or deleting anything", async () => {
+    renderSection(30);
+    await userEvent.selectOptions(select(), "never");
+    await waitFor(() => expect(savePeriod).toHaveBeenCalledWith({ autoDeleteAfterDays: null }));
+    expect(countExpiredConversations).not.toHaveBeenCalled();
+    expect(deleteExpiredConversations).not.toHaveBeenCalled();
+  });
+
+  it("saves nothing on choosing Custom until a number is entered", async () => {
+    renderSection(null);
+    await userEvent.selectOptions(select(), "custom");
+    expect(customInput()).toHaveValue("");
+    expect(savePeriod).not.toHaveBeenCalled();
+    expect(countExpiredConversations).not.toHaveBeenCalled();
+  });
+
+  it("accepts a whole number of days in Custom", async () => {
+    renderSection(null);
+    await userEvent.selectOptions(select(), "custom");
+    await userEvent.type(customInput(), "45{Enter}");
+
+    await waitFor(() => expect(savePeriod).toHaveBeenCalledWith({ autoDeleteAfterDays: 45 }));
+    expect(countExpiredConversations).toHaveBeenCalledWith(45);
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it.each([
+    { input: "", what: "empty" },
+    { input: "0", what: "zero" },
+    { input: "-5", what: "negative" },
+    { input: "1.5", what: "a decimal" },
+    { input: "abc", what: "non-numeric" },
+  ])("rejects $what Custom input and keeps the saved value", async ({ input }) => {
+    renderSection(90);
+    await userEvent.selectOptions(select(), "custom");
+    await userEvent.clear(customInput());
+    await userEvent.type(customInput(), `${input}{Enter}`);
+
+    expect(screen.getByRole("alert")).toHaveTextContent("Enter a whole number of days, 1 or more.");
+    expect(customInput()).toHaveAttribute("aria-invalid", "true");
+    expect(savePeriod).not.toHaveBeenCalled();
+    expect(countExpiredConversations).not.toHaveBeenCalled();
+    expect(useStore.getState().settings?.autoDeleteAfterDays).toBe(90);
   });
 });

@@ -212,6 +212,9 @@ export const SETTINGS_SEARCH_ENTRIES = [
     label: "settingsSheet.diagnostics.importData.label",
     hint: "settingsSheet.diagnostics.importData.hint",
   },
+  // Label only: its help text's "this long … on all your devices" would make
+  // queries meant for the Notifications switch ("on this device") find it.
+  { section: "data", label: "settingsSheet.autoDelete.label" },
   {
     section: "data",
     label: "appLock.settings.dangerZone.summary",

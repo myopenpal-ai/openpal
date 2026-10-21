@@ -45,6 +45,31 @@ describe("api.onEngineStatusChanged", () => {
   });
 });
 
+// `retention.rs` pins the Rust half of this name, and serializes the ids as a
+// plain JSON array.
+describe("api.onConversationsPruned", () => {
+  it("listens to Rust's conversations-pruned event and passes the deleted ids on", async () => {
+    const unlisten = vi.fn();
+    listen.mockResolvedValue(unlisten);
+    const cb = vi.fn();
+
+    const stop = await api.onConversationsPruned(cb);
+
+    expect(listen.mock.calls[0][0]).toBe("conversations-pruned");
+    listen.mock.calls[0][1]({ event: "conversations-pruned", id: 1, payload: ["a", "b"] });
+    expect(cb).toHaveBeenCalledWith(["a", "b"]);
+    expect(stop).toBe(unlisten);
+  });
+
+  it("resolves to a no-op where there is no event bridge, rather than rejecting", async () => {
+    listen.mockImplementation(() => {
+      throw new TypeError("__TAURI_INTERNALS__ is undefined");
+    });
+    const stop = await api.onConversationsPruned(() => {});
+    expect(() => stop()).not.toThrow();
+  });
+});
+
 describe("the notification commands", () => {
   it("names the Rust commands and their arguments as Rust declares them", async () => {
     invoke.mockResolvedValue(undefined);

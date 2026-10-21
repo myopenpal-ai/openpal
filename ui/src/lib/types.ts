@@ -918,12 +918,13 @@ export interface Conversation {
    * means it isn't grouped into any. */
   projectId?: string | null;
   /** Whether this conversation is pinned to the top of the sidebar.
-   * Device-local — not synced across paired devices (see the Rust
-   * `app_db::SCHEMA_V10` doc comment). */
+   * Synced across paired devices, so a pin keeps it out of every device's
+   * "Delete old conversations" cleanup (see the Rust `app_db::SCHEMA_V10`
+   * doc comment). */
   pinned: boolean;
   /** Edit-history and retry-history variants, keyed by the id of the
    * message immediately preceding a branch point (or `ROOT_BRANCH_KEY`
-   * for a branch at array index 0). Unlike `pinned`, this DOES sync
+   * for a branch at array index 0). Like `pinned`, this DOES sync
    * across paired devices — it rides along inside the same whole-conversation
    * snapshot the sync engine already broadcasts on any edit/retry-shaped
    * rewrite (see `crate::sync::conversations`' doc comment on the Rust
@@ -1192,6 +1193,12 @@ export interface Settings {
    * focused window. Off by default, and off for a settings row saved before the
    * field existed — so code that reads it can compare with `=== true`. */
   desktopNotifications: boolean;
+  /** Settings → Your data "Delete old conversations": conversations not used
+   * (`updatedAtMs`) in this many days are deleted automatically, on every
+   * paired device, unless pinned or in a project. `null` (the default, and
+   * what a settings row saved before the field existed reads as) means never.
+   * Mirrors the Rust `Settings::auto_delete_after_days` (`Option<u32>`). */
+  autoDeleteAfterDays: number | null;
 }
 
 /** The Settings UI's language picker, and every other file that needs to name

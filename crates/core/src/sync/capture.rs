@@ -111,6 +111,34 @@ pub fn set_conversation_unread_synced(
     Ok(())
 }
 
+/// Pin or unpin plus capture: records the change under its own
+/// `field_versions` register (`"conversation_pinned"`) and queues a
+/// `ConversationPinned` envelope, all in one transaction. Separate from
+/// [`save_conversation_synced`], which only broadcasts message, title and
+/// project changes, the same way [`set_conversation_unread_synced`] is.
+pub fn set_conversation_pinned_synced(
+    conn: &mut Connection,
+    conversation_id: &str,
+    pinned: bool,
+    clock: &HlcClock,
+    sync_key: &SyncKey,
+    mailbox_id: &str,
+) -> Result<()> {
+    let tx = conn.transaction()?;
+    let mut conversation = crate::store::get(&tx, conversation_id)?;
+    conversation.pinned = pinned;
+    crate::store::save(&tx, &conversation)?;
+    let hlc = field_versions::record_local(&tx, "conversation_pinned", conversation_id, clock)?;
+    let envelope = ChangeEnvelope::ConversationPinned {
+        conversation_id: conversation_id.to_string(),
+        hlc: hlc.clone(),
+        pinned,
+    };
+    enqueue_envelope(&tx, sync_key, mailbox_id, &hlc, &envelope)?;
+    tx.commit()?;
+    Ok(())
+}
+
 /// `store::delete` plus capture — a tombstone, not a bare physical delete
 /// signal (`docs/design/MULTI_DEVICE_SYNC.md`'s "Deletes are tombstones, never
 /// physical row removal"). Records the deletion's `Hlc` under
@@ -749,6 +777,31 @@ mod tests {
             } => {
                 assert_eq!(conversation_id, "conv-1");
                 assert!(unread);
+            }
+            other => panic!("wrong envelope variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn set_conversation_pinned_synced_saves_the_pin_and_queues_a_pinned_envelope() {
+        let mut conn = test_conn();
+        let clock = HlcClock::new("device-a".to_string());
+        let sync_key = SyncKey::random();
+        crate::store::save(&conn, &conversation("conv-1", vec![msg("user", "hello")])).unwrap();
+
+        set_conversation_pinned_synced(&mut conn, "conv-1", true, &clock, &sync_key, "mailbox-1")
+            .unwrap();
+
+        assert!(crate::store::list(&conn)[0].pinned);
+        assert!(field_versions::get(&conn, "conversation_pinned", "conv-1").is_some());
+        match one_envelope(&conn, &sync_key) {
+            ChangeEnvelope::ConversationPinned {
+                conversation_id,
+                pinned,
+                ..
+            } => {
+                assert_eq!(conversation_id, "conv-1");
+                assert!(pinned);
             }
             other => panic!("wrong envelope variant: {other:?}"),
         }

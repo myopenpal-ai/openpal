@@ -30,6 +30,7 @@ export function freshInstallResponses(overrides: Record<string, unknown> = {}) {
       defaultModelId: null,
       theme: "system",
       desktopNotifications: false,
+      autoDeleteAfterDays: null,
     },
     get_engine_status: { type: "stopped" },
     list_conversations: [],

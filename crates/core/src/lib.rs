@@ -81,6 +81,7 @@ pub mod plugin;
 pub mod projects;
 pub mod prompt_enhancer;
 pub mod remote;
+pub mod retention;
 pub mod selection;
 pub mod settings;
 pub mod skills;

@@ -378,6 +378,7 @@ fn envelope_device_id(change: &ChangeEnvelope) -> &str {
         | ChangeEnvelope::ConversationTitle { hlc, .. }
         | ChangeEnvelope::ConversationProject { hlc, .. }
         | ChangeEnvelope::ConversationUnread { hlc, .. }
+        | ChangeEnvelope::ConversationPinned { hlc, .. }
         | ChangeEnvelope::ConversationDeleted { hlc, .. }
         | ChangeEnvelope::ProjectRow { hlc, .. }
         | ChangeEnvelope::ProjectDeleted { hlc, .. }
@@ -466,6 +467,19 @@ fn route_pulled_envelope(
             ensure_conversation_placeholder(state, &conversation_id)?;
             let conn = state.app_db.lock().unwrap();
             conversations::apply_remote_unread(&conn, &conversation_id, hlc, unread)?;
+            Ok(None)
+        }
+        ChangeEnvelope::ConversationPinned {
+            conversation_id,
+            hlc,
+            pinned,
+        } => {
+            if is_stale_against_deletion(state, &conversation_id, &hlc) {
+                return Ok(None);
+            }
+            ensure_conversation_placeholder(state, &conversation_id)?;
+            let conn = state.app_db.lock().unwrap();
+            conversations::apply_remote_pinned(&conn, &conversation_id, hlc, pinned)?;
             Ok(None)
         }
         ChangeEnvelope::ConversationDeleted {

@@ -65,6 +65,15 @@ pub enum ChangeEnvelope {
         hlc: Hlc,
         unread: bool,
     },
+    /// Pinned to the top of the sidebar, or unpinned — its own LWW register
+    /// (`field_versions` scope `"conversation_pinned"`). Synced so a pin made
+    /// on any device keeps the conversation out of every device's automatic
+    /// "Delete old conversations" cleanup (`crate::retention`).
+    ConversationPinned {
+        conversation_id: String,
+        hlc: Hlc,
+        pinned: bool,
+    },
     /// A tombstone, never a physical-delete signal to blindly replay —
     /// `docs/design/MULTI_DEVICE_SYNC.md`'s "Deletes are tombstones, never physical
     /// row removal": the receiving side records this HLC in

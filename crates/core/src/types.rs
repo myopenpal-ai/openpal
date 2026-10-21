@@ -1540,16 +1540,17 @@ pub struct Conversation {
     /// `sampling`/`context_length`/`task_type`.
     #[serde(default)]
     pub project_id: Option<String>,
-    /// Whether this conversation is pinned to the top of the sidebar. Local
-    /// to this device — see `crate::app_db`'s `SCHEMA_V10` doc comment for
-    /// why this isn't a synced field. `#[serde(default)]` for the same
+    /// Whether this conversation is pinned to the top of the sidebar. Synced
+    /// as its own LWW register (`crate::sync::capture::set_conversation_pinned_synced`),
+    /// so a pin made on one device keeps the conversation safe from
+    /// `crate::retention` on every device. `#[serde(default)]` for the same
     /// backward-compat reason as `sampling`/`context_length`/`task_type`.
     #[serde(default)]
     pub pinned: bool,
     /// Edit-history and retry-history variants, keyed by the `id` of the
     /// message immediately preceding a branch point (or [`ROOT_BRANCH_KEY`]
-    /// when branching at message index 0). Unlike `pinned`, this field IS
-    /// synced: it rides inside the same JSON blob that
+    /// when branching at message index 0). Synced like `pinned`, but
+    /// with no register of its own: it rides inside the same JSON blob that
     /// `crate::sync::conversations::apply_local`'s rewrite branch already
     /// clones wholesale into a `ConversationSnapshot` envelope whenever
     /// `messages` changes non-append-wise (which every edit/retry/variant
@@ -1932,6 +1933,13 @@ pub struct Settings {
     /// re-reads it on every call, so flipping the switch off takes effect at
     /// once even for a stale webview.
     pub desktop_notifications: bool,
+    /// Settings → Your data "Delete old conversations": conversations whose
+    /// last activity (`updated_at_ms`) is older than this many days are
+    /// deleted automatically, unless pinned or in a project — see
+    /// `crate::retention`. `None` (the default, and what a settings row saved
+    /// before this field existed reads as) means never. Synced with the rest
+    /// of `Settings`, and each deletion syncs like a manual one.
+    pub auto_delete_after_days: Option<u32>,
 }
 
 impl Default for Settings {
@@ -1971,6 +1979,7 @@ impl Default for Settings {
             experimental_features: false,
             theme: "system".to_string(),
             desktop_notifications: false,
+            auto_delete_after_days: None,
             system_prompt: "You are a friendly, helpful AI assistant running privately on the \
                             user's own computer. Be clear and warm. When the user seems new to a \
                             topic, explain it simply and avoid jargon. Keep answers concise unless \

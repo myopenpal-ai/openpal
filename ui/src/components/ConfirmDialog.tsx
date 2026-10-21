@@ -7,6 +7,8 @@ export interface ConfirmDialogProps {
   title: string;
   message: string;
   confirmLabel: string;
+  /** The cancel button's text; `common.cancel` ("Cancel") when omitted. */
+  cancelLabel?: string;
   /** Disables both buttons while the confirmed action is in flight. */
   busy?: boolean;
   /** Confirm-button styling. `"danger"` (the default, and every existing
@@ -39,6 +41,7 @@ export default function ConfirmDialog({
   title,
   message,
   confirmLabel,
+  cancelLabel,
   busy,
   confirmVariant = "danger",
   onConfirm,
@@ -66,7 +69,7 @@ export default function ConfirmDialog({
           <p id={messageId} className="model-confirm-text">{message}</p>
           <div className="model-confirm-actions">
             <button className="btn-quiet" disabled={busy} onClick={onCancel}>
-              {t("common.cancel")}
+              {cancelLabel ?? t("common.cancel")}
             </button>
             <button
               className={confirmVariant === "danger" ? "btn-quiet btn-danger-quiet" : "btn"}

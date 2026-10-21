@@ -23,6 +23,10 @@
 //!   conversation id. Unlike title/project it never rides on a
 //!   `Conversation` save: `crate::sync::capture::set_conversation_unread_synced`
 //!   is its only local writer.
+//! - `"conversation_pinned"` — pinned to the top of the sidebar
+//!   (`conversations.pinned`, see `crate::app_db`'s `SCHEMA_V10`), a fourth
+//!   independent register, `row_key` is the conversation id. Its only local
+//!   writer is `crate::sync::capture::set_conversation_pinned_synced`.
 //! - `"conversation_snapshot"` — the whole-conversation LWW fallback
 //!   `crate::sync::conversations` uses when it detects a rewrite/
 //!   truncation (an edited-and-regenerated message) rather than a pure

@@ -505,6 +505,7 @@ function DataSettings() {
   return (
     <>
       <YourDataSection />
+      <AutoDeleteSection />
       <DangerZoneSection />
     </>
   );
@@ -2420,6 +2421,180 @@ export function YourDataSection() {
         )}
       </div>
     </>
+  );
+}
+
+/** The fixed choices of "Delete old conversations", in days. */
+const AUTO_DELETE_PRESETS = [30, 90, 365] as const;
+
+/** The `<select>` value a saved period shows as. */
+function autoDeleteChoice(days: number | null | undefined): string {
+  if (days == null) return "never";
+  return (AUTO_DELETE_PRESETS as readonly number[]).includes(days) ? String(days) : "custom";
+}
+
+/** A Custom entry as a period, or null when it isn't a whole number of days,
+ * 1 or more (that also fits the `u32` the Rust side stores it in). */
+function parseCustomDays(raw: string): number | null {
+  const trimmed = raw.trim();
+  if (!/^\d+$/.test(trimmed)) return null;
+  const days = Number(trimmed);
+  return days >= 1 && days <= 0xffffffff ? days : null;
+}
+
+/**
+ * Settings → Your data "Delete old conversations": off ("Never") by default.
+ * Picking or shortening a period asks first when conversations already
+ * qualify, showing how many, and saves nothing until confirmed; the deletion
+ * itself happens in Rust (`commands::delete_expired_conversations`, then
+ * `crates/app/src/retention.rs` on every unlock and hourly).
+ */
+export function AutoDeleteSection() {
+  const saved = useStore((s) => s.settings?.autoDeleteAfterDays ?? null);
+  const saveSettings = useStore((s) => s.saveSettings);
+  const forgetConversations = useStore((s) => s.forgetConversations);
+  const { t } = useTranslation();
+  const idPrefix = useId();
+  // What the select shows while a choice isn't saved yet (Custom being typed
+  // in, or a period waiting on the confirmation); the saved value otherwise.
+  const [draftChoice, setDraftChoice] = useState<string | null>(null);
+  const [customDays, setCustomDays] = useState(() =>
+    autoDeleteChoice(saved) === "custom" ? String(saved) : "",
+  );
+  const [invalid, setInvalid] = useState(false);
+  const [pending, setPending] = useState<{ days: number; count: number } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const choice = draftChoice ?? autoDeleteChoice(saved);
+
+  const commit = async (days: number | null) => {
+    setBusy(true);
+    try {
+      await saveSettings({ autoDeleteAfterDays: days });
+      // `saveSettings` reports its own failure; only delete once it held.
+      if (days !== null && useStore.getState().settings?.autoDeleteAfterDays === days) {
+        forgetConversations(await api.deleteExpiredConversations());
+      }
+    } catch (err: unknown) {
+      useStore.setState({ notice: String(err) });
+    } finally {
+      setBusy(false);
+      setPending(null);
+      setDraftChoice(null);
+    }
+  };
+
+  const choose = async (days: number | null) => {
+    if (days === saved) {
+      setDraftChoice(null);
+      return;
+    }
+    if (days === null) {
+      await commit(null);
+      return;
+    }
+    let count: number;
+    try {
+      count = await api.countExpiredConversations(days);
+    } catch (err: unknown) {
+      useStore.setState({ notice: String(err) });
+      return;
+    }
+    if (count > 0) setPending({ days, count });
+    else await commit(days);
+  };
+
+  const onSelect = (value: string) => {
+    setInvalid(false);
+    if (value === "custom") {
+      setDraftChoice("custom");
+      return;
+    }
+    setDraftChoice(value);
+    void choose(value === "never" ? null : Number(value));
+  };
+
+  const submitCustom = () => {
+    // Enter, then the blur the dialog's focus causes, must not ask twice.
+    if (busy || pending) return;
+    const days = parseCustomDays(customDays);
+    if (days === null) {
+      setInvalid(true);
+      return;
+    }
+    setInvalid(false);
+    void choose(days);
+  };
+
+  const labelId = `${idPrefix}-label`;
+  const hintId = `${idPrefix}-hint`;
+  const errorId = `${idPrefix}-error`;
+  return (
+    <div className="settings-field">
+      <span id={labelId} className="settings-label">
+        {t("settingsSheet.autoDelete.label")}
+      </span>
+      <span id={hintId} className="settings-hint">
+        {t("settingsSheet.autoDelete.help")}
+      </span>
+      <select
+        className="settings-select"
+        aria-labelledby={labelId}
+        aria-describedby={hintId}
+        value={choice}
+        disabled={busy}
+        onChange={(e) => onSelect(e.target.value)}
+      >
+        <option value="never">{t("settingsSheet.autoDelete.never")}</option>
+        <option value="30">{t("settingsSheet.autoDelete.after30")}</option>
+        <option value="90">{t("settingsSheet.autoDelete.after90")}</option>
+        <option value="365">{t("settingsSheet.autoDelete.after365")}</option>
+        <option value="custom">{t("settingsSheet.autoDelete.custom")}</option>
+      </select>
+      {choice === "custom" && (
+        <form
+          className="settings-local-row"
+          onSubmit={(e) => {
+            e.preventDefault();
+            submitCustom();
+          }}
+        >
+          <input
+            type="text"
+            inputMode="numeric"
+            value={customDays}
+            disabled={busy}
+            aria-label={t("settingsSheet.autoDelete.customDays")}
+            aria-invalid={invalid}
+            aria-describedby={invalid ? errorId : undefined}
+            onChange={(e) => {
+              setCustomDays(e.target.value);
+              setInvalid(false);
+            }}
+            onBlur={submitCustom}
+          />
+          <span className="settings-hint">{t("settingsSheet.autoDelete.customDays")}</span>
+        </form>
+      )}
+      {invalid && (
+        <p id={errorId} className="model-error" role="alert">
+          {t("settingsSheet.autoDelete.customInvalid")}
+        </p>
+      )}
+      {pending && (
+        <ConfirmDialog
+          title={t("settingsSheet.autoDelete.confirmTitle")}
+          message={t("settingsSheet.autoDelete.confirmBody", { count: pending.count })}
+          confirmLabel={t("settingsSheet.autoDelete.confirmAction")}
+          cancelLabel={t("settingsSheet.autoDelete.cancel")}
+          busy={busy}
+          onCancel={() => {
+            setPending(null);
+            setDraftChoice(null);
+          }}
+          onConfirm={() => void commit(pending.days)}
+        />
+      )}
+    </div>
   );
 }
 

@@ -431,6 +431,25 @@ export const api = {
     invoke<void>("save_conversation", { conversation }),
   deleteConversation: (id: string) =>
     invoke<void>("delete_conversation", { id }),
+  /** How many conversations "Delete old conversations" would remove right
+   * now with a period of `afterDays` — what Settings confirms before saving
+   * one. */
+  countExpiredConversations: (afterDays: number) =>
+    invoke<number>("count_expired_conversations", { afterDays }),
+  /** Run the "Delete old conversations" cleanup now with the saved period;
+   * resolves to the deleted ids. */
+  deleteExpiredConversations: () => invoke<string[]>("delete_expired_conversations"),
+  /** Subscribe to Rust's "the cleanup deleted these conversations" event,
+   * sent by its background ticker (`crates/app/src/retention.rs`). Resolves
+   * to the unsubscribe function; resolves to a no-op where there is no event
+   * bridge (the Playwright mock, jsdom) instead of rejecting. */
+  onConversationsPruned: async (cb: (ids: string[]) => void): Promise<() => void> => {
+    try {
+      return await listen<string[]>("conversations-pruned", (event) => cb(event.payload));
+    } catch {
+      return () => {};
+    }
+  },
   /** Case-insensitive search over every conversation's title and message
    * content, for the sidebar's search box. */
   searchConversations: (query: string) =>
@@ -450,12 +469,13 @@ export const api = {
   /** Rename a conversation from the sidebar's row menu. */
   setConversationTitle: (conversationId: string, title: string) =>
     invoke<void>("set_conversation_title", { conversationId, title }),
-  /** Pin/unpin a conversation from the sidebar's row menu. Device-local —
-   * not synced across paired devices. */
+  /** Pin/unpin a conversation from the sidebar's row menu. Synced across
+   * paired devices, so a pin keeps the conversation out of every device's
+   * "Delete old conversations" cleanup. */
   setConversationPinned: (conversationId: string, pinned: boolean) =>
     invoke<void>("set_conversation_pinned", { conversationId, pinned }),
   /** Set or clear the sidebar's "New reply" hint. Synced across paired
-   * devices, unlike `setConversationPinned`. */
+   * devices, like `setConversationPinned`. */
   setConversationUnread: (conversationId: string, unread: boolean) =>
     invoke<void>("set_conversation_unread", { conversationId, unread }),
 

@@ -121,6 +121,22 @@
       "idleMinutes_one": "{{count}} min d'inactivité",
       "idleMinutes_other": "{{count}} min d'inactivité"
     },
+    "autoDelete": {
+      "label": "Supprimer les anciennes conversations",
+      "help": "Les conversations que vous n'avez pas utilisées depuis cette durée sont supprimées automatiquement, sur tous vos appareils. Les conversations épinglées et celles d'un projet sont conservées.",
+      "never": "Jamais",
+      "after30": "Après 30 jours",
+      "after90": "Après 90 jours",
+      "after365": "Après 365 jours",
+      "custom": "Personnalisé…",
+      "customDays": "Nombre de jours",
+      "customInvalid": "Saisissez un nombre entier de jours, au moins 1.",
+      "confirmTitle": "Supprimer les anciennes conversations maintenant ?",
+      "confirmBody_one": "{{count}} conversation n'a pas été utilisée depuis cette durée et va être supprimée maintenant, sur tous vos appareils. Cette action est irréversible.",
+      "confirmBody_other": "{{count}} conversations n'ont pas été utilisées depuis cette durée et vont être supprimées maintenant, sur tous vos appareils. Cette action est irréversible.",
+      "confirmAction": "Les supprimer",
+      "cancel": "Annuler"
+    },
     "autoLoadStartup": {
       "label": "Charger le modèle au démarrage",
       "hint": "Charge automatiquement un modèle d'IA à l'ouverture d'OpenPal (votre dernier modèle utilisé, ou le modèle par défaut fixé ci-dessous) pour qu'il soit prêt avant même que vous commenciez à taper. Désactivez cette option pour ouvrir sur une discussion inactive à la place."
