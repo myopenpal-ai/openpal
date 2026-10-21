@@ -1642,6 +1642,13 @@ pub struct ConversationMeta {
     /// Copied from [`Conversation::pinned`].
     #[serde(default)]
     pub pinned: bool,
+    /// Whether a reply finished while this conversation wasn't in front of
+    /// the user and they haven't opened it since — the sidebar's "New
+    /// reply" hint. Not on [`Conversation`]: stored on its own and written
+    /// only by `crate::store::set_unread` (see `crate::app_db`'s
+    /// `SCHEMA_V12` doc comment for why).
+    #[serde(default)]
+    pub unread: bool,
 }
 
 /// One conversation's match against a [`crate::projects::search`] query — the

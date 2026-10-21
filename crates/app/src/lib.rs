@@ -252,6 +252,7 @@ pub fn run() {
             commands::set_conversation_project,
             commands::set_conversation_title,
             commands::set_conversation_pinned,
+            commands::set_conversation_unread,
             commands::list_skills,
             commands::save_skill,
             commands::delete_skill,

@@ -3583,6 +3583,35 @@ pub fn set_conversation_pinned(
     store::save(&conn, &conversation).map_err(friendly)
 }
 
+/// Set or clear a conversation's "New reply" hint in the sidebar — set when
+/// a reply finishes out of the user's sight, cleared when they look at it.
+/// Unlike `pinned`, this is synced (its own LWW register, see
+/// `sync::capture::set_conversation_unread_synced`), so reading a
+/// conversation on one paired device clears the hint on the others.
+#[tauri::command]
+pub async fn set_conversation_unread(
+    state: State<'_, AppState>,
+    conversation_id: String,
+    unread: bool,
+) -> Result<(), String> {
+    let sync_enabled = state.settings.lock().await.sync_enabled;
+    if sync_enabled {
+        if let Some(deps) = sync_deps(&state) {
+            let mut conn = state.app_db.lock().unwrap();
+            return openpal_core::sync::capture::set_conversation_unread_synced(
+                &mut conn,
+                &conversation_id,
+                unread,
+                &state.sync_clock,
+                &deps.sync_key,
+                &deps.mailbox_id,
+            )
+            .map_err(friendly);
+        }
+    }
+    store::set_unread(&state.app_db.lock().unwrap(), &conversation_id, unread).map_err(friendly)
+}
+
 // ---------------------------------------------------------------------------
 // Skills
 // ---------------------------------------------------------------------------

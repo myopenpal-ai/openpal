@@ -85,6 +85,32 @@ pub fn save_conversation_synced(
     Ok(())
 }
 
+/// `store::set_unread` plus capture: records this device's change to the
+/// "New reply" hint under its own `field_versions` register
+/// (`"conversation_unread"`) and queues a `ConversationUnread` envelope, all
+/// in one transaction. Separate from [`save_conversation_synced`] because the
+/// flag isn't part of `Conversation` (see `crate::app_db`'s `SCHEMA_V12`).
+pub fn set_conversation_unread_synced(
+    conn: &mut Connection,
+    conversation_id: &str,
+    unread: bool,
+    clock: &HlcClock,
+    sync_key: &SyncKey,
+    mailbox_id: &str,
+) -> Result<()> {
+    let tx = conn.transaction()?;
+    crate::store::set_unread(&tx, conversation_id, unread)?;
+    let hlc = field_versions::record_local(&tx, "conversation_unread", conversation_id, clock)?;
+    let envelope = ChangeEnvelope::ConversationUnread {
+        conversation_id: conversation_id.to_string(),
+        hlc: hlc.clone(),
+        unread,
+    };
+    enqueue_envelope(&tx, sync_key, mailbox_id, &hlc, &envelope)?;
+    tx.commit()?;
+    Ok(())
+}
+
 /// `store::delete` plus capture — a tombstone, not a bare physical delete
 /// signal (`docs/design/MULTI_DEVICE_SYNC.md`'s "Deletes are tombstones, never
 /// physical row removal"). Records the deletion's `Hlc` under
@@ -698,6 +724,31 @@ mod tests {
             } => {
                 assert_eq!(conversation_id, "conv-1");
                 assert_eq!(title, "Trip planning");
+            }
+            other => panic!("wrong envelope variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn set_conversation_unread_synced_saves_the_flag_and_queues_an_unread_envelope() {
+        let mut conn = test_conn();
+        let clock = HlcClock::new("device-a".to_string());
+        let sync_key = SyncKey::random();
+        crate::store::save(&conn, &conversation("conv-1", vec![msg("user", "hello")])).unwrap();
+
+        set_conversation_unread_synced(&mut conn, "conv-1", true, &clock, &sync_key, "mailbox-1")
+            .unwrap();
+
+        assert!(crate::store::list(&conn)[0].unread);
+        assert!(field_versions::get(&conn, "conversation_unread", "conv-1").is_some());
+        match one_envelope(&conn, &sync_key) {
+            ChangeEnvelope::ConversationUnread {
+                conversation_id,
+                unread,
+                ..
+            } => {
+                assert_eq!(conversation_id, "conv-1");
+                assert!(unread);
             }
             other => panic!("wrong envelope variant: {other:?}"),
         }

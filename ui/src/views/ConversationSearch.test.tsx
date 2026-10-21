@@ -42,7 +42,7 @@ const RESULT = { id: "lyon", title: "Weekend in Lyon", updatedAtMs: 0, snippet: 
 const HOUR = 3_600_000;
 function meta(id: string, title: string, hoursAgo: number): ConversationMeta {
   const updatedAtMs = Date.now() - hoursAgo * HOUR;
-  return { id, title, createdAtMs: updatedAtMs, updatedAtMs, messageCount: 2, taskType: "general", pinned: false };
+  return { id, title, createdAtMs: updatedAtMs, updatedAtMs, messageCount: 2, taskType: "general", pinned: false, unread: false };
 }
 
 /** The marked (matched) text inside `el`, in order. */

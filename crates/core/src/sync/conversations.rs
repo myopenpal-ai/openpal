@@ -273,6 +273,24 @@ pub fn apply_remote_project(
     Ok(wins)
 }
 
+/// Applies (or rejects) a received "New reply" hint change — see
+/// [`apply_remote_title`]'s doc comment, same shape, independent register
+/// (`"conversation_unread"`). Writes through `crate::store::set_unread`, not
+/// `crate::store::save`: the flag isn't part of `Conversation`.
+pub fn apply_remote_unread(
+    conn: &Connection,
+    conversation_id: &str,
+    hlc: Hlc,
+    unread: bool,
+) -> Result<bool> {
+    let wins =
+        field_versions::try_apply_remote(conn, "conversation_unread", conversation_id, &hlc)?;
+    if wins {
+        crate::store::set_unread(conn, conversation_id, unread)?;
+    }
+    Ok(wins)
+}
+
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------

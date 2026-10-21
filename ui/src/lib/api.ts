@@ -452,6 +452,10 @@ export const api = {
    * not synced across paired devices. */
   setConversationPinned: (conversationId: string, pinned: boolean) =>
     invoke<void>("set_conversation_pinned", { conversationId, pinned }),
+  /** Set or clear the sidebar's "New reply" hint. Synced across paired
+   * devices, unlike `setConversationPinned`. */
+  setConversationUnread: (conversationId: string, unread: boolean) =>
+    invoke<void>("set_conversation_unread", { conversationId, unread }),
 
   // Skills
   listSkills: () => invoke<Skill[]>("list_skills"),

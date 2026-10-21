@@ -176,6 +176,43 @@ export function chatRequestFor(
   return state.modelRequests.find((r) => r.kind === "chat" && r.conversationId === conversationId);
 }
 
+/** The hint a conversation's row in the sidebar carries, if any. */
+export type ConversationStatus = "needsInput" | "answering" | "waiting" | "unread";
+
+/** Which hint `conversation`'s sidebar row shows: its chat request paused on
+ * a card for the user, running, or waiting its turn — else whether it holds a
+ * reply they haven't seen. One at a time, in that order. The paused-card
+ * slots aren't keyed by conversation, but only the running turn can fill
+ * one, so they belong to whichever conversation that is. */
+export function conversationStatus(
+  state: Pick<
+    Store,
+    "modelRequests" | "pendingToolConsent" | "pendingClarifyingQuestion" | "pendingInjectionReview"
+  >,
+  conversation: ConversationMeta,
+): ConversationStatus | null {
+  const request = chatRequestFor(state, conversation.id);
+  if (request?.status === "running") {
+    const paused =
+      state.pendingToolConsent !== null ||
+      state.pendingClarifyingQuestion !== null ||
+      state.pendingInjectionReview !== null;
+    return paused ? "needsInput" : "answering";
+  }
+  if (request) return "waiting";
+  return conversation.unread ? "unread" : null;
+}
+
+/** Whether `conversationId` is in front of the user right now: open in the
+ * chat view of a focused window. A reply that finishes anywhere else marks
+ * its conversation unread; one that is in sight is read. */
+function conversationInSight(
+  state: Pick<Store, "windowFocused" | "view" | "active">,
+  conversationId: string,
+): boolean {
+  return state.windowFocused && state.view === "chat" && state.active?.id === conversationId;
+}
+
 /** What a streaming turn is doing right now, before (or between) its answer
  * text — kept structured rather than as display text so `ChatView` can
  * localize it. */
@@ -1580,15 +1617,15 @@ async function runGeneration(
   // the former is too early to know how the turn ended, the latter also
   // fires for Translate/Correct, and not at all while other requests wait.
   // Before the save below so a failing save can't swallow it;
-  // `announceAppEvent` can't throw.
-  if (
+  // `announceAppEvent` can't throw. The same rule decides "New reply" below.
+  const answered =
     sawDone &&
     !sawError &&
     !streamThrew &&
     !stopRequestedForTurn &&
     !discarded &&
-    reply.trim() !== ""
-  ) {
+    reply.trim() !== "";
+  if (answered) {
     announceAppEvent(get, {
       kind: "answerReady",
       key: `answer:${assistantId}`,
@@ -1613,6 +1650,16 @@ async function runGeneration(
   } else if (messages.some((m) => m.role === "assistant")) {
     try {
       await api.saveConversation(settled);
+      // "New reply" in the sidebar: an answer that arrived out of the user's
+      // sight. Only once saved (a first turn has no row before that), and
+      // only if they haven't opened it meanwhile.
+      if (answered && !conversationInSight(get(), conversation.id)) {
+        try {
+          await api.setConversationUnread(conversation.id, true);
+        } catch {
+          // A missing hint must never interrupt a chat either.
+        }
+      }
       set({ conversations: await api.listConversations() });
     } catch {
       // Saving history must never interrupt a chat.
@@ -2115,7 +2162,16 @@ export const useStore = create<Store>()((set, get) => ({
         : s,
     ),
   setWindowFocused: (windowFocused) => {
-    if (get().windowFocused !== windowFocused) set({ windowFocused });
+    if (get().windowFocused === windowFocused) return;
+    set({ windowFocused });
+    // A paired device may have read or answered a conversation while this
+    // window was away, and nothing else reloads the list after a sync pull.
+    if (windowFocused && get().settings?.syncEnabled) {
+      api
+        .listConversations()
+        .then((conversations) => set({ conversations }))
+        .catch(() => {});
+    }
   },
   refreshNotificationPermission: async () => {
     try {
@@ -3673,6 +3729,33 @@ export const useStore = create<Store>()((set, get) => ({
 // one cheap check on the many updates that don't touch the theme.
 useStore.subscribe((state, prev) => {
   if (state.settings?.theme !== prev.settings?.theme) applyTheme(state.settings?.theme);
+});
+
+// Clears the "New reply" hint of the conversation in front of the user —
+// however it got there: opened from the sidebar, a notification or a search,
+// back to the chat view, the window refocused, or a list reload bringing the
+// flag in while it is already open. Same module-scope and wrapping reasoning
+// as the listener below.
+useStore.subscribe((state, prev) => {
+  try {
+    if (
+      state.active === prev.active &&
+      state.view === prev.view &&
+      state.windowFocused === prev.windowFocused &&
+      state.conversations === prev.conversations
+    ) {
+      return;
+    }
+    const id = state.active?.id;
+    if (!id || !conversationInSight(state, id)) return;
+    if (!state.conversations.some((c) => c.id === id && c.unread)) return;
+    useStore.setState((s) => ({
+      conversations: s.conversations.map((c) => (c.id === id ? { ...c, unread: false } : c)),
+    }));
+    Promise.resolve(api.setConversationUnread(id, false)).catch(() => {});
+  } catch {
+    // See below.
+  }
 });
 
 // Announces "model loaded" / "model unloaded". Listening here rather than in

@@ -56,6 +56,15 @@ pub enum ChangeEnvelope {
         hlc: Hlc,
         project_id: Option<String>,
     },
+    /// The sidebar's "New reply" hint, set or cleared — its own LWW
+    /// register (`field_versions` scope `"conversation_unread"`), so reading
+    /// a conversation on one device never races a rename or a move made on
+    /// another.
+    ConversationUnread {
+        conversation_id: String,
+        hlc: Hlc,
+        unread: bool,
+    },
     /// A tombstone, never a physical-delete signal to blindly replay —
     /// `docs/design/MULTI_DEVICE_SYNC.md`'s "Deletes are tombstones, never physical
     /// row removal": the receiving side records this HLC in

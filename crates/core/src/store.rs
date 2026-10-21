@@ -13,6 +13,10 @@
 //! `Conversation` would itself trigger the exact id-churn hazard the
 //! backfill exists to close — see its own doc comment.
 //!
+//! The `unread` column is the one column that is not a cache: it isn't in
+//! `Conversation` at all, [`set_unread`] is its only writer, and [`save`]
+//! leaves it untouched — see `crate::app_db`'s `SCHEMA_V12` doc comment.
+//!
 //! - [`list`] never touches `data` at all — a real improvement over the old
 //!   file-based version, which had to fully parse every conversation just
 //!   for lightweight metadata.
@@ -40,7 +44,7 @@ use rusqlite::{params, Connection};
 pub fn list(conn: &Connection) -> Vec<ConversationMeta> {
     let mut stmt = match conn.prepare(
         "SELECT id, title, created_at_ms, updated_at_ms, message_count, task_type, \
-         project_id, pinned FROM conversations ORDER BY updated_at_ms DESC",
+         project_id, pinned, unread FROM conversations ORDER BY updated_at_ms DESC",
     ) {
         Ok(stmt) => stmt,
         Err(e) => {
@@ -62,6 +66,7 @@ pub fn list(conn: &Connection) -> Vec<ConversationMeta> {
             row.get::<_, String>(5)?,
             row.get::<_, Option<String>>(6)?,
             row.get::<_, bool>(7)?,
+            row.get::<_, bool>(8)?,
         ))
     }) {
         Ok(rows) => rows,
@@ -82,6 +87,7 @@ pub fn list(conn: &Connection) -> Vec<ConversationMeta> {
             task_type_json,
             project_id,
             pinned,
+            unread,
         ) = match row {
             Ok(row) => row,
             Err(e) => {
@@ -105,6 +111,7 @@ pub fn list(conn: &Connection) -> Vec<ConversationMeta> {
             task_type,
             project_id,
             pinned,
+            unread,
         });
     }
     metas
@@ -129,10 +136,21 @@ pub fn save(conn: &Connection, conversation: &Conversation) -> Result<()> {
     validate_id(&conversation.id)?;
     let data = serde_json::to_string_pretty(conversation)?;
     let task_type = serde_json::to_string(&conversation.task_type)?;
+    // An upsert rather than `INSERT OR REPLACE`, which deletes and
+    // re-inserts the row and so would reset `unread` to its default.
     conn.execute(
-        "INSERT OR REPLACE INTO conversations
+        "INSERT INTO conversations
             (id, title, created_at_ms, updated_at_ms, message_count, task_type, project_id, pinned, data)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+         ON CONFLICT(id) DO UPDATE SET
+            title = excluded.title,
+            created_at_ms = excluded.created_at_ms,
+            updated_at_ms = excluded.updated_at_ms,
+            message_count = excluded.message_count,
+            task_type = excluded.task_type,
+            project_id = excluded.project_id,
+            pinned = excluded.pinned,
+            data = excluded.data",
         // SQLite integers are signed 64-bit; `u64` has no `ToSql` impl in
         // rusqlite, so timestamps round-trip through `i64` — safe for
         // epoch-ms values for the next ~292 million years.
@@ -148,6 +166,23 @@ pub fn save(conn: &Connection, conversation: &Conversation) -> Result<()> {
             data,
         ],
     )?;
+    Ok(())
+}
+
+/// Marks a conversation as having (or no longer having) a reply its user
+/// hasn't seen — the sidebar's "New reply" hint. The only writer of the
+/// `unread` column; see `crate::app_db`'s `SCHEMA_V12` doc comment for why
+/// it lives outside `Conversation`. `NotFound` for a conversation that
+/// isn't saved.
+pub fn set_unread(conn: &Connection, id: &str, unread: bool) -> Result<()> {
+    validate_id(id)?;
+    let changed = conn.execute(
+        "UPDATE conversations SET unread = ?2 WHERE id = ?1",
+        params![id, unread],
+    )?;
+    if changed == 0 {
+        return Err(Error::NotFound(format!("conversation {id}")));
+    }
     Ok(())
 }
 
@@ -554,6 +589,53 @@ mod tests {
         assert!(!unpinned_meta.pinned);
 
         assert!(get(&conn, "pinned-1").unwrap().pinned);
+    }
+
+    #[test]
+    fn unread_survives_reopening_the_database() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.sqlite");
+        {
+            let (conn, _, _) = crate::app_db::open(&path, None).unwrap();
+            save(&conn, &conversation("conv-1", 100)).unwrap();
+            set_unread(&conn, "conv-1", true).unwrap();
+        }
+        let (conn, _, _) = crate::app_db::open(&path, None).unwrap();
+        assert!(
+            list(&conn)[0].unread,
+            "a relaunch must keep the New reply hint"
+        );
+    }
+
+    #[test]
+    fn unread_persists_and_survives_saving_the_conversation_again() {
+        let conn = test_conn();
+        save(&conn, &conversation("conv-1", 100)).unwrap();
+        save(&conn, &conversation("conv-2", 200)).unwrap();
+        let unread_of = |conn: &Connection, id: &str| {
+            list(conn).into_iter().find(|m| m.id == id).unwrap().unread
+        };
+        assert!(
+            !unread_of(&conn, "conv-1"),
+            "a new conversation starts read"
+        );
+
+        set_unread(&conn, "conv-1", true).unwrap();
+        assert!(unread_of(&conn, "conv-1"));
+        assert!(!unread_of(&conn, "conv-2"));
+
+        // The frontend saves its own copy of a conversation without knowing
+        // about `unread` — that must never clear (or set) it.
+        save(&conn, &conversation("conv-1", 300)).unwrap();
+        assert!(unread_of(&conn, "conv-1"));
+
+        set_unread(&conn, "conv-1", false).unwrap();
+        assert!(!unread_of(&conn, "conv-1"));
+
+        assert!(matches!(
+            set_unread(&conn, "missing-1", true),
+            Err(Error::NotFound(_))
+        ));
     }
 
     #[test]

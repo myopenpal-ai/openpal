@@ -11,11 +11,13 @@ import { getVersion } from "@tauri-apps/api/app";
 import { isStartingModelDiskSlow, recencyBucket, recencyBucketLabel, type RecencyBucket } from "../lib/format";
 import type { Conversation, ConversationMeta, Project } from "../lib/types";
 import {
+  conversationStatus,
   moreDialogPageAvailable,
   SIDEBAR_MAX_WIDTH,
   SIDEBAR_MIN_WIDTH,
   useStore,
   writingToolsAvailable,
+  type ConversationStatus,
   type MoreDialogPage,
   type View,
 } from "../state/store";
@@ -1068,6 +1070,7 @@ function ConvRow({
   onCreateProject: (name: string) => Promise<Project | null>;
 }) {
   const { t } = useTranslation();
+  const status = useStore((s) => conversationStatus(s, conv));
   // Inline rename, triggered from ConvRowMenu's "Rename" item — same
   // one-shot-submit shape as ProjectGroup's own rename input (Enter blurs to
   // submit, Escape cancels, a ref guards against a double-submit from both
@@ -1114,7 +1117,7 @@ function ConvRow({
     <div
       className={`conv-row${isActive ? " conv-row-active" : ""}${
         selectionMode ? " conv-row-selectable" : ""
-      }${menuOpen ? " conv-row-menu-open" : ""}`}
+      }${menuOpen ? " conv-row-menu-open" : ""}${status === "unread" ? " conv-row-unread" : ""}`}
     >
       {selectionMode && (
         <input
@@ -1147,6 +1150,10 @@ function ConvRow({
           title={conv.title}
         >
           <span className="conv-title">{conv.title}</span>
+          {/* The space keeps the row's name "Title Hint", not "TitleHint";
+              a flex container doesn't render it. */}
+          {status && " "}
+          {status && <ConvStatusHint status={status} />}
         </button>
       )}
       {!selectionMode && !renaming && (
@@ -1164,6 +1171,40 @@ function ConvRow({
         </div>
       )}
     </div>
+  );
+}
+
+const STATUS_LABEL_KEYS = {
+  needsInput: "sidebar.status.needsInput",
+  answering: "sidebar.status.answering",
+  waiting: "sidebar.status.waiting",
+  unread: "sidebar.status.unread",
+} as const;
+
+/** The hint at the end of a conversation row (see `conversationStatus`).
+ * Each is its own shape — a spinning ring, an hourglass, an exclamation mark,
+ * a dot — so none relies on colour alone, and its label is both the tooltip
+ * and the name a screen reader reads with the row. */
+function ConvStatusHint({ status }: { status: ConversationStatus }) {
+  const { t } = useTranslation();
+  const label = t(STATUS_LABEL_KEYS[status]);
+  return (
+    <span className={`conv-status conv-status-${status}`} role="img" aria-label={label} title={label}>
+      {status === "answering" && <span className="conv-status-spinner" />}
+      {status === "waiting" && (
+        <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M4 2h8M4 14h8M5 2c0 3 6 3.5 6 6s-6 3-6 6M11 2c0 3-6 3.5-6 6s6 3 6 6" />
+        </svg>
+      )}
+      {status === "needsInput" && (
+        <svg viewBox="0 0 16 16" width="14" height="14">
+          <circle cx="8" cy="8" r="7" fill="currentColor" />
+          <path d="M8 4.2v4.6" stroke="var(--paper-raised)" strokeWidth="1.8" strokeLinecap="round" />
+          <circle cx="8" cy="11.4" r="1.05" fill="var(--paper-raised)" />
+        </svg>
+      )}
+      {status === "unread" && <span className="conv-status-dot" />}
+    </span>
   );
 }
 

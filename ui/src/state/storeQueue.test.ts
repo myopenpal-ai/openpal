@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { chatRequestFor, resetAlertTracking, useStore } from "./store";
-import type { ChatEvent, ChatMessage, Conversation, ConversationMeta } from "../lib/types";
+import type { ChatEvent, ChatMessage, Conversation, ConversationMeta, Settings } from "../lib/types";
 import { DEFAULT_SAMPLING } from "../lib/types";
 
 const {
@@ -11,6 +11,7 @@ const {
   listConversations,
   getConversation,
   deleteConversation,
+  setConversationUnread,
 } = vi.hoisted(() => ({
   chatStream: vi.fn(),
   stopGeneration: vi.fn().mockResolvedValue(undefined),
@@ -19,6 +20,7 @@ const {
   listConversations: vi.fn().mockResolvedValue([]),
   getConversation: vi.fn(),
   deleteConversation: vi.fn().mockResolvedValue(undefined),
+  setConversationUnread: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("../lib/api", () => ({
@@ -30,6 +32,7 @@ vi.mock("../lib/api", () => ({
     listConversations,
     getConversation,
     deleteConversation,
+    setConversationUnread,
   },
 }));
 
@@ -80,6 +83,7 @@ function meta(id: string): ConversationMeta {
     messageCount: 2,
     taskType: "general",
     pinned: false,
+    unread: false,
   };
 }
 
@@ -139,6 +143,7 @@ beforeEach(() => {
   getConversation.mockReset();
   getConversation.mockImplementation(async (id: string) => existing(id));
   deleteConversation.mockClear();
+  setConversationUnread.mockClear();
   useStore.setState({
     active: null,
     conversations: [meta("a"), meta("b"), meta("c")],
@@ -409,5 +414,127 @@ describe("runModelRequest", () => {
     expect(await result).toBeUndefined();
     expect(job).not.toHaveBeenCalled();
     await streams[0].finish();
+  });
+});
+
+describe("the sidebar's New reply hint", () => {
+  beforeEach(() => {
+    useStore.setState({ view: "chat", windowFocused: true });
+  });
+
+  /** End the latest stream as a reply with `text` (empty: a reply with no
+   * text), closed by `event` — `done` unless given. */
+  async function answer(text: string, event: ChatEvent = DONE) {
+    const stream = streams.at(-1)!;
+    if (text) stream.emit(token(text));
+    stream.emit(event);
+    await stream.finish();
+  }
+
+  it("marks a reply that finishes while another conversation is shown", async () => {
+    const turn = await sendIn("a", "question");
+    useStore.setState({ active: existing("b") });
+
+    await answer("Here you go.");
+    await turn.settled;
+
+    expect(setConversationUnread).toHaveBeenCalledTimes(1);
+    expect(setConversationUnread).toHaveBeenCalledWith("a", true);
+    // Marked once the reply is saved, so the row it marks exists.
+    expect(saveConversation.mock.invocationCallOrder[0]).toBeLessThan(
+      setConversationUnread.mock.invocationCallOrder[0],
+    );
+  });
+
+  it("marks a reply that finishes while its conversation is shown in an unfocused window, and clears it on refocus", async () => {
+    const turn = await sendIn("a", "question");
+    useStore.getState().setWindowFocused(false);
+    listConversations.mockResolvedValue([{ ...meta("a"), unread: true }, meta("b"), meta("c")]);
+
+    await answer("Here you go.");
+    await turn.settled;
+    expect(setConversationUnread).toHaveBeenCalledWith("a", true);
+    expect(useStore.getState().conversations.find((c) => c.id === "a")?.unread).toBe(true);
+
+    setConversationUnread.mockClear();
+    useStore.getState().setWindowFocused(true);
+    expect(setConversationUnread).toHaveBeenCalledWith("a", false);
+    expect(useStore.getState().conversations.find((c) => c.id === "a")?.unread).toBe(false);
+  });
+
+  it("does not mark a reply its user watched arrive", async () => {
+    const turn = await sendIn("a", "question");
+    await answer("Here you go.");
+    await turn.settled;
+    expect(setConversationUnread).not.toHaveBeenCalled();
+  });
+
+  it("does not mark a reply that failed, produced no text, or was stopped", async () => {
+    const failed = await sendIn("a", "question");
+    useStore.setState({ active: existing("c") });
+    await answer("Partial", { type: "error", data: { message: "engine crashed" } });
+    await failed.settled;
+
+    const empty = await sendIn("b", "question");
+    useStore.setState({ active: existing("c") });
+    await answer("");
+    await empty.settled;
+
+    const stopped = await sendIn("a", "question");
+    useStore.setState({ active: existing("c") });
+    streams.at(-1)!.emit(token("Half an ans"));
+    await useStore.getState().cancelModelRequest(chatRequestFor(useStore.getState(), "a")!.id);
+    streams.at(-1)!.emit(DONE);
+    await streams.at(-1)!.finish();
+    await stopped.settled;
+
+    expect(setConversationUnread).not.toHaveBeenCalled();
+  });
+
+  it("clears the hint when the conversation is opened", async () => {
+    useStore.setState({
+      active: existing("b"),
+      conversations: [{ ...meta("a"), unread: true }, meta("b")],
+    });
+
+    await useStore.getState().openConversation("a");
+
+    expect(setConversationUnread).toHaveBeenCalledWith("a", false);
+    expect(useStore.getState().conversations.find((c) => c.id === "a")?.unread).toBe(false);
+  });
+
+  it("reloads the list on refocus with sync on, so a read on another device shows here", async () => {
+    useStore.setState({
+      windowFocused: false,
+      settings: { syncEnabled: true } as Settings,
+      conversations: [{ ...meta("a"), unread: true }, meta("b")],
+    });
+    listConversations.mockResolvedValue([meta("a"), meta("b")]);
+
+    useStore.getState().setWindowFocused(true);
+    await flush();
+
+    expect(listConversations).toHaveBeenCalledTimes(1);
+    expect(useStore.getState().conversations.find((c) => c.id === "a")?.unread).toBe(false);
+  });
+
+  it("does not reload the list on refocus with sync off", async () => {
+    useStore.setState({ windowFocused: false, settings: { syncEnabled: false } as Settings });
+    useStore.getState().setWindowFocused(true);
+    await flush();
+    expect(listConversations).not.toHaveBeenCalled();
+  });
+
+  it("keeps the hint while the conversation is open but the window is not focused", async () => {
+    useStore.setState({
+      windowFocused: false,
+      active: existing("b"),
+      conversations: [{ ...meta("a"), unread: true }, meta("b")],
+    });
+
+    await useStore.getState().openConversation("a");
+
+    expect(setConversationUnread).not.toHaveBeenCalled();
+    expect(useStore.getState().conversations.find((c) => c.id === "a")?.unread).toBe(true);
   });
 });

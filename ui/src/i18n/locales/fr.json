@@ -450,6 +450,12 @@
       "unload": "Décharger",
       "loadTitle": "Charger le modèle et démarrer llama.cpp",
       "load": "Charger"
+    },
+    "status": {
+      "answering": "Réponse en cours…",
+      "waiting": "En attente du modèle",
+      "unread": "Nouvelle réponse",
+      "needsInput": "Attend votre réponse"
     }
   },
   "chatToolbar": {

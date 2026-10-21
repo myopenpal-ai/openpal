@@ -450,6 +450,12 @@
       "unload": "Unload",
       "loadTitle": "Load the model and start llama.cpp",
       "load": "Load"
+    },
+    "status": {
+      "answering": "Answering…",
+      "waiting": "Waiting for the model",
+      "unread": "New reply",
+      "needsInput": "Needs your input"
     }
   },
   "chatToolbar": {

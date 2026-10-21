@@ -44,7 +44,7 @@ use std::path::Path;
 
 /// Bumped whenever a new step is appended to [`migrate`]. There is
 /// deliberately no generic migration framework — see this module's header.
-pub const SCHEMA_VERSION: i64 = 11;
+pub const SCHEMA_VERSION: i64 = 12;
 
 /// Failure while opening or migrating `app_db`.
 #[derive(Debug, thiserror::Error)]
@@ -330,6 +330,21 @@ const SCHEMA_V10: &str = "
 /// persisted, run-exactly-once backfill.
 const SCHEMA_V11: &str = "PRAGMA user_version = 11;";
 
+/// The sidebar's "New reply" hint: a reply finished while its conversation
+/// wasn't in front of the user. A column only, never inside the `data` JSON
+/// blob — `crate::store::save` writes every other cache column from the
+/// `Conversation` it is handed, and the frontend saves its in-memory copy of
+/// a conversation at points that have nothing to do with being read, so a
+/// field there would be flipped back by whichever stale copy saved last.
+/// `crate::store::set_unread` is its only writer (`store::save` leaves it
+/// alone). Unlike `pinned` (SCHEMA_V10) it IS synced, as its own
+/// independent LWW register — see `crate::sync::field_versions`'s
+/// `"conversation_unread"` scope. `DEFAULT 0`, so every conversation that
+/// existed before this step upgrades as read.
+const SCHEMA_V12: &str = "
+    ALTER TABLE conversations ADD COLUMN unread INTEGER NOT NULL DEFAULT 0;
+    PRAGMA user_version = 12;";
+
 /// Bring `conn`'s schema up to [`SCHEMA_VERSION`]. Ladder shape (`if
 /// version == N { ...; version = N+1 }`) — a fresh install has no existing
 /// data to carry forward (the one-time migration of pre-existing plaintext
@@ -380,6 +395,10 @@ pub(crate) fn migrate(conn: &Connection) -> Result<(), OpenError> {
     if version == 10 {
         conn.execute_batch(SCHEMA_V11)?;
         version = 11;
+    }
+    if version == 11 {
+        conn.execute_batch(SCHEMA_V12)?;
+        version = 12;
     }
     if version != SCHEMA_VERSION {
         return Err(OpenError::SchemaVersionMismatch {
@@ -541,6 +560,42 @@ mod tests {
         let dek = DataKey::random();
         drop(open(&path, Some(&dek)).unwrap());
         assert!(open(&path, None).is_err());
+    }
+
+    #[test]
+    fn conversations_from_before_v12_upgrade_as_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.sqlite");
+        {
+            let conn = Connection::open(&path).unwrap();
+            for step in [
+                SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5, SCHEMA_V6, SCHEMA_V7,
+                SCHEMA_V8, SCHEMA_V9, SCHEMA_V10, SCHEMA_V11,
+            ] {
+                conn.execute_batch(step).unwrap();
+            }
+            conn.execute(
+                "INSERT INTO conversations \
+                 (id, title, created_at_ms, updated_at_ms, message_count, task_type, project_id, pinned, data) \
+                 VALUES ('conv-1', 'Old chat', 1, 2, 0, '\"general\"', NULL, 0, '{}')",
+                [],
+            )
+            .unwrap();
+        }
+
+        let (conn, _, version_before) = open(&path, None).unwrap();
+        assert_eq!(version_before, 11);
+        let unread: bool = conn
+            .query_row(
+                "SELECT unread FROM conversations WHERE id = 'conv-1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(
+            !unread,
+            "a conversation from before the upgrade must not show as unread"
+        );
     }
 
     #[test]

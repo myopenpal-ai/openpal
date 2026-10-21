@@ -17,6 +17,12 @@
 //!   found it silently drops one field's edit even on the "winning" side
 //!   when both are edited concurrently on different devices — renaming a
 //!   chat and moving it to a project are both common, unrelated edits.
+//! - `"conversation_unread"` — the sidebar's "New reply" hint
+//!   (`conversations.unread`, see `crate::app_db`'s `SCHEMA_V12`), a third
+//!   independent register for the same reason, `row_key` is the
+//!   conversation id. Unlike title/project it never rides on a
+//!   `Conversation` save: `crate::sync::capture::set_conversation_unread_synced`
+//!   is its only local writer.
 //! - `"conversation_snapshot"` — the whole-conversation LWW fallback
 //!   `crate::sync::conversations` uses when it detects a rewrite/
 //!   truncation (an edited-and-regenerated message) rather than a pure

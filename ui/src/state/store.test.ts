@@ -112,6 +112,7 @@ function conversationMeta(overrides: Partial<ConversationMeta> = {}): Conversati
     messageCount: 2,
     taskType: "general",
     pinned: false,
+    unread: false,
     ...overrides,
   };
 }

@@ -363,6 +363,54 @@
 /* A search-result row: title + a matching excerpt stacked instead of the
    single truncated title line. Used both by the sidebar row shape reused in
    ConversationSearch's bigger results list. */
+/* A conversation row's hint (see `ConvStatusHint` in Sidebar.tsx). It sits
+   inside `.conv-open` after the title, so the padding that makes room for the
+   "…" trigger on hover moves it rather than covering it. */
+.conv-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  margin-left: 6px;
+}
+
+.conv-status-answering,
+.conv-status-unread {
+  color: var(--accent);
+}
+
+.conv-status-waiting {
+  color: var(--ink-faint);
+}
+
+.conv-status-needsInput {
+  color: var(--warn);
+}
+
+.conv-status-spinner {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  border: 2px solid var(--accent-line);
+  border-top-color: var(--accent);
+  animation: spin 0.7s linear infinite;
+}
+
+.conv-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+/* A second cue for "New reply" besides the dot, so it doesn't rest on one
+   small mark alone. */
+.conv-row-unread .conv-title {
+  font-weight: 700;
+}
+
 .conv-open-search {
   flex-direction: column;
   align-items: flex-start;

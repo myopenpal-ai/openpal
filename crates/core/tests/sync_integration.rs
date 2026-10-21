@@ -171,6 +171,17 @@ fn deliver(from: &Connection, to: &mut Connection, sync_key: &SyncKey) {
                 ensure_conversation_placeholder(to, &conversation_id);
                 conversations::apply_remote_project(to, &conversation_id, hlc, project_id).unwrap();
             }
+            envelope::ChangeEnvelope::ConversationUnread {
+                conversation_id,
+                hlc,
+                unread,
+            } => {
+                if is_stale_against_deletion(to, &conversation_id, &hlc) {
+                    continue;
+                }
+                ensure_conversation_placeholder(to, &conversation_id);
+                conversations::apply_remote_unread(to, &conversation_id, hlc, unread).unwrap();
+            }
             envelope::ChangeEnvelope::ConversationDeleted {
                 conversation_id,
                 hlc,
@@ -286,6 +297,140 @@ fn offline_concurrent_appends_converge_over_the_real_encrypted_pipe() {
         4,
         "shared-1 + 2 from A + 1 from B — nothing dropped, nothing duplicated"
     );
+}
+
+// ---------------------------------------------------------------------------
+// The sidebar's "New reply" hint: a reply's unread state replicates, and
+// reading on one device clears it on the others. Its own LWW register, so it
+// survives a concurrent rename on the other device and a concurrent
+// read/unread pair settles the same way on both.
+// ---------------------------------------------------------------------------
+
+fn unread(conn: &Connection, conversation_id: &str) -> bool {
+    openpal_core::store::list(conn)
+        .into_iter()
+        .find(|m| m.id == conversation_id)
+        .unwrap()
+        .unread
+}
+
+#[test]
+fn unread_replicates_and_reading_on_one_device_clears_it_on_the_other() {
+    let (mut conn_a, clock_a) = device("device-a");
+    let (mut conn_b, clock_b) = device("device-b");
+    let sync_key = SyncKey::random();
+
+    let chat = conversation("conv-1", vec![msg("user", "hi"), msg("assistant", "hello")]);
+    capture::save_conversation_synced(&mut conn_a, &chat, &clock_a, &sync_key, "mailbox").unwrap();
+    capture::set_conversation_unread_synced(
+        &mut conn_a,
+        "conv-1",
+        true,
+        &clock_a,
+        &sync_key,
+        "mailbox",
+    )
+    .unwrap();
+    deliver(&conn_a, &mut conn_b, &sync_key);
+    assert!(
+        unread(&conn_b, "conv-1"),
+        "the reply's unread state must reach B"
+    );
+    assert_eq!(
+        openpal_core::store::get(&conn_b, "conv-1")
+            .unwrap()
+            .messages
+            .len(),
+        2,
+        "and the reply itself with it"
+    );
+
+    // The user reads it on B.
+    capture::set_conversation_unread_synced(
+        &mut conn_b,
+        "conv-1",
+        false,
+        &clock_b,
+        &sync_key,
+        "mailbox",
+    )
+    .unwrap();
+    deliver(&conn_b, &mut conn_a, &sync_key);
+    assert!(
+        !unread(&conn_a, "conv-1"),
+        "reading on B must clear the hint on A"
+    );
+}
+
+#[test]
+fn concurrent_read_and_unread_on_two_devices_settle_to_the_same_state() {
+    let (mut conn_a, clock_a) = device("device-a");
+    let (mut conn_b, clock_b) = device("device-b");
+    let sync_key = SyncKey::random();
+
+    let chat = conversation("conv-1", vec![msg("user", "hi"), msg("assistant", "hello")]);
+    capture::save_conversation_synced(&mut conn_a, &chat, &clock_a, &sync_key, "mailbox").unwrap();
+    capture::set_conversation_unread_synced(
+        &mut conn_a,
+        "conv-1",
+        true,
+        &clock_a,
+        &sync_key,
+        "mailbox",
+    )
+    .unwrap();
+    deliver(&conn_a, &mut conn_b, &sync_key);
+
+    // Offline: B reads it and renames it, while A marks it unread again for
+    // a later reply — neither has seen the other's change yet.
+    capture::set_conversation_unread_synced(
+        &mut conn_b,
+        "conv-1",
+        false,
+        &clock_b,
+        &sync_key,
+        "mailbox",
+    )
+    .unwrap();
+    let mut b_renamed = openpal_core::store::get(&conn_b, "conv-1").unwrap();
+    b_renamed.title = "Trip planning".to_string();
+    capture::save_conversation_synced(&mut conn_b, &b_renamed, &clock_b, &sync_key, "mailbox")
+        .unwrap();
+    capture::set_conversation_unread_synced(
+        &mut conn_a,
+        "conv-1",
+        true,
+        &clock_a,
+        &sync_key,
+        "mailbox",
+    )
+    .unwrap();
+
+    deliver(&conn_a, &mut conn_b, &sync_key);
+    deliver(&conn_b, &mut conn_a, &sync_key);
+
+    assert_eq!(
+        unread(&conn_a, "conv-1"),
+        unread(&conn_b, "conv-1"),
+        "both devices must settle on the same unread state"
+    );
+    let winner = std::cmp::max(
+        field_versions::get(&conn_a, "conversation_unread", "conv-1").unwrap(),
+        field_versions::get(&conn_b, "conversation_unread", "conv-1").unwrap(),
+    );
+    let expected = winner.device_id == "device-a";
+    assert_eq!(
+        unread(&conn_a, "conv-1"),
+        expected,
+        "the newer change wins: unread if A's, read if B's"
+    );
+    for conn in [&conn_a, &conn_b] {
+        assert_eq!(
+            openpal_core::store::get(conn, "conv-1").unwrap().title,
+            "Trip planning",
+            "the rename rides its own register and must survive either way"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------

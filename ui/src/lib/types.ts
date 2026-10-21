@@ -949,6 +949,11 @@ export interface ConversationMeta {
   projectId?: string | null;
   /** Copied from `Conversation.pinned`. */
   pinned: boolean;
+  /** A reply finished while this conversation wasn't in front of the user,
+   * and they haven't opened it since — the sidebar's "New reply" hint. Not
+   * on `Conversation`: only `api.setConversationUnread` writes it. Synced
+   * across paired devices. */
+  unread: boolean;
 }
 
 /** A user-named group of conversations (see `crates/core/src/projects.rs`) —

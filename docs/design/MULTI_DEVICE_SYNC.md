@@ -188,7 +188,7 @@ change, only the transport):
 
 | Table | Syncs? | Treatment |
 |---|---|---|
-| `conversations` | Yes | Messages (the `data` JSON blob's turns) are immutable once written → HLC-ordered append merge, no conflicts possible. `title`/`project_id` are mutable → LWW-by-HLC, loser stashed as `conflict-*.json`. |
+| `conversations` | Yes | Messages (the `data` JSON blob's turns) are immutable once written → HLC-ordered append merge, no conflicts possible. `title`/`project_id` are mutable → LWW-by-HLC, loser stashed as `conflict-*.json`. `unread` (the sidebar's "New reply" hint) is a third independent LWW register (`conversation_unread`), a column outside the `data` blob; a losing write is simply discarded, as for `title`. `pinned` stays device-local. |
 | `artifacts` | Yes | Keyed `(conversation_id, id)` same as today; a periodic sweep dedups by content hash before re-sending — unchanged content never re-transfers (Phase 4, `crate::sync::artifact_sweep`). |
 | `projects` | Yes | Small, low-frequency, whole-row LWW-by-HLC. |
 | `settings` | Yes | Whole-row LWW-by-HLC. The relay server URL itself lives in this table, so it is excluded from its own payload to avoid a device silently redirecting another device's relay. |
