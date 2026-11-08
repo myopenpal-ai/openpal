@@ -190,6 +190,19 @@ pub struct ModelSpec {
     pub mmproj_size_bytes: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mmproj_sha256: Option<String>,
+    /// This curated entry's GGUF ships its own Multi-Token Prediction (MTP)
+    /// heads in a layout the current bundled engine can use for speculative
+    /// **self**-drafting (`--spec-type draft-mtp`) — no second model, just
+    /// faster generation on disk-streamed dense models (verified by
+    /// same-machine bench, see `docs/design/DISK_OFFLOAD.md`). Deliberately
+    /// **not** auto-detected from GGUF tensor names: "the file has MTP
+    /// tensors" ≠ "this engine can use them" (a conversion predating the
+    /// engine's tensor mapping can hold the tensors in an unmappable layout)
+    /// — so this is a per-entry, bench-verified curator decision, `false` for
+    /// every Hugging Face / local-file model and every catalog entry without
+    /// that verification.
+    #[serde(default)]
+    pub mtp: bool,
     /// Hand-curated 0-100 fit score per [`TaskType`] (e.g. `{"coding": 85,
     /// "writing": 40}`) — how *good* this model is at a task, used by the
     /// opt-in `smart-model-router` plugin (`plugins/smart-model-router/`) for its
@@ -2831,6 +2844,7 @@ mod tests {
             mmproj_file_name: None,
             mmproj_size_bytes: None,
             mmproj_sha256: None,
+            mtp: false,
             group_id: None,
             release_date: None,
         }

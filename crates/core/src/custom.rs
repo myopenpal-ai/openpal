@@ -232,6 +232,7 @@ pub fn hf_spec(
         group_id: Some(repo_id.to_string()),
         release_date,
         id,
+        mtp: false,
     }
 }
 
@@ -289,6 +290,7 @@ pub fn local_spec(path: &Path, size_bytes: u64, taken_ids: &[&str]) -> ModelSpec
         mmproj_file_name: None,
         mmproj_size_bytes: None,
         mmproj_sha256: None,
+        mtp: false,
         // No curation pipeline for custom models — same treatment as quality_score: 0.
         task_scores: HashMap::new(),
         // A local file has no repo to group by, and no metadata source for

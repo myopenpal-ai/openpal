@@ -55,7 +55,7 @@
 //! The manager is shared behind `Arc` by the app layer; all methods take
 //! `&self` (interior mutability via `tokio::sync::Mutex`).
 
-use super::{ActivityInfo, EngineBackend, EngineEndpoint};
+use super::{ActivityInfo, EngineBackend, EngineEndpoint, MtpRestart};
 use crate::crypto::kdf::derive_subkey;
 use crate::crypto::key::DataKey;
 use crate::crypto::logframe;
@@ -114,6 +114,14 @@ struct Inner {
     /// Set from `start()`'s `startup_timeout`, floored at 300s — see
     /// [`EngineEndpoint::request_timeout_secs`].
     request_timeout: Duration,
+    /// Restart-without-MTP snapshot, armed only while the current engine was
+    /// started with `--spec-*` args and is still running with them (see
+    /// [`MtpRestart`] / the module-level "MTP crash fallback" story). The
+    /// `EngineManager` first-message retry drives restarts from it; `start()`
+    /// consumes it during its own startup retry when an MTP start dies
+    /// loading. Cleared on every stop/fail and rebuilt on every MTP-armed
+    /// start, so a stale snapshot can never re-arm on a later non-MTP start.
+    mtp_fallback: Option<MtpRestart>,
 }
 
 /// Floor for the per-request timeout an out-of-process client (the web-search
@@ -135,6 +143,7 @@ impl SubprocessBackend {
                 last_activity: Instant::now(),
                 generating: false,
                 request_timeout: MIN_REQUEST_TIMEOUT,
+                mtp_fallback: None,
             }),
             client: reqwest::Client::new(),
             log_dir,
@@ -205,147 +214,214 @@ impl EngineBackend for SubprocessBackend {
     ) -> Result<()> {
         self.stop().await?;
 
-        let port = match free_port() {
-            Ok(p) => p,
-            Err(e) => {
-                tracing::error!("could not pick a free port: {e}");
-                return Err(self.fail("Your AI couldn't start. Please try again.").await);
-            }
-        };
-        let api_key = generate_api_key(port);
+        // MTP crash fallback: a start carrying `--spec-*` args can hard-abort
+        // on the first generation (a model whose MTP heads this engine can't
+        // actually run — see docs/design/DISK_OFFLOAD.md). Snapshot everything
+        // needed to restart without those args, and pre-strip them so the
+        // startup retry below and the first-message retry in
+        // `EngineManager::chat_stream` share one already-stripped config.
+        let has_mtp = has_mtp_args(&cfg.extra_args);
+        let fallback_cfg = has_mtp.then(|| {
+            let mut stripped = cfg.clone();
+            strip_mtp_args(&mut stripped.extra_args);
+            stripped
+        });
+        let mut mtp_fallback = has_mtp.then(|| MtpRestart {
+            server_binary: server_binary.to_path_buf(),
+            model_id: model_id.to_string(),
+            model_path: model_path.to_path_buf(),
+            cfg: fallback_cfg
+                .as_ref()
+                .expect("has_mtp implies a stripped config")
+                .clone(),
+            disk_slow,
+            startup_timeout,
+        });
+        let mut active_cfg: &EngineConfig = cfg;
+        let mut retried_startup_without_mtp = false;
 
-        let child = match self.spawn_server(server_binary, model_path, port, cfg, &api_key) {
-            Ok(child) => child,
-            Err(e) => {
-                tracing::error!("could not launch {server_binary:?}: {e}");
-                return Err(self
-                    .fail("Your AI couldn't be launched. Reinstalling OpenPal usually fixes this.")
-                    .await);
-            }
-        };
-        let my_gen = {
-            let mut inner = self.inner.lock().await;
-            inner.generation += 1;
-            inner.child = Some(child);
-            inner.api_key = api_key;
-            inner.request_timeout = startup_timeout.max(MIN_REQUEST_TIMEOUT);
-            inner.status = EngineStatus::Starting {
-                model_id: model_id.to_string(),
-                progress_percent: None,
+        let (port, my_gen) = 'spawn: loop {
+            let port = match free_port() {
+                Ok(p) => p,
+                Err(e) => {
+                    tracing::error!("could not pick a free port: {e}");
+                    return Err(self.fail("Your AI couldn't start. Please try again.").await);
+                }
             };
-            inner.generation
-        };
+            let api_key = generate_api_key(port);
 
-        // Real per-byte progress is only observable for a GPU-offloaded load
-        // (`-ngl` > 0): llama.cpp mmaps weights and a CPU-only load pages them
-        // in lazily on first use, so RSS stays flat while "loading" and there
-        // is nothing honest to report. A GPU-offloaded load, though, must
-        // synchronously copy each offloaded layer's bytes off the mmap into
-        // VRAM before `/health` goes ready, so the child's RSS climbing
-        // toward the model file's size is a real, OS-observed proxy for how
-        // far that copy has gotten — see `EngineStatus::Starting`'s doc.
-        let load_progress_denominator = (cfg.gpu_layers > 0)
-            .then(|| std::fs::metadata(model_path).ok())
-            .flatten()
-            .map(|m| m.len())
-            .filter(|&len| len > 0);
-        let mut progress_sys = sysinfo::System::new();
-        // Ratchets forward only — RSS can wobble slightly from one 300ms
-        // sample to the next, and a progress indicator visibly ticking
-        // backward reads as broken even though the underlying number is real.
-        let mut best_progress_percent: u8 = 0;
-
-        // Poll /health until ready, watching for an early exit. The lock is
-        // held only for the brief try_wait() each round, never across awaits
-        // on the network.
-        let health_url = format!("http://127.0.0.1:{port}/health");
-        let deadline = Instant::now() + startup_timeout;
-        loop {
-            {
+            let child = match self.spawn_server(
+                server_binary,
+                model_path,
+                port,
+                active_cfg,
+                &api_key,
+            ) {
+                Ok(child) => child,
+                Err(e) => {
+                    tracing::error!("could not launch {server_binary:?}: {e}");
+                    return Err(self
+                        .fail("Your AI couldn't be launched. Reinstalling OpenPal usually fixes this.")
+                        .await);
+                }
+            };
+            let my_gen = {
                 let mut inner = self.inner.lock().await;
-                if inner.generation != my_gen {
-                    // Another start()/stop() took over: the child (if any) is
-                    // theirs now, so leave everything alone and bow out.
-                    return Err(Error::Engine(NOT_RUNNING_MSG.to_string()));
-                }
-                let Some(child) = inner.child.as_mut() else {
-                    // Someone called stop() while we were starting.
-                    return Err(Error::Engine(NOT_RUNNING_MSG.to_string()));
+                inner.generation += 1;
+                inner.child = Some(child);
+                inner.api_key = api_key;
+                inner.request_timeout = startup_timeout.max(MIN_REQUEST_TIMEOUT);
+                inner.status = EngineStatus::Starting {
+                    model_id: model_id.to_string(),
+                    progress_percent: None,
                 };
-                if let Ok(Some(exit)) = child.try_wait() {
-                    inner.child = None;
-                    inner.generation += 1;
-                    let tail = log_tail(&self.log_path());
-                    let message = unsupported_architecture_hint(&tail).unwrap_or_else(|| {
-                        "Your AI stopped while loading. Try again, or pick a different model."
-                            .to_string()
-                    });
-                    inner.status = EngineStatus::Failed {
-                        message: message.clone(),
-                    };
-                    drop(inner);
-                    tracing::error!(
-                        "engine exited during startup ({exit}){}; log tail:\n{}",
-                        oom_hint(&exit),
-                        tail
-                    );
-                    return Err(Error::Engine(message));
-                }
+                inner.generation
+            };
 
-                if let Some(total_len) = load_progress_denominator {
-                    if let Some(pid) = child.id() {
-                        let sys_pid = sysinfo::Pid::from_u32(pid);
-                        progress_sys
-                            .refresh_processes(sysinfo::ProcessesToUpdate::Some(&[sys_pid]), true);
-                        if let Some(proc) = progress_sys.process(sys_pid) {
-                            let sampled = (proc.memory() * 100 / total_len).min(99) as u8;
-                            best_progress_percent = best_progress_percent.max(sampled);
-                            inner.status = EngineStatus::Starting {
-                                model_id: model_id.to_string(),
-                                progress_percent: Some(best_progress_percent),
-                            };
-                        }
-                    }
-                }
-            }
+            // Real per-byte progress is only observable for a GPU-offloaded
+            // load (`-ngl` > 0): llama.cpp mmaps weights and a CPU-only load
+            // pages them in lazily on first use, so RSS stays flat while
+            // "loading" and there is nothing honest to report. A GPU-offloaded
+            // load, though, must synchronously copy each offloaded layer's
+            // bytes off the mmap into VRAM before `/health` goes ready, so the
+            // child's RSS climbing toward the model file's size is a real,
+            // OS-observed proxy for how far that copy has gotten — see
+            // `EngineStatus::Starting`'s doc.
+            let load_progress_denominator = (active_cfg.gpu_layers > 0)
+                .then(|| std::fs::metadata(model_path).ok())
+                .flatten()
+                .map(|m| m.len())
+                .filter(|&len| len > 0);
+            let mut progress_sys = sysinfo::System::new();
+            // Ratchets forward only — RSS can wobble slightly from one 300ms
+            // sample to the next, and a progress indicator visibly ticking
+            // backward reads as broken even though the underlying number is
+            // real.
+            let mut best_progress_percent: u8 = 0;
 
-            let ready = matches!(
-                self.client
-                    .get(&health_url)
-                    .timeout(Duration::from_secs(2))
-                    .send()
-                    .await,
-                Ok(resp) if resp.status().is_success()
-            );
-            if ready {
-                break;
-            }
-
-            if Instant::now() >= deadline {
-                let message = "The AI model is taking too long to load. Try a smaller model, or \
-                               close other apps and try again.";
+            // Poll /health until ready, watching for an early exit. The lock
+            // is held only for the brief try_wait() each round, never across
+            // awaits on the network.
+            let health_url = format!("http://127.0.0.1:{port}/health");
+            let deadline = Instant::now() + startup_timeout;
+            loop {
                 {
                     let mut inner = self.inner.lock().await;
                     if inner.generation != my_gen {
-                        // Superseded: the child belongs to a newer start().
+                        // Another start()/stop() took over: the child (if any)
+                        // is theirs now, so leave everything alone and bow out.
                         return Err(Error::Engine(NOT_RUNNING_MSG.to_string()));
                     }
-                    if let Some(mut child) = inner.child.take() {
-                        let _ = child.kill().await;
-                    }
-                    inner.generation += 1;
-                    inner.status = EngineStatus::Failed {
-                        message: message.to_string(),
+                    let Some(child) = inner.child.as_mut() else {
+                        // Someone called stop() while we were starting.
+                        return Err(Error::Engine(NOT_RUNNING_MSG.to_string()));
                     };
+                    if let Ok(Some(exit)) = child.try_wait() {
+                        let tail = log_tail(&self.log_path());
+                        // Startup retry: an MTP start can die almost instantly
+                        // with an MTP-specific fingerprint (the flag rejected
+                        // on an older binary, or no mappable MTP layers in the
+                        // GGUF). Restart once WITHOUT the MTP args rather than
+                        // surfacing a failed state — the model still runs, just
+                        // without self-drafting. Any other exit keeps today's
+                        // failure path.
+                        if !retried_startup_without_mtp
+                            && mtp_fallback.is_some()
+                            && mtp_startup_failure_markers(&tail)
+                        {
+                            retried_startup_without_mtp = true;
+                            // The fallback was consumed: this start ends up
+                            // running without MTP, so no snapshot to hand the
+                            // first-message retry.
+                            mtp_fallback = None;
+                            active_cfg = fallback_cfg
+                                .as_ref()
+                                .expect("has_mtp implies a stripped config");
+                            tracing::warn!(
+                                "engine exited during startup with MTP args ({exit}); \
+                                 retrying once without them. Log tail:\n{tail}"
+                            );
+                            drop(inner);
+                            continue 'spawn;
+                        }
+                        inner.child = None;
+                        inner.generation += 1;
+                        let message = unsupported_architecture_hint(&tail).unwrap_or_else(|| {
+                            "Your AI stopped while loading. Try again, or pick a different model."
+                                .to_string()
+                        });
+                        inner.status = EngineStatus::Failed {
+                            message: message.clone(),
+                        };
+                        drop(inner);
+                        tracing::error!(
+                            "engine exited during startup ({exit}){}; log tail:\n{}",
+                            oom_hint(&exit),
+                            tail
+                        );
+                        return Err(Error::Engine(message));
+                    }
+
+                    if let Some(total_len) = load_progress_denominator {
+                        if let Some(pid) = child.id() {
+                            let sys_pid = sysinfo::Pid::from_u32(pid);
+                            progress_sys.refresh_processes(
+                                sysinfo::ProcessesToUpdate::Some(&[sys_pid]),
+                                true,
+                            );
+                            if let Some(proc) = progress_sys.process(sys_pid) {
+                                let sampled = (proc.memory() * 100 / total_len).min(99) as u8;
+                                best_progress_percent = best_progress_percent.max(sampled);
+                                inner.status = EngineStatus::Starting {
+                                    model_id: model_id.to_string(),
+                                    progress_percent: Some(best_progress_percent),
+                                };
+                            }
+                        }
+                    }
                 }
-                tracing::error!(
-                    "engine startup timed out after {startup_timeout:?}; log tail:\n{}",
-                    log_tail(&self.log_path())
+
+                let ready = matches!(
+                    self.client
+                        .get(&health_url)
+                        .timeout(Duration::from_secs(2))
+                        .send()
+                        .await,
+                    Ok(resp) if resp.status().is_success()
                 );
-                return Err(Error::Engine(message.to_string()));
+                if ready {
+                    break;
+                }
+
+                if Instant::now() >= deadline {
+                    let message =
+                        "The AI model is taking too long to load. Try a smaller model, or \
+                                   close other apps and try again.";
+                    {
+                        let mut inner = self.inner.lock().await;
+                        if inner.generation != my_gen {
+                            // Superseded: the child belongs to a newer start().
+                            return Err(Error::Engine(NOT_RUNNING_MSG.to_string()));
+                        }
+                        if let Some(mut child) = inner.child.take() {
+                            let _ = child.kill().await;
+                        }
+                        inner.generation += 1;
+                        inner.mtp_fallback = None;
+                        inner.status = EngineStatus::Failed {
+                            message: message.to_string(),
+                        };
+                    }
+                    tracing::error!(
+                        "engine startup timed out after {startup_timeout:?}; log tail:\n{}",
+                        log_tail(&self.log_path())
+                    );
+                    return Err(Error::Engine(message.to_string()));
+                }
+                tokio::time::sleep(HEALTH_POLL_INTERVAL).await;
             }
-            tokio::time::sleep(HEALTH_POLL_INTERVAL).await;
-        }
+            break (port, my_gen);
+        };
 
         let mut inner = self.inner.lock().await;
         if inner.generation != my_gen {
@@ -357,6 +433,10 @@ impl EngineBackend for SubprocessBackend {
         // from whenever the caller clicked "Load".
         inner.last_activity = Instant::now();
         inner.generating = false;
+        // Arm the first-message crash fallback only when this start *ended up*
+        // running with MTP (the startup retry consumed it for the retried
+        // start, which runs stripped).
+        inner.mtp_fallback = mtp_fallback;
         inner.status = EngineStatus::Running {
             model_id: model_id.to_string(),
             port,
@@ -378,6 +458,7 @@ impl EngineBackend for SubprocessBackend {
         }
         inner.generation += 1;
         inner.status = EngineStatus::Stopped;
+        inner.mtp_fallback = None;
         Ok(())
     }
 
@@ -455,8 +536,23 @@ impl EngineBackend for SubprocessBackend {
             }
         }
         inner.generation += 1;
+        inner.mtp_fallback = None;
         inner.status = EngineStatus::Stopped;
         Ok(())
+    }
+
+    /// The restart-without-MTP snapshot armed by [`Self::start`] when the
+    /// start carried `--spec-*` args — consumed by the first-message crash
+    /// retry in `EngineManager::chat_stream`. `None` otherwise (see the
+    /// [`Inner::mtp_fallback`] doc comment for the lifecycle).
+    async fn mtp_restart_snapshot(&self) -> Option<MtpRestart> {
+        self.inner.lock().await.mtp_fallback.clone()
+    }
+
+    /// Whether the engine subprocess has exited — the signal that a
+    /// restart-and-resend is meaningful (vs. a live-but-erroring server).
+    async fn child_died(&self) -> bool {
+        self.child_has_exited().await
     }
 
     /// Stream one assistant reply. See module docs for the full contract.
@@ -496,6 +592,19 @@ impl EngineBackend for SubprocessBackend {
                 let hint = self.child_oom_hint().await;
                 tracing::error!("chat request failed: {e}{hint}");
                 let message = if self.child_has_exited().await {
+                    // MTP crash fallback: an MTP-armed engine can die on the
+                    // *first* request before streaming anything — this POST
+                    // never connected, so nothing was emitted and a resend
+                    // can't duplicate tokens. Leave the recovery to the
+                    // manager (which restarts without MTP and resends once):
+                    // do NOT `fail()` or emit an Error here, or the automatic
+                    // recovery would be preceded by a bogus "stopped
+                    // unexpectedly" blame. Only the second, MTP-less attempt
+                    // falls through to today's failure path.
+                    let fallback_armed = self.inner.lock().await.mtp_fallback.is_some();
+                    if fallback_armed {
+                        return Err(Error::Engine(CRASHED_MSG.to_string()));
+                    }
                     self.fail(CRASHED_MSG).await;
                     CRASHED_MSG
                 } else {
@@ -668,6 +777,7 @@ impl SubprocessBackend {
             let _ = child.kill().await;
         }
         inner.generation += 1;
+        inner.mtp_fallback = None;
         inner.status = EngineStatus::Failed {
             message: message.to_string(),
         };
@@ -834,6 +944,47 @@ fn unsupported_architecture_hint(log: &str) -> Option<String> {
         "This model uses the '{arch}' architecture, which this version of OpenPal's AI engine \
          doesn't support yet. Check for an app update, or pick a different model."
     ))
+}
+
+/// A start "carries MTP args" when its extra args use `--spec-type` (the flag
+/// `commands::build_extra_args` appends for a curated entry with `mtp: true`).
+/// Everything else keys off this: the fallback snapshot exists, the startup
+/// retry is armed, and the first-message retry can fire.
+fn has_mtp_args(args: &[String]) -> bool {
+    args.iter()
+        .any(|a| a == "--spec-type" || a.starts_with("--spec-type="))
+}
+
+/// Remove every MTP/speculative-decoding arg from `args`: `--spec-type` and
+/// its value, `--spec-draft-n-max`, and any other `--spec-*` long-form flag
+/// (each followed by its value token unless given as `--spec-x=value`).
+/// Mirrors `strip_gpu_layers_flag` in `crates/app` — the MTP flags are
+/// produced programmatically by `start_engine`, and the crash fallback must
+/// never leave a stray `--spec-*` behind to re-arm the failure it's
+/// recovering from.
+fn strip_mtp_args(args: &mut Vec<String>) {
+    let mut i = 0;
+    while i < args.len() {
+        if args[i].starts_with("--spec-") {
+            let takes_value = !args[i].contains('=');
+            let end = (i + if takes_value { 2 } else { 1 }).min(args.len());
+            args.drain(i..end);
+        } else {
+            i += 1;
+        }
+    }
+}
+
+/// llama.cpp's own failure fingerprints for a start that requested MTP
+/// self-drafting the loaded model can't provide: the flag being rejected
+/// outright on a binary that doesn't know it (`invalid argument:
+/// --spec-type …`) or the MTP draft context failing to build because the
+/// GGUF has no mappable MTP layers. Only consulted when the child exits
+/// during startup; anything else keeps today's failure path.
+fn mtp_startup_failure_markers(log: &str) -> bool {
+    (log.contains("invalid argument") && log.contains("--spec-type"))
+        || log.contains("doesn't contain MTP layers")
+        || log.contains("does not contain MTP layers")
 }
 
 #[cfg(test)]
@@ -1079,5 +1230,83 @@ mod tests {
             None,
             "an OOM kill has no architecture line to key off of"
         );
+    }
+
+    // ----------------------- MTP fallback helpers -----------------------
+
+    #[test]
+    fn has_mtp_args_detects_the_programmatic_flag() {
+        assert!(has_mtp_args(&[
+            "--spec-type".to_string(),
+            "draft-mtp".to_string()
+        ]));
+        assert!(has_mtp_args(&["--spec-type=draft-mtp".to_string()]));
+        assert!(!has_mtp_args(&["--no-warmup".to_string()]));
+        assert!(!has_mtp_args(&[]));
+    }
+
+    #[test]
+    fn strip_mtp_args_removes_spec_flags_and_their_values() {
+        let mut args = vec![
+            "--no-warmup".to_string(),
+            "--spec-type".to_string(),
+            "draft-mtp".to_string(),
+            "--spec-draft-n-max".to_string(),
+            "4".to_string(),
+            "-b".to_string(),
+            "2048".to_string(),
+            "--spec-draft-cache-type-k".to_string(),
+            "q8_0".to_string(),
+        ];
+        strip_mtp_args(&mut args);
+        assert_eq!(
+            args,
+            vec!["--no-warmup", "-b", "2048"],
+            "the --spec-* args and their values must go, everything else stays"
+        );
+    }
+
+    #[test]
+    fn strip_mtp_args_handles_equals_form_and_adjacent_spec_flags() {
+        let mut args = vec![
+            "--spec-type=draft-mtp".to_string(),
+            "--spec-draft-n-max".to_string(),
+            "3".to_string(),
+            "--no-warmup".to_string(),
+        ];
+        strip_mtp_args(&mut args);
+        assert_eq!(
+            args,
+            vec!["--no-warmup"],
+            "an equals-form --spec-* arg takes no separate value token"
+        );
+    }
+
+    #[test]
+    fn strip_mtp_args_is_a_noop_without_spec_flags() {
+        let mut args = vec![
+            "--no-warmup".to_string(),
+            "-b".to_string(),
+            "2048".to_string(),
+        ];
+        strip_mtp_args(&mut args);
+        assert_eq!(args, vec!["--no-warmup", "-b", "2048"]);
+    }
+
+    #[test]
+    fn mtp_startup_failure_markers_detect_the_known_llama_cpp_fingerprints() {
+        assert!(mtp_startup_failure_markers(
+            "E  invalid argument: --spec-type draft-mtp: unknown option"
+        ));
+        assert!(mtp_startup_failure_markers(
+            "E  context type MTP requested but model doesn't contain MTP layers"
+        ));
+        // A log that merely echoes the flag during a healthy start must NOT
+        // match — the marker is only consulted after the child exited.
+        assert!(!mtp_startup_failure_markers(
+            "loading with --spec-type draft-mtp --spec-draft-n-max 4"
+        ));
+        assert!(!mtp_startup_failure_markers("model loaded, ready"));
+        assert!(!mtp_startup_failure_markers(""));
     }
 }

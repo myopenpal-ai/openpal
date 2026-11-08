@@ -116,6 +116,43 @@ mod tests {
         }
     }
 
+    /// The MTP self-drafting flags (`--spec-type draft-mtp`, `--spec-draft-*`)
+    /// must never come from a catalog entry's `extraArgs`: they are produced
+    /// programmatically by `start_engine` from the bench-verified `mtp` field
+    /// (and gated on the engine's `--help`). Same defense-in-depth posture as
+    /// `no_catalog_entry_sets_its_own_gpu_layers`.
+    #[test]
+    fn no_catalog_entry_sets_its_own_spec_type() {
+        let catalog = Catalog::load();
+        for m in catalog.all() {
+            assert!(
+                !m.extra_args
+                    .iter()
+                    .any(|a| a == "--spec-type" || a.starts_with("--spec-")),
+                "{}: extraArgs must not set --spec-* flags — that's the `mtp` field's job",
+                m.id
+            );
+        }
+    }
+
+    /// qwen3.6-27b ships its own MTP heads in a layout the current bundled
+    /// engine can use, verified by same-machine bench (2026-11-08, see
+    /// docs/design/DISK_OFFLOAD.md) — the entry must be `mtp: true` or
+    /// `start_engine` never enables self-drafting for it.
+    #[test]
+    fn qwen_3_6_27b_enables_mtp_self_drafting() {
+        let catalog = Catalog::load();
+        let qwen = catalog
+            .all()
+            .iter()
+            .find(|m| m.id == "qwen3.6-27b")
+            .expect("qwen3.6-27b is a catalog entry");
+        assert!(
+            qwen.mtp,
+            "qwen3.6-27b was bench-verified for MTP self-drafting — must be mtp: true"
+        );
+    }
+
     /// Every shard of a split catalog entry must be a real `.gguf` file and
     /// share the same "-NNNNN-of-MMMMM" stem as shard 1 — llama.cpp's
     /// auto-shard-discovery relies on that when it opens shard 2..N given

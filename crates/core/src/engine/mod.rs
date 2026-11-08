@@ -107,6 +107,21 @@ pub struct ActivityInfo {
     pub generation: u64,
 }
 
+/// Everything needed to restart a running engine *without* its MTP
+/// self-drafting args after a first-message crash — the automatic-recovery
+/// half of the MTP feature (`docs/design/DISK_OFFLOAD.md`). Built by
+/// [`subprocess::SubprocessBackend::start`] when the start carries `--spec-*`
+/// args; `cfg.extra_args` has already had every `--spec-*` flag stripped.
+#[derive(Debug, Clone)]
+pub struct MtpRestart {
+    pub server_binary: PathBuf,
+    pub model_id: String,
+    pub model_path: PathBuf,
+    pub cfg: EngineConfig,
+    pub disk_slow: bool,
+    pub startup_timeout: Duration,
+}
+
 /// The one deliberate fork point: how the engine is hosted. Every method
 /// mirrors what a bare `EngineManager` used to expose directly — this trait
 /// is a relocation of existing subprocess behavior, not a new design.
@@ -171,6 +186,24 @@ pub trait EngineBackend: Send + Sync {
     /// Like [`stop`](Self::stop), but a no-op if the engine has moved on to
     /// a different generation since `expected_generation` was captured.
     async fn stop_if_current(&self, expected_generation: u64) -> Result<()>;
+
+    /// Snapshot for restarting the current engine *without* its MTP
+    /// self-drafting args — `Some` only while an MTP-armed start is running
+    /// (the first-message crash fallback: [`EngineManager::chat_stream`]
+    /// restarts via this and resends the request once). Only
+    /// [`subprocess::SubprocessBackend`] produces one today; other backends
+    /// return `None` (no auto-restart).
+    async fn mtp_restart_snapshot(&self) -> Option<MtpRestart> {
+        None
+    }
+
+    /// Whether the local engine process has exited (vs. a mere
+    /// request-level failure) — the condition that makes a restart-and-resend
+    /// meaningful. Only [`subprocess::SubprocessBackend`] has a process to
+    /// observe; other backends default to `false` (no auto-restart).
+    async fn child_died(&self) -> bool {
+        false
+    }
 
     /// Stream one assistant reply.
     async fn chat_stream(
@@ -319,8 +352,90 @@ impl EngineManager {
         cancel: Arc<AtomicBool>,
         mut on_event: impl FnMut(ChatEvent) + Send,
     ) -> Result<()> {
+        let on_event = &mut on_event as &mut (dyn FnMut(ChatEvent) + Send);
+        // Generation snapshot for the "is the engine still ours?" check below
+        // — a concurrent start()/stop() that supersedes the engine mid-retry
+        // gets to keep it (`start()` already bails safely on a generation
+        // mismatch); we bow out to the normal error path instead of racing it.
+        let generation = self.backend.activity().await.map(|a| a.generation);
+        let emitted_answer = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+        let first = self
+            .chat_stream_once(
+                messages,
+                sampling,
+                cancel.clone(),
+                on_event,
+                &emitted_answer,
+            )
+            .await;
+
+        // MTP crash fallback: an engine started with MTP self-drafting can
+        // hard-abort on the *first* generation (a GGUF whose MTP heads this
+        // engine can't run — see docs/design/DISK_OFFLOAD.md), before a
+        // single token is emitted. Restart it without the MTP args and resend
+        // the request exactly once; only a second failure falls through to
+        // the normal error/failed-state path. A mid-answer crash never
+        // triggers this — `emitted_answer` proves the model was working, so a
+        // resend would duplicate tokens already shown.
+        if first.is_err()
+            && !emitted_answer.load(std::sync::atomic::Ordering::Relaxed)
+            && self.backend.child_died().await
+        {
+            if let Some(restart) = self.backend.mtp_restart_snapshot().await {
+                let still_ours = match (generation, self.backend.activity().await) {
+                    (Some(expected), Some(info)) => info.generation == expected,
+                    (None, None) => true,
+                    _ => false,
+                };
+                if still_ours {
+                    tracing::warn!(
+                        "engine died on the first message with MTP armed; restarting without MTP and retrying once"
+                    );
+                    if let Err(e) = self
+                        .start(
+                            &restart.server_binary,
+                            &restart.model_id,
+                            &restart.model_path,
+                            &restart.cfg,
+                            restart.disk_slow,
+                            restart.startup_timeout,
+                        )
+                        .await
+                    {
+                        tracing::error!("MTP-fallback restart failed: {e}");
+                        return first;
+                    }
+                    return self
+                        .chat_stream_once(messages, sampling, cancel, on_event, &emitted_answer)
+                        .await;
+                }
+            }
+        }
+        first
+    }
+
+    /// One `chat_stream` round trip against the backend, forwarding `on_event`
+    /// while flagging the moment any answer token ([`ChatEvent::Token`]) is
+    /// emitted — the "mid-answer" guard for the MTP crash fallback.
+    async fn chat_stream_once(
+        &self,
+        messages: &[ChatMessage],
+        sampling: &SamplingParams,
+        cancel: Arc<AtomicBool>,
+        on_event: &mut (dyn FnMut(ChatEvent) + Send),
+        emitted_answer: &std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ) -> Result<()> {
+        use std::sync::atomic::Ordering;
+        let emitted = emitted_answer.clone();
+        let mut forward: Box<dyn FnMut(ChatEvent) + Send> = Box::new(move |ev| {
+            if matches!(ev, ChatEvent::Token { .. }) {
+                emitted.store(true, Ordering::Relaxed);
+            }
+            on_event(ev);
+        });
         self.backend
-            .chat_stream(messages, sampling, cancel, &mut on_event)
+            .chat_stream(messages, sampling, cancel, forward.as_mut())
             .await
     }
 
@@ -743,5 +858,318 @@ mod tests {
         // hit the ceiling and fail visibly instead of hanging silently.
         let timeout = disk_slow_startup_timeout(50_000_000_000, Some(20_000));
         assert_eq!(timeout, MAX_DISK_SLOW_STARTUP_TIMEOUT);
+    }
+
+    // ------------------------------------------------------------------
+    // MTP first-message crash fallback
+    // ------------------------------------------------------------------
+
+    /// Test double that dies (optionally after emitting content) on a chosen
+    /// chat call, rebuilds a stripped MTP snapshot on every MTP-armed start,
+    /// and records every start's args + every chat call.
+    struct FakeMtpState {
+        starts: Vec<Vec<String>>,
+        chat_calls: u32,
+        /// 1-based call number that fails; 0 = never fails.
+        fail_on_call: u32,
+        /// Emit a Token before failing (models a mid-answer stream break).
+        emit_before_fail: bool,
+        generation: u64,
+        running: bool,
+        mtp_fallback: Option<MtpRestart>,
+    }
+
+    struct FakeMtpBackend {
+        state: Arc<tokio::sync::Mutex<FakeMtpState>>,
+    }
+
+    #[async_trait]
+    impl EngineBackend for FakeMtpBackend {
+        async fn start(
+            &self,
+            server_binary: &Path,
+            model_id: &str,
+            model_path: &Path,
+            cfg: &EngineConfig,
+            disk_slow: bool,
+            startup_timeout: Duration,
+        ) -> Result<()> {
+            let mut s = self.state.lock().await;
+            s.generation += 1;
+            s.running = true;
+            s.starts.push(cfg.extra_args.clone());
+            let has_mtp = cfg
+                .extra_args
+                .iter()
+                .any(|a| a == "--spec-type" || a.starts_with("--spec-type="));
+            // Mirror SubprocessBackend::start's snapshot shape: the stored
+            // config already has every --spec-* arg stripped.
+            s.mtp_fallback = has_mtp.then(|| MtpRestart {
+                server_binary: server_binary.to_path_buf(),
+                model_id: model_id.to_string(),
+                model_path: model_path.to_path_buf(),
+                cfg: EngineConfig {
+                    extra_args: cfg
+                        .extra_args
+                        .iter()
+                        .filter(|a| !a.starts_with("--spec-"))
+                        .cloned()
+                        .collect(),
+                    ..cfg.clone()
+                },
+                disk_slow,
+                startup_timeout,
+            });
+            Ok(())
+        }
+
+        async fn stop(&self) -> Result<()> {
+            let mut s = self.state.lock().await;
+            s.generation += 1;
+            s.running = false;
+            s.mtp_fallback = None;
+            Ok(())
+        }
+
+        async fn status(&self) -> EngineStatus {
+            let s = self.state.lock().await;
+            if s.running {
+                EngineStatus::Running {
+                    model_id: "fake".to_string(),
+                    port: 1,
+                    disk_slow: false,
+                    auto_unload_at: None,
+                }
+            } else {
+                EngineStatus::Stopped
+            }
+        }
+
+        async fn activity(&self) -> Option<ActivityInfo> {
+            let s = self.state.lock().await;
+            s.running.then(|| ActivityInfo {
+                disk_slow: false,
+                idle_for: Duration::ZERO,
+                generating: false,
+                generation: s.generation,
+            })
+        }
+
+        async fn touch_activity(&self) {}
+        async fn begin_generation(&self) {}
+        async fn end_generation(&self) {}
+
+        async fn stop_if_current(&self, expected_generation: u64) -> Result<()> {
+            let mut s = self.state.lock().await;
+            if s.generation == expected_generation {
+                s.generation += 1;
+                s.running = false;
+                s.mtp_fallback = None;
+            }
+            Ok(())
+        }
+
+        async fn chat_stream(
+            &self,
+            _messages: &[ChatMessage],
+            _sampling: &SamplingParams,
+            _cancel: Arc<AtomicBool>,
+            on_event: &mut (dyn FnMut(ChatEvent) + Send),
+        ) -> Result<()> {
+            let mut s = self.state.lock().await;
+            s.chat_calls += 1;
+            let fails = s.chat_calls == s.fail_on_call;
+            if fails && s.emit_before_fail {
+                on_event(ChatEvent::Token {
+                    text: "partial answer".to_string(),
+                });
+            }
+            if fails {
+                return Err(crate::Error::Engine("fake died".to_string()));
+            }
+            on_event(ChatEvent::Token {
+                text: "full answer".to_string(),
+            });
+            Ok(())
+        }
+
+        async fn raw_classify(&self, _body: serde_json::Value) -> Result<Option<String>> {
+            Ok(None)
+        }
+
+        fn set_dek(&self, _dek: Option<&DataKey>) {}
+        fn tail_log(&self, _max_lines: usize) -> String {
+            String::new()
+        }
+        fn export_logs(&self) -> String {
+            String::new()
+        }
+        fn log_path(&self) -> PathBuf {
+            PathBuf::new()
+        }
+
+        async fn mtp_restart_snapshot(&self) -> Option<MtpRestart> {
+            self.state.lock().await.mtp_fallback.clone()
+        }
+
+        async fn child_died(&self) -> bool {
+            let s = self.state.lock().await;
+            s.chat_calls != 0 && s.child_was_killed_for_current_call()
+        }
+    }
+
+    impl FakeMtpState {
+        fn child_was_killed_for_current_call(&self) -> bool {
+            // The process "exited" when the last chat call failed.
+            self.chat_calls == self.fail_on_call && self.fail_on_call != 0
+        }
+    }
+
+    fn fake_manager(
+        fail_on_call: u32,
+        emit_before_fail: bool,
+    ) -> (EngineManager, Arc<tokio::sync::Mutex<FakeMtpState>>) {
+        let state = Arc::new(tokio::sync::Mutex::new(FakeMtpState {
+            starts: vec![],
+            chat_calls: 0,
+            fail_on_call,
+            emit_before_fail,
+            generation: 0,
+            running: false,
+            mtp_fallback: None,
+        }));
+        let manager = EngineManager::with_backend(Box::new(FakeMtpBackend {
+            state: state.clone(),
+        }));
+        (manager, state)
+    }
+
+    fn mtp_cfg() -> EngineConfig {
+        EngineConfig {
+            context_length: 4096,
+            gpu_layers: 0,
+            threads: None,
+            extra_args: vec![
+                "--spec-type".to_string(),
+                "draft-mtp".to_string(),
+                "--spec-draft-n-max".to_string(),
+                "4".to_string(),
+            ],
+            mmproj_path: None,
+        }
+    }
+
+    /// The plan's core retry test: a fake backend that dies on the first
+    /// chat request must be restarted WITHOUT its MTP args, then answer —
+    /// with no Failed status and no protocol change for the caller.
+    #[tokio::test]
+    async fn chat_stream_restarts_without_mtp_and_resends_after_a_first_message_crash() {
+        let (manager, state) = fake_manager(/* fail first chat */ 1, false);
+        manager
+            .start(
+                Path::new("/fake/llama-server"),
+                "qwen3.6-27b",
+                Path::new("/fake/qwen.gguf"),
+                &mtp_cfg(),
+                false,
+                Duration::from_secs(30),
+            )
+            .await
+            .unwrap();
+
+        let mut events: Vec<ChatEvent> = vec![];
+        let result = manager
+            .chat_stream(
+                &[],
+                &SamplingParams::default(),
+                Arc::new(AtomicBool::new(false)),
+                |ev| events.push(ev),
+            )
+            .await;
+
+        assert!(result.is_ok(), "the MTP fallback must deliver an answer");
+        let s = state.lock().await;
+        assert_eq!(s.chat_calls, 2, "exactly one resend after the crash");
+        assert_eq!(s.starts.len(), 2, "the engine must restart exactly once");
+        assert!(
+            !s.starts[1].iter().any(|a| a.starts_with("--spec-")),
+            "the restart must drop every --spec-* arg: {:?}",
+            s.starts[1]
+        );
+        assert!(
+            events
+                .iter()
+                .any(|ev| matches!(ev, ChatEvent::Token { text } if text == "full answer")),
+            "the retried request must deliver the answer"
+        );
+        drop(s);
+        assert!(
+            matches!(manager.status().await, EngineStatus::Running { .. }),
+            "a recovered MTP crash must not leave the engine Failed"
+        );
+    }
+
+    /// Without an MTP snapshot there is nothing to fall back to — a plain
+    /// crash keeps today's single-attempt error path.
+    #[tokio::test]
+    async fn chat_stream_does_not_restart_without_an_mtp_snapshot() {
+        let (manager, state) = fake_manager(1, false);
+        let mut cfg = mtp_cfg();
+        cfg.extra_args.clear(); // no MTP args -> no snapshot
+        manager
+            .start(
+                Path::new("/fake/llama-server"),
+                "plain-model",
+                Path::new("/fake/plain.gguf"),
+                &cfg,
+                false,
+                Duration::from_secs(30),
+            )
+            .await
+            .unwrap();
+
+        let result = manager
+            .chat_stream(
+                &[],
+                &SamplingParams::default(),
+                Arc::new(AtomicBool::new(false)),
+                |_| {},
+            )
+            .await;
+        assert!(result.is_err(), "a plain crash keeps the error path");
+        let s = state.lock().await;
+        assert_eq!(s.chat_calls, 1, "no retry without an MTP snapshot");
+        assert_eq!(s.starts.len(), 1, "no restart without an MTP snapshot");
+    }
+
+    /// A crash that happened mid-answer (a token already emitted) must NOT
+    /// trigger the resend — it would duplicate tokens the user already saw.
+    #[tokio::test]
+    async fn chat_stream_does_not_resend_after_a_mid_answer_crash() {
+        let (manager, state) = fake_manager(1, true);
+        manager
+            .start(
+                Path::new("/fake/llama-server"),
+                "qwen3.6-27b",
+                Path::new("/fake/qwen.gguf"),
+                &mtp_cfg(),
+                false,
+                Duration::from_secs(30),
+            )
+            .await
+            .unwrap();
+
+        let result = manager
+            .chat_stream(
+                &[],
+                &SamplingParams::default(),
+                Arc::new(AtomicBool::new(false)),
+                |_| {},
+            )
+            .await;
+        assert!(result.is_err(), "a mid-answer crash surfaces as an error");
+        let s = state.lock().await;
+        assert_eq!(s.chat_calls, 1, "a mid-answer crash must not resend");
+        assert_eq!(s.starts.len(), 1, "a mid-answer crash must not restart");
     }
 }
