@@ -15,9 +15,9 @@ use crate::parental;
 use crate::state::{AppState, BootState};
 use openpal_core::account::{Account, AccountEvent};
 use openpal_core::agent::consent::ConsentDecision;
-use openpal_core::agent::{EventSink, ReviewDecision, ToolGrant};
+use openpal_core::agent::{AgentDeps, EventSink, ReviewDecision, ToolGrant};
 use openpal_core::cloud::CloudModelInfo;
-use openpal_core::engine::{self, STARTUP_TIMEOUT};
+use openpal_core::engine::{self, EngineEndpoint, STARTUP_TIMEOUT};
 use openpal_core::injection::{self, Source, TurnGuard};
 use openpal_core::plugin::{PluginEvent, PluginInfo, PluginManager};
 use openpal_core::remote::client::{Browser, DiscoveredHost, RemotePairingRecord};
@@ -2286,6 +2286,61 @@ pub async fn classify_risk(
     state.engine.classify_risk(&text).await.map_err(friendly)
 }
 
+/// Run one agent/web-search turn with MTP failure recovery (see
+/// `docs/design/DISK_OFFLOAD.md` for the full story). Brackets the turn with
+/// `begin_generation`/`end_generation` so the auto-unload idle timer stays
+/// honest, and when a turn fails *before a single answer token was emitted*
+/// on an engine whose MTP self-drafting is armed and has died or wedged,
+/// restarts that engine without the MTP args.
+///
+/// The turn itself is never replayed: agent turns may have run tools with
+/// real side effects, so resending would be wrong. Recovery re-arms a
+/// working engine for the user's *next* request and returns the original
+/// error up the stack (the frontend surfaces it as the turn's failure).
+/// This is the agent-path half of the same recovery primitive the idle-loop
+/// watchdog uses; plain chats retry their first message inside
+/// `EngineManager::chat_stream` itself.
+async fn run_agent_turn_with_recovery(
+    state: &AppState,
+    deps: &AgentDeps,
+    endpoint: EngineEndpoint,
+    messages: &[ChatMessage],
+    sampling: &SamplingParams,
+    cancel: Arc<AtomicBool>,
+    on_event: Channel<ChatEvent>,
+) -> Result<(), String> {
+    // Which engine did this turn start talking to? Recovery restarts only
+    // the engine the caller observed — a concurrent stop/start (the user
+    // switched models, a manual reload) must not be resurrected as a
+    // stripped copy of the engine it replaced.
+    let generation = state.engine.activity().await.map(|a| a.generation);
+    // Did any answer token stream before the failure? If so the model was
+    // working and a restart would only cost the user the reply they already
+    // saw; recovery fires only on a clean pre-answer break.
+    let emitted_answer = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+    state.engine.begin_generation().await;
+    let event_sink = on_event.clone();
+    let emitted = emitted_answer.clone();
+    let result = agent_bridge::run_turn(deps, endpoint, messages, sampling, cancel, move |event| {
+        if matches!(event, ChatEvent::Token { .. }) {
+            emitted.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        let _ = event_sink.send(event);
+    })
+    .await;
+    state.engine.end_generation().await;
+
+    if result.is_err()
+        && !emitted_answer.load(std::sync::atomic::Ordering::Relaxed)
+        && state.engine.mtp_fallback_armed().await
+        && !state.engine.is_healthy().await
+    {
+        state.engine.restart_without_mtp(generation).await;
+    }
+    result
+}
+
 /// Drive one agent-mode turn: build the per-turn `AgentDeps` from a
 /// system-managed, per-conversation workspace folder + the long-lived
 /// consent/audit state in `AppState`, then hand off to
@@ -2374,17 +2429,10 @@ async fn agent_chat_turn(
         let _ = on_event.send(ChatEvent::Error { message: e.clone() });
     })?;
 
-    state.engine.begin_generation().await;
-
-    let event_sink = on_event.clone();
-    let result =
-        agent_bridge::run_turn(&deps, endpoint, &messages, sampling, cancel, move |event| {
-            let _ = event_sink.send(event);
-        })
-        .await;
-
-    state.engine.end_generation().await;
-    result
+    run_agent_turn_with_recovery(
+        state, &deps, endpoint, &messages, sampling, cancel, on_event,
+    )
+    .await
 }
 
 #[tauri::command]
@@ -2644,17 +2692,10 @@ async fn web_search_chat_turn(
         ),
     }
 
-    state.engine.begin_generation().await;
-
-    let event_sink = on_event.clone();
-    let result =
-        agent_bridge::run_turn(&deps, endpoint, &messages, sampling, cancel, move |event| {
-            let _ = event_sink.send(event);
-        })
-        .await;
-
-    state.engine.end_generation().await;
-    result
+    run_agent_turn_with_recovery(
+        state, &deps, endpoint, &messages, sampling, cancel, on_event,
+    )
+    .await
 }
 
 /// Plain engine completion (no plugin), under the turn's `cancel`.

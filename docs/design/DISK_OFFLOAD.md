@@ -399,6 +399,52 @@ NVMe report, FlexInfer (arXiv 2503.03777). ✅ = adversarially confirmed.
       as predicted. The entry stays un-armed; no real-GGUF fallback repro
       exists, so the crash fallback ships as defensive engineering verified
       by unit tests.
+  - **Production follow-up — issue #6 (2026-11-08, the day after ship):
+    the live qwen3.6-27b MTP engine broke, so recovery is now a first-class
+    part of the feature rather than a defensive afterthought.** The user's
+    app reported `stream read failed: error decoding response body` on an
+    agent turn, then two `classify request failed` warnings 20 s apart, then
+    `request failed: error sending request`. Diagnosis against the live
+    engine + a controlled repro of the exact production recipe found:
+    - **Warm-cache generation is glacial on this machine (~0.05–0.08
+      tok/s), so a 64-token turn is 15–20 min — and that's the MTP *win*;
+      the shipped depth-4 number (0.074) is real.** The plain-chat
+      first-message fallback never fires on a mid-stream break, so the
+      original recovery didn't cover any of what actually broke.
+    - **The MTP server aborted a mid-answer stream** (partial body decode —
+      the user's first error), then **stalled a concurrent request for the
+      full 20 s** the app's classify path waits, then **hard-aborted
+      (SIGABRT)** inside Metal teardown (`ggml_metal_rsets_free` →
+      `ggml_abort`) at exit after its parent app closed (orphaned to
+      launchd) — `~/Library/Logs/DiagnosticReports/llama-server-*.ips` is
+      the crash report. A non-MTP control with the same model stalled too
+      (accepted a request, then 0.1% CPU, no generation): the engine/speed
+      story is the deep problem; MTP's marginal failures are the part the
+      app can recover from.
+    - **Built (user decision: keep MTP, recover):** `EngineManager` gained
+      three primitives — `is_healthy()` (subprocess-exit check + one
+      loopback `/health` GET, 3 s cap), `mtp_fallback_armed()` (an
+      `MtpRestart` snapshot exists), and `restart_without_mtp(generation)`
+      — the *one* restart that strips the `--spec-*` args and refuses a
+      superseded engine. Three recovery paths reuse it:
+      1. **Plain-chat first message** (already shipped): `chat_stream`
+         retries once after a pre-answer MTP crash — never resends a
+         mid-answer break.
+      2. **Agent/web-search turns** (`run_agent_turn_with_recovery`): a
+         turn error with zero tokens emitted on an armed-but-unhealthy
+         engine restarts it without MTP. The turn is **never replayed** —
+         agent turns may run tools with real side effects.
+      3. **Idle-loop watchdog** (`maybe_recover_engine`, the same 5 s tick
+         as auto-unload): when idle (never while `generating`), a dead or
+         wedged engine is restarted without MTP, or stopped if it was
+         already MTP-less.
+    - No agent turn is ever auto-resent (tool side effects); recovery
+      re-arms the engine for the user's *next* request and surfaces the
+      original error.
+    - Re-bench on the next engine bump stands — b11960's MTP on this
+      hardware is functional but not useful-speed at any depth, which the
+      round-4 single-rep green-light (with caveats) undersold; the recovery
+      layer is what makes shipping it defensible.
 
 ### Phase 4 — Catalog entries for big MoE models (≤ 50 GB single-file first) ✅ DONE
 - **Shipped visible** (user decision, accepting the gap until Phase 3's
