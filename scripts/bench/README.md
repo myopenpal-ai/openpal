@@ -1,4 +1,4 @@
-# DiskSlow speed-lever benches (16 GB M4 series, 2026-07-08)
+# DiskSlow speed-lever benches (16 GB M4 series, 2026-07-08 → 2026-11-08)
 
 Standalone scripts that drive the bundled `llama-server` with the exact
 `start_engine` DiskSlow recipe (`-ngl 0 -c 8192 --no-warmup`) — same method as
@@ -23,6 +23,19 @@ recorded. Output goes to `$BENCH_OUT_DIR` (default `/tmp/openpal-bench`):
   13.5 GB) is STILL PENDING — run it only when the machine can be
   sacrificed; it probes the llama.cpp #19825 kernel-panic neighborhood,
   deliberately.
+- `bench_qwen_mtp.sh` — baseline vs `--spec-type draft-mtp` at depths
+  2/3/4 on qwen3.6-27b (Q4_K_M + bf16 mmproj, 17.1 GB + 0.9 GB), exact
+  DiskSlow recipe, engine **b11960**. RAN 2026-11-08: baseline did **not
+  finish** within the 60-min per-request cap (recorded as an upper bound
+  of <0.036 tok/s); `draft-mtp` won monotonically with depth — **depth 2:
+  0.050 tok/s** (draft_n 90, 81 accepted, mean len 2.80) · **depth 3:
+  0.062** (110/89, 3.41) · **depth 4: 0.074** (128/95, 3.97). Single-rep
+  measurement (round-2 reps stopped mid-run by user decision). Verdict
+  that shipped the feature: `start_engine` now arms self-drafting for the
+  `qwen3.6-27b` entry (`--spec-draft-n-max 4`) when the current engine
+  binary advertises `draft-mtp`. The same script's GLM-4.5-Air probe
+  showed b11960 no longer crashes on `draft-mtp` but gains nothing
+  (0.162–0.178 vs 0.181 baseline) — that entry stays un-armed.
 
 Paths (engine binary, models dir) are hardcoded for the dev Mac at the top of
 each script; adjust for other bench machines (32 GB Mac, Win/Linux + GPU).

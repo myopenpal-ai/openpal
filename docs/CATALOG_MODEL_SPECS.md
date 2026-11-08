@@ -43,7 +43,7 @@ version bump) to warrant checking individually rather than trusting the size/nam
 | `gemma-4-e2b` | 4.65 (catalog: 4.6) | Dense. "E2B" = MatFormer/Per-Layer-Embeddings "effective 2B", not MoE — see naming trap below. |
 | `gemma-4-e4b` | 7.52 (catalog: 7.5) | Dense, same reason. |
 | `gemma-4-12b` | 11.95 (catalog: 12.0) | Dense — `config.json` explicitly sets `enable_moe_block: false`. |
-| `qwen3.6-27b` | 27 (catalog: 27.3) | Dense — hybrid Gated-DeltaNet/Attention, no expert fields in `config.json`. |
+| `qwen3.6-27b` | 27 (catalog: 27.3) | Dense — hybrid Gated-DeltaNet/Attention, no expert fields in `config.json`. **Ships MTP (multi-token prediction) heads usable by the bundled engine for speculative self-drafting** — bench-verified 2026-11-08 (b11960, exact DiskSlow recipe: depth-4 `draft-mtp` 0.074 tok/s vs <0.036 baseline upper bound); entry is `mtp: true`, so `start_engine` arms `--spec-type draft-mtp --spec-draft-n-max 4` for it (see `docs/design/DISK_OFFLOAD.md` round 4). |
 
 Sources: official `google/gemma-4-{E2B,E4B,12B}-it` and `Qwen/Qwen3.6-27B` Hugging Face repos
 (README + `config.json`), cross-checked against the GGUF files OpenPal actually ships

@@ -363,6 +363,42 @@ NVMe report, FlexInfer (arXiv 2503.03777). ✅ = adversarially confirmed.
     wired-memory watchdog with a 13.5 GB abort threshold — deliberately
     deferred until the machine can be sacrificed; user decision
     2026-07-11).
+  - **Speed-lever bench, round 4 — MTP self-drafting on a *dense* model
+    (2026-11-08, same 16 GB M4, engine **b11960** = `0.8.0-dev (build
+    11960, commit 8642541b2)`, `scripts/bench/bench_qwen_mtp.sh`):**
+    - Model: **qwen3.6-27b** Q4_K_M (17,106,773,120 bytes, sha256-verified)
+      + its bf16 mmproj (931,146,304 bytes, sha256-verified), exact
+      DiskSlow recipe (`-ngl 0 -b 2048 -ub 2048 -fa on -ctk q8_0 -ctv
+      q8_0 --no-warmup`) + `--mmproj`, 30-token prompt, `n_predict 128`.
+      The *dense* case the MoE expert-union defeat (next section) doesn't
+      cover: MTP self-drafting batches one forward pass per draft window,
+      so the streamed weights are read once per window instead of once per
+      token.
+    - **Baseline (no spec): did NOT finish** — both reps were still
+      generating at the 60-min per-request cap, so it's recorded as an
+      upper bound of **<0.036 tok/s**.
+    - **`--spec-type draft-mtp` wins at every depth, monotonically with
+      depth**: depth 2 → **0.050 tok/s** (`draft_n` 90, 81 accepted, mean
+      draft len 2.80) · depth 3 → **0.062** (110/89, 3.41) · depth 4 →
+      **0.074** (128/95, 3.97) — all ≥ ~2× the baseline bound, clean runs
+      (RSS ~2.1–2.6 GB at health, mmproj loaded, 0 errors, clean exit).
+      Single-rep measurement (round-2 reps stopped mid-run by user
+      decision); the monotone depth ladder matches the mechanism, but
+      re-bench after any engine bump.
+    - **SHIPPED 2026-11-08**: `start_engine` enables self-drafting for the
+      `qwen3.6-27b` catalog entry only (`--spec-type draft-mtp
+      --spec-draft-n-max 4`, from the bench-verified `mtp` field — see
+      `ModelSpec::mtp`), gated on the *current* engine binary advertising
+      `draft-mtp` in `--help` (probed fresh per start, since an in-app
+      engine update can swap the binary mid-session). Depth 4 measured
+      best, so the shipped depth is 4 (llama-server's own default is 3).
+    - **GLM-4.5-Air re-probed on b11960** (same UD-IQ2_XXS GGUF, same
+      recipe): round 1's b9833 hard abort is **gone** — `draft-mtp` runs,
+      but shows **no speed win** (depth 2: 0.178, depth 3: 0.162 vs 0.181
+      baseline tok/s; `draft_n` 52–74) — the MoE expert-union effect wins
+      as predicted. The entry stays un-armed; no real-GGUF fallback repro
+      exists, so the crash fallback ships as defensive engineering verified
+      by unit tests.
 
 ### Phase 4 — Catalog entries for big MoE models (≤ 50 GB single-file first) ✅ DONE
 - **Shipped visible** (user decision, accepting the gap until Phase 3's
@@ -513,6 +549,17 @@ source by a second agent.
   disk-bound expectation is a modest ~1.2-1.5×. n-gram modes (`ngram-mod`)
   are free but ~1.0× on free-form chat. Nobody has published spec-decode
   numbers in the disk-streaming regime — our A/B is a first.
+- ✅ **MTP self-drafting works on *dense* models — MEASURED + SHIPPED
+  2026-11-08** (bench round 4, qwen3.6-27b, exact DiskSlow recipe): the
+  expert-union defeat doesn't apply — one batched forward pass reads the
+  streamed weights per draft window instead of per token. Depth-4
+  `draft-mtp` measured **0.074 tok/s vs a <0.036 baseline bound** (~2×,
+  monotone in depth: 0.050 → 0.062 → 0.074). **Shipped for the
+  `qwen3.6-27b` catalog entry only**, behind a per-start `--help` probe of
+  the current engine binary (see `ModelSpec::mtp`). GLM-4.5-Air re-probed
+  on b11960 while doing this: its MTP head no longer crashes (b9833's hard
+  abort is fixed upstream) but shows **no win** (0.162–0.178 vs 0.181
+  baseline) — the MoE prediction holds, so it stays un-armed.
 - ✅ **Prompt processing scales with `-ub`** (each physical batch is one
   streaming pass over the weights, so fewer, fuller passes ≈ linear PP gain
   on long prompts), at the cost of compute-buffer RAM that competes with the
