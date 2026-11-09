@@ -623,6 +623,107 @@ describe("model loaded and unloaded", () => {
   });
 });
 
+describe("cancelling or superseding a load mid-start", () => {
+  it("stopModel cancels a load that is still starting, and the cancelled start's error is swallowed", async () => {
+    let rejectStart!: (e: Error) => void;
+    apiMock.startEngine.mockImplementationOnce(
+      () => new Promise<void>((_resolve, reject) => (rejectStart = reject)),
+    );
+    apiMock.getEngineStatus.mockResolvedValue(running("qwen"));
+
+    const loading = useStore.getState().useModel("qwen");
+    expect(useStore.getState().engine).toMatchObject({
+      type: "starting",
+      data: { modelId: "qwen" },
+    });
+    expect(useStore.getState().engineBusy).toBe(true);
+
+    const stopping = useStore.getState().stopModel();
+    await stopping;
+    expect(useStore.getState().engine).toEqual({ type: "stopped" });
+
+    // The backend's generation guard rejects the superseded start once the
+    // stop lands — the store must swallow it rather than flash a failure.
+    rejectStart(new Error("Your AI isn't ready yet. Pick a model, then try again."));
+    await loading;
+
+    expect(useStore.getState().engine).toEqual({ type: "stopped" });
+    expect(useStore.getState().engineBusy).toBe(false);
+    expect(useStore.getState().userStoppedModel).toBe(true);
+    // Nothing was ever loaded, so there is no "unloaded" noise either.
+    expect(alerts()).toEqual([]);
+  });
+
+  it("picking another model mid-load replaces the load, ignoring the cancelled one's failure", async () => {
+    let rejectQwen!: (e: Error) => void;
+    apiMock.startEngine.mockImplementationOnce(
+      () => new Promise<void>((_resolve, reject) => (rejectQwen = reject)),
+    );
+    apiMock.getEngineStatus.mockResolvedValue(running("llama"));
+
+    const loadingQwen = useStore.getState().useModel("qwen");
+    expect(useStore.getState().engine).toMatchObject({
+      type: "starting",
+      data: { modelId: "qwen" },
+    });
+
+    const loadingLlama = useStore.getState().useModel("llama");
+    // The newer load owns the screen immediately — and engineBusy stays true
+    // while the superseded call is still settling.
+    expect(useStore.getState().engine).toMatchObject({
+      type: "starting",
+      data: { modelId: "llama" },
+    });
+    expect(useStore.getState().engineBusy).toBe(true);
+    expect(apiMock.startEngine).toHaveBeenCalledTimes(2);
+
+    rejectQwen(new Error("superseded"));
+    await loadingQwen;
+
+    await loadingLlama;
+    expect(useStore.getState().engine).toEqual(running("llama"));
+    expect(useStore.getState().engineBusy).toBe(false);
+    expect(titles()).toEqual(["Model ready"]);
+  });
+
+  it("a newer load supersedes an in-flight stop, so the stop's late result is dropped", async () => {
+    let finishStop!: () => void;
+    apiMock.stopEngine.mockImplementationOnce(
+      () => new Promise<void>((resolve) => (finishStop = resolve)),
+    );
+    apiMock.getEngineStatus.mockResolvedValue(running("qwen"));
+
+    const stopping = useStore.getState().stopModel();
+    // A load starts while the unload is still in flight (e.g. the picker).
+    const loadingQwen = useStore.getState().useModel("qwen");
+    await loadingQwen;
+    expect(useStore.getState().engine).toEqual(running("qwen"));
+
+    // The superseded stop's own result is dropped — the load went through.
+    finishStop();
+    await stopping;
+    expect(useStore.getState().engine).toEqual(running("qwen"));
+    expect(useStore.getState().engineBusy).toBe(false);
+  });
+
+  it("re-issuing useModel for the model already starting does not restart its load", async () => {
+    let finishStart!: () => void;
+    apiMock.startEngine.mockImplementationOnce(
+      () => new Promise<void>((resolve) => (finishStart = resolve)),
+    );
+
+    const loading = useStore.getState().useModel("qwen");
+    await useStore.getState().useModel("qwen"); // a double click on the same row
+    expect(apiMock.startEngine).toHaveBeenCalledTimes(1);
+
+    apiMock.getEngineStatus.mockResolvedValue(running("qwen"));
+    finishStart();
+    await loading;
+    expect(useStore.getState().engine).toEqual(running("qwen"));
+    expect(useStore.getState().engineBusy).toBe(false);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Answer ready
 // ---------------------------------------------------------------------------

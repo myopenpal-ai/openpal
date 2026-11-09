@@ -1971,7 +1971,6 @@ function ModelQuickPicker({
   const models = useStore((s) => s.models);
   const hardware = useStore((s) => s.report)?.hardware;
   const engine = useStore((s) => s.engine);
-  const engineBusy = useStore((s) => s.engineBusy);
   const useModel = useStore((s) => s.useModel);
   const open = openTool === "model";
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -2068,7 +2067,9 @@ function ModelQuickPicker({
                   aria-selected={m.spec.id === currentId}
                   data-model-id={m.spec.id}
                   className="model-menu-item"
-                  disabled={engineBusy}
+                  // Never disabled by a load in flight: picking another
+                  // model mid-load is exactly the escape hatch a long load
+                  // needs — `useModel` supersedes it (see `engineOpSeq`).
                   onClick={() => {
                     closeMenu();
                     void useModel(m.spec.id);

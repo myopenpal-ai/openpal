@@ -305,6 +305,14 @@ const EjectIcon = () => (
   </svg>
 );
 
+/** Stop-square glyph for the engine pill's stop-loading button
+ * (starting → stopped). */
+const StopIcon = () => (
+  <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+    <rect x="6.5" y="6.5" width="11" height="11" rx="2" />
+  </svg>
+);
+
 /** Buckets `conversations` into the decreasing-scale groups the sidebar
  * shows instead of an exact per-row date (Today / This week / This month /
  * Older) — see `recencyBucket`. Preserves each conversation's relative
@@ -1849,12 +1857,20 @@ function EnginePill() {
           </span>
         </button>
         {engine.type === "starting" && (
-          // No action is available mid-load — this just fills the same slot
-          // the Load/Unload button occupies in every other state, so the
-          // pill doesn't visually jump once loading finishes.
-          <span className="engine-power-btn" aria-hidden="true">
-            <span className="searching-spinner" />
-          </span>
+          // A load can take minutes (GPU-offloaded weights, a slow disk) and
+          // is cancellable — the backend's generation guard makes the
+          // startup health-poll bow out cleanly — so the slot holds a real
+          // stop button instead of the passive spinner it used to: never a
+          // pill the user is stuck behind.
+          <button
+            type="button"
+            className="btn-quiet engine-power-btn"
+            aria-label={t("sidebar.engine.cancelLoading")}
+            title={t("sidebar.engine.cancelLoadingTitle")}
+            onClick={() => void stopModel()}
+          >
+            <StopIcon />
+          </button>
         )}
         {engine.type === "running" && (
           <button

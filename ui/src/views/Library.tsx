@@ -695,7 +695,6 @@ function useModelState(model: ModelInfo) {
   const { spec, status, fit } = model;
   const settings = useStore((s) => s.settings);
   const engine = useStore((s) => s.engine);
-  const engineBusy = useStore((s) => s.engineBusy);
   const downloads = useStore((s) => s.downloads);
   const downloadErrors = useStore((s) => s.downloadErrors);
   const startDownload = useStore((s) => s.startDownload);
@@ -738,7 +737,6 @@ function useModelState(model: ModelInfo) {
     hardware,
     speed,
     longAnswerDuration,
-    engineBusy,
     progress,
     error,
     installed,
@@ -916,7 +914,9 @@ function ModelActionFooter({ actions }: { actions: ReturnType<typeof useModelAct
           <>
             <button
               className="btn-ghost"
-              disabled={st.engineBusy}
+              // Never disabled by a load in flight: another model's card must
+              // stay switchable, because picking it mid-load is how a long
+              // load gets redirected — `useModel` supersedes it (engineOpSeq).
               onClick={() => void st.useModel(spec.id)}
             >
               {t("library.useThisModel")}
@@ -1215,7 +1215,7 @@ function ModelRow({ model, asQuant = false }: { model: ModelInfo; asQuant?: bool
     primary = (
       <button
         className="btn-ghost model-row-btn"
-        disabled={st.engineBusy}
+        // Never disabled by a load in flight — see the card's own comment.
         onClick={() => void st.useModel(spec.id)}
       >
         {t("library.useThisModel")}

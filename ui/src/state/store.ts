@@ -344,7 +344,11 @@ interface Store {
    * session. Compared against the active conversation's `contextLength` to
    * show "restart to apply" only on a genuine mismatch, not on every load. */
   runningContextLength: number | null;
-  /** True while a start/stop engine call is in flight. */
+  /** True while a start/stop engine call is in flight. Stays true until the
+   * *newest* of any overlapping start/stop calls settles (a load can be
+   * cancelled or switched to another model mid-flight — see `engineOpSeq`),
+   * so the pill/pickers can keep offering the stop / switch affordances
+   * without the flag flapping while two calls overlap. */
   engineBusy: boolean;
   /** True right after `stopModel` (the Sidebar's explicit "Unload" button) —
    * consumed and cleared by the composer's typing-triggered preload effect
@@ -564,9 +568,13 @@ interface Store {
   /** (Re)start the engine with this model. `contextLength` defaults to the
    * active conversation's own setting (or the app default when none is
    * active) — pass it explicitly only to apply a value that hasn't been
-   * committed to `active` yet (see `updateGeneration`). */
+   * committed to `active` yet (see `updateGeneration`). Callable mid-load:
+   * a load already on its way for a *different* model (or a stop) is simply
+   * superseded — the backend kills anything it was doing and loads this one.
+   * Only re-issuing the exact load already on its way is a no-op. */
   useModel: (modelId: string, contextLength?: number) => Promise<void>;
-  /** Unload the running model and stop its llama.cpp process. */
+  /** Unload the running model and stop its llama.cpp process. Idempotent,
+   * and valid mid-load too: it cancels a load that is still starting. */
   stopModel: () => Promise<void>;
   /** Reset the auto-unload idle clock to now, so the countdown badge in the
    * sidebar starts over. Backs the pre-unload warning banner's "Keep it
@@ -951,6 +959,18 @@ let downloadRunSeq = 0;
  * never flips `engineBusy`, relies on it alone). */
 let engineFetchSeq = 0;
 let engineAppliedSeq = 0;
+
+/** Start/stop engine calls (`useModel`/`stopModel`) are numbered when they
+ * begin; an operation that resolves after a newer one began is superseded and
+ * must not write its result. The backend already tolerates a stop or a fresh
+ * start mid-load (its `start()` health-poll bows out on a generation bump in
+ * `crates/core/src/engine/subprocess.rs`), so a load is cancellable — but
+ * without this counter the cancelled load's `start()` would come back with an
+ * error and clobber the stop/new load's state with a spurious `Failed`, and a
+ * superseded stop's own `Stopped` could land after the newer load's `Running`.
+ * `engineBusy` flips back to false only once the *newest* operation settles, so
+ * an overlapped (superseded) call finishing late never drops the flag early. */
+let engineOpSeq = 0;
 
 /** Forget everything the alert wiring has seen. Module state survives
  * `useStore.setState(...)`, so tests that walk the engine through a scenario
@@ -2419,8 +2439,14 @@ export const useStore = create<Store>()((set, get) => ({
   },
 
   useModel: async (modelId, contextLength) => {
-    if (get().engineBusy) return;
+    // Only the exact load already on its way is a no-op (a double click on
+    // the picker must not restart it from zero). Any other call — another
+    // model while this one loads, a load during a stop — supersedes what is
+    // in flight: the backend kills the old engine on its way in.
+    const current = get().engine;
+    if (current.type === "starting" && current.data.modelId === modelId) return;
     const length = contextLength ?? get().active?.contextLength ?? DEFAULT_CONTEXT_LENGTH;
+    const op = ++engineOpSeq;
     // The Starting below is a local write that is newer than any status fetch
     // still in flight — see `engineFetchSeq`.
     engineAppliedSeq = ++engineFetchSeq;
@@ -2438,11 +2464,17 @@ export const useStore = create<Store>()((set, get) => ({
     });
     try {
       await api.startEngine(modelId, length);
+      // Superseded by a stop or a newer load while starting: its result
+      // (success or the backend's "superseded" error) must not clobber the
+      // state that replaced it — see `engineOpSeq`.
+      if (op !== engineOpSeq) return;
       const ticket = ++engineFetchSeq;
       const [settings, engine] = await Promise.all([
         api.getSettings(),
         api.getEngineStatus(),
       ]);
+      // Superseded while the final status was in flight.
+      if (op !== engineOpSeq) return;
       if (ticket >= engineAppliedSeq) {
         engineAppliedSeq = ticket;
         set({ settings, engine, runningContextLength: length });
@@ -2451,18 +2483,27 @@ export const useStore = create<Store>()((set, get) => ({
         set({ settings, runningContextLength: length });
       }
     } catch (err: unknown) {
+      // A cancelled load comes back as an error exactly when it was
+      // superseded — swallow it rather than flashing a spurious failure.
+      if (op !== engineOpSeq) return;
       engineAppliedSeq = ++engineFetchSeq;
       set({ engine: { type: "failed", data: { message: String(err) } } });
     } finally {
-      set({ engineBusy: false });
+      if (op === engineOpSeq) set({ engineBusy: false });
     }
   },
 
   stopModel: async () => {
-    if (get().engineBusy) return;
+    // Never gated on `engineBusy`: stopping is exactly how a load still
+    // starting is cancelled (the backend's stop() is idempotent and its
+    // startup health-poll bows out on the generation bump). A stop that is
+    // itself superseded by a newer load still did its job — the load's own
+    // `start()` kills whatever is left — and just leaves state alone.
+    const op = ++engineOpSeq;
     set({ engineBusy: true });
     try {
       await api.stopEngine();
+      if (op !== engineOpSeq) return;
       // stop() is idempotent and always leaves the engine Stopped — see
       // EngineManager::stop in crates/core/src/engine.rs. Flag it as a
       // deliberate stop so the composer's typing-triggered preload (which
@@ -2471,9 +2512,10 @@ export const useStore = create<Store>()((set, get) => ({
       engineAppliedSeq = ++engineFetchSeq;
       set({ engine: { type: "stopped" }, userStoppedModel: true });
     } catch (err: unknown) {
+      if (op !== engineOpSeq) return;
       set({ notice: String(err) });
     } finally {
-      set({ engineBusy: false });
+      if (op === engineOpSeq) set({ engineBusy: false });
     }
   },
 

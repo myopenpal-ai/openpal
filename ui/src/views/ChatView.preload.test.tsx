@@ -135,3 +135,34 @@ describe("typing in the composer never loads the model", () => {
     expect(useModel).not.toHaveBeenCalled();
   });
 });
+
+describe("the model quick picker while a model is loading", () => {
+  const STARTING = {
+    type: "starting",
+    data: { modelId: "m", progressPercent: null },
+  } as const;
+
+  it("keeps every option usable mid-load, so picking another model redirects the load", async () => {
+    const second = {
+      spec: { id: "n", name: "Model N" },
+      status: { type: "installed", data: { path: "/models/n.gguf", sizeBytes: 1 } },
+    } as unknown as ModelInfo;
+    useStore.setState({ models: [installed, second] });
+    const { user } = show({}, STARTING);
+    useStore.setState({ engineBusy: true }); // a load is in flight
+
+    await user.click(screen.getByRole("button", { name: "Switch model" }));
+
+    const ownRow = screen.getByRole("option", { name: /Model M/ });
+    const otherRow = screen.getByRole("option", { name: /Model N/ });
+    // Both stay clickable mid-load — the disabled={engineBusy} that froze
+    // them is gone, so a long load can be redirected.
+    expect(ownRow).toBeEnabled();
+    expect(otherRow).toBeEnabled();
+
+    await user.click(otherRow);
+    expect(useModel).toHaveBeenCalledWith("n");
+    // The menu closes after picking.
+    expect(screen.queryByRole("option")).toBeNull();
+  });
+});
