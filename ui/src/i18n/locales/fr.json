@@ -515,7 +515,9 @@
       "unloadTitle": "Décharger le modèle et arrêter llama.cpp",
       "unload": "Décharger",
       "loadTitle": "Charger le modèle et démarrer llama.cpp",
-      "load": "Charger"
+      "load": "Charger",
+      "cancelLoadingTitle": "Arrêter le chargement du modèle et le décharger",
+      "cancelLoading": "Annuler le chargement"
     },
     "status": {
       "answering": "Réponse en cours…",

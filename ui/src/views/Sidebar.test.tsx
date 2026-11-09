@@ -1,12 +1,21 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { act, render, screen, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import "../i18n";
 import Sidebar from "./Sidebar";
 import { useStore } from "../state/store";
-import type { ConversationMeta, PluginInfo, Project } from "../lib/types";
+import type { ConversationMeta, ModelInfo, PluginInfo, Project, Settings } from "../lib/types";
 
-vi.mock("../lib/api", () => ({ api: {} }));
+vi.mock("../lib/api", () => ({
+  api: {
+    // The engine pill drives the real store actions (not mocks), so the
+    // pill's own buttons need the engine commands they call to exist.
+    stopEngine: vi.fn().mockResolvedValue(undefined),
+    startEngine: vi.fn().mockResolvedValue(undefined),
+    getEngineStatus: vi.fn().mockResolvedValue({ type: "stopped" }),
+    getSettings: vi.fn().mockResolvedValue({}),
+  },
+}));
 vi.mock("@tauri-apps/api/app", () => ({ getVersion: vi.fn().mockResolvedValue("0.0.0") }));
 
 function meta(id: string, title: string): ConversationMeta {
@@ -245,5 +254,35 @@ describe("conversation row hints", () => {
     expect(hintsOn("Project chat")).toEqual(["Waiting for the model"]);
     expect(screen.getByText("Dated chat").closest(".conv-date-group")).not.toBeNull();
     expect(hintsOn("Dated chat")).toEqual(["Answering…"]);
+  });
+});
+
+describe("the engine pill while a model is loading", () => {
+  const INSTALLED: ModelInfo = {
+    spec: { id: "m", name: "Model M" },
+    status: { type: "installed", data: { path: "/models/m.gguf", sizeBytes: 1 } },
+  } as unknown as ModelInfo;
+
+  it("offers a stop control in place of the spinner, and clicking it stops the load", async () => {
+    const user = userEvent.setup();
+    useStore.setState({
+      engine: { type: "starting", data: { modelId: "m", progressPercent: null } },
+      engineBusy: true,
+      models: [INSTALLED],
+      settings: { selectedModelId: "m" } as unknown as Settings,
+    });
+    render(<Sidebar />);
+
+    // The slot that holds Load/Unload in other states holds a real stop
+    // button here — a load must never trap the user behind a spinner.
+    const stop = screen.getByRole("button", { name: "Cancel loading" });
+    expect(stop).toBeEnabled();
+
+    await user.click(stop);
+
+    await waitFor(() => expect(useStore.getState().engine.type).toBe("stopped"));
+    expect(useStore.getState().engineBusy).toBe(false);
+    // The pill lands on the Asleep state (the model name, tooltiped Asleep).
+    await waitFor(() => expect(screen.getByTitle("Asleep")).toBeInTheDocument());
   });
 });

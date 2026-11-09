@@ -515,7 +515,9 @@
       "unloadTitle": "Unload the model and stop llama.cpp",
       "unload": "Unload",
       "loadTitle": "Load the model and start llama.cpp",
-      "load": "Load"
+      "load": "Load",
+      "cancelLoadingTitle": "Stop loading the model and unload it",
+      "cancelLoading": "Cancel loading"
     },
     "status": {
       "answering": "Answering…",

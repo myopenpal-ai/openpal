@@ -6,7 +6,7 @@ import Library from "./Library";
 import { useStore } from "../state/store";
 import type { HardwareInfo, ModelInfo, ModelSpec, Settings, SystemReport } from "../lib/types";
 
-const { openModelsFolder, probeDiskSpeed, setModelFavorite } = vi.hoisted(() => ({
+const { openModelsFolder, probeDiskSpeed, setModelFavorite, startEngine } = vi.hoisted(() => ({
   openModelsFolder: vi.fn().mockResolvedValue(undefined),
   probeDiskSpeed: vi.fn().mockResolvedValue({
     bytesPerSec: 2_000_000_000,
@@ -15,10 +15,11 @@ const { openModelsFolder, probeDiskSpeed, setModelFavorite } = vi.hoisted(() => 
     calibrated: true,
   }),
   setModelFavorite: vi.fn().mockResolvedValue(undefined),
+  startEngine: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("../lib/api", () => ({
-  api: { openModelsFolder, probeDiskSpeed, setModelFavorite },
+  api: { openModelsFolder, probeDiskSpeed, setModelFavorite, startEngine },
 }));
 
 function spec(overrides: Partial<ModelSpec> & { id: string }): ModelSpec {
@@ -515,5 +516,48 @@ describe("Library", () => {
     );
     const heading = screen.getByRole("heading", { level: 2, name: "Add your own model" });
     expect(container.querySelector(".library-col")?.lastElementChild).toContainElement(heading);
+  });
+});
+
+describe("Use this model while another model is loading", () => {
+  it("keeps the button enabled, so a load in flight can be redirected", async () => {
+    const user = userEvent.setup();
+    // Two installed curated models; E4B is the one currently loading.
+    seed([
+      model(
+        { id: "gemma-e2b", name: "Gemma 4 E2B", publisher: "Google", curated: true },
+        { status: INSTALLED, fit: "perfect" },
+      ),
+      model(
+        { id: "gemma-e4b", name: "Gemma 4 E4B", publisher: "Google", curated: true },
+        { status: INSTALLED, fit: "perfect" },
+      ),
+    ]);
+    useStore.setState({
+      engine: { type: "starting", data: { modelId: "gemma-e4b", progressPercent: null } },
+      engineBusy: true,
+    });
+    // A load in flight that we resolve by hand, so clicking "Use this model"
+    // deterministically leaves the picked model's load on screen.
+    startEngine.mockReturnValue(new Promise<never>(() => {}));
+    render(<Library />);
+
+    // The loading model's own row shows the waking label, not a button…
+    const loadingRow = modelRows().find((r) => r.textContent?.includes("Gemma 4 E4B"))!;
+    expect(within(loadingRow).queryByRole("button", { name: "Use this model" })).toBeNull();
+
+    // …but the other installed model stays switchable — its button is usable
+    // even though `engineBusy` is true, not disabled like it used to be.
+    const otherRow = modelRows().find((r) => r.textContent?.includes("Gemma 4 E2B"))!;
+    const use = within(otherRow).getByRole("button", { name: "Use this model" });
+    expect(use).toBeEnabled();
+
+    // Clicking it really starts the other model, superseding the load.
+    await user.click(use);
+    expect(useStore.getState().engine).toMatchObject({
+      type: "starting",
+      data: { modelId: "gemma-e2b" },
+    });
+    expect(useStore.getState().engineBusy).toBe(true);
   });
 });
