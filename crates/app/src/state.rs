@@ -331,6 +331,17 @@ pub fn finish_unlock(
         "hardware detected"
     );
 
+    // REST-call client shared by model-browsing (Hugging Face), cloud API
+    // calls, and downloads: a 20 s connect + 30 s read timeout is right for
+    // those. **Do NOT use it to stream an LLM SSE response** — the 30 s
+    // `read_timeout` is applied per body read and cannot be overridden
+    // per-request, so a streaming turn (agent/tool loop, cloud chat) whose
+    // server idles between chunks for 30 s (prompt processing on a
+    // disk-streamed model is measured in minutes; generation gaps at
+    // ~0.05–0.08 tok/s are 12–20 s) is cut off mid-stream with
+    // `error decoding response body`. The turn paths build their own
+    // client via `agent_bridge::turn_http_client` (no read timeout) — keep
+    // it that way.
     let http = reqwest::Client::builder()
         .user_agent(concat!("OpenPal/", env!("CARGO_PKG_VERSION")))
         .connect_timeout(Duration::from_secs(20))

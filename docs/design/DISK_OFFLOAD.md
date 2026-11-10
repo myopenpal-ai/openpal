@@ -445,6 +445,96 @@ NVMe report, FlexInfer (arXiv 2503.03777). ✅ = adversarially confirmed.
       hardware is functional but not useful-speed at any depth, which the
       round-4 single-rep green-light (with caveats) undersold; the recovery
       layer is what makes shipping it defensible.
+  - **Second production repro — 2026-11-10 (engine b12110, same M4, GPU
+    layers active):** the identical first symptom recurred
+    (`agent turn: stream read failed: error decoding response body`), and
+    the engine log proved the recovery shipped for #6 would *not* have
+    fired: the severance happened while the process stayed alive and kept
+    serving tasks (slot 0 released 66 tokens, slot 1 later ran 1734 to
+    completion), so `is_healthy()` answered true and `child_died()` stayed
+    false — every 2026-11-08 recovery predicate was false. The recovery's
+    "dead or wedged" framing missed the actual recurring mode: **a live
+    engine severing an in-flight stream**.
+    - **Widened (keep MTP, recover — same user decision):** the MTP
+      snapshot itself is now the recovery trigger, not liveness. Any
+      request-level failure on an MTP-armed engine retires MTP for the
+      next turn: `chat_stream` restarts stripped and resends, but only
+      when zero tokens were emitted (a mid-answer break surfaces its
+      original error against the now-stripped engine — restarting is not
+      replaying); agent/web-search turns restart stripped on any turn
+      error and — because restarting is not replaying — replay the turn
+      exactly once when the failed attempt provably emitted *nothing*
+      (no token, no reasoning, no consent/ask prompt, no started tool
+      call, no search), against a freshly fetched endpoint (the restart
+      moves the port). A turn that showed anything or ran any tool is
+      never replayed. `restart_without_mtp` consumes the snapshot on the
+      stripped start, so retirement is one-shot per MTP-armed session
+      and recovery cannot loop.
+    - Re-bench on the next engine bump still stands; b12110's MTP remains
+      functional but flaky on this hardware — recovery is the product.
+  - **Post-mortem follow-up — 2026-11-10 evening: the recurring
+    `stream read failed: error decoding response body` was NOT an MTP
+    failure at all. It is a client-side 30-second read timeout.**
+    The symptom kept recurring through two MTP-recovery fixes (the
+    die/wedge restart and the widened any-failure retirement above), so the
+    root cause was hunted to ground:
+    - **The error string is reqwest's `Kind::Decode` display.** Every
+      body-read error on `Response::bytes_stream()` is mapped through
+      `reqwest::error::decode` (verified in the vendored 0.12.28 source),
+      which displays as exactly `error decoding response body`.
+    - **The trigger is a 30 s `read_timeout` on the app's shared HTTP
+      client** (`state.http` in `crates/app/src/state.rs`: `connect_timeout
+      20 s`, `read_timeout 30 s`). reqwest applies it per body read and
+      cannot override it per-request. The agent/tool loop used that exact
+      client (`AgentDeps.http` ← `state.http.clone()`), so any streaming
+      turn that produces no body bytes for 30 consecutive seconds is cut
+      off mid-body and the connection dropped.
+    - **llama-server is silent for far longer than 30 s before the first
+      body byte.** An agent turn carries OpenAI `tools` (~350-token prompt);
+      on the disk-streamed qwen3.6-27b the measured prompt processing is
+      60–100+ s of zero output (reproduced 2026-11-10: 346 tokens at 3.42
+      tok/s = 101 s before the first byte). Generation then streams at
+      ~0.05–0.08 tok/s — inter-token gaps of 12–20 s, spiking past 30 s
+      under memory pressure, which is the mid-answer variant of the same
+      cut-off (issue #6's "partial body decode" and "stalled a concurrent
+      request" observations are this too, and the 20 s classify timeout
+      that fired 20 s apart in #6 is the same class of problem one rung
+      lower).
+    - **Live reproduction (2026-11-10,** exact DiskSlow recipe + b12110,
+      MTP armed): the agent request got `200 OK` + SSE headers at +2.3 s,
+      then **zero bytes**, then a 30 s read-timeout kill at +32.4 s; the
+      server logged `stop: cancel task, id_task = 9` — the same line and
+      the same ~30 s offset as the failing production session's
+      `engine.log` (`stop: cancel task, id_task = 0` at +30.1 s). The
+      server itself never severed anything with MTP armed — it survived,
+      released the slot and kept serving, exactly as production's slot 1
+      kept running 1734 tokens. This is a client-side timeout, not a
+      server abort.
+    - **Why the failing session's engine had no MTP at all:** its
+      `engine.log` lacks the `creating MTP draft context` line and reports
+      `blk.64.nextn.*` (the MTP-head tensors) as `unused — ignoring` — the
+      fingerprints of an MTP-disabled load (the MTP-enabled repro shows the
+      draft-context line and no unused-tensor warnings). So `mtp_fallback_
+      armed()` was false and both recovery fixes correctly declined to
+      act — and if it had fired, retiring MTP couldn't help anyway: the
+      cut-off is client-side and independent of the server's `--spec-*`
+      flags. That is why two fixes "didn't work" — they were aimed at the
+      wrong layer.
+    - **Fixed at the root (shipped 2026-11-10, engine b12110):** the
+      agent/tool-loop, subagent, web-search and cloud-chat streaming paths
+      now use a dedicated client built by `agent_bridge::turn_http_client`
+      — `connect_timeout 20 s`, **no `read_timeout` and no total timeout**,
+      mirroring the engine's own `chat_stream` client. REST calls (Hugging
+      Face browser, cloud API surface) keep the 30 s read timeout, which is
+      right for them; the web-search/fetch tools keep their explicit 20 s
+      per-request timeouts on top of it. Long-hang backstops are unchanged:
+      the user cancel flag and the wedged-engine idle watchdog. `state.http`
+      now carries a comment forbidding streaming use, and
+      `build_deps`/`build_web_search_deps` no longer accept a client
+      parameter so the hazard can't be reintroduced from a call site. The
+      two MTP-recovery changes stay as defensive engineering (a real MTP
+      head abort is still handled), but they are no longer the story for
+      this error.
 
 ### Phase 4 — Catalog entries for big MoE models (≤ 50 GB single-file first) ✅ DONE
 - **Shipped visible** (user decision, accepting the gap until Phase 3's

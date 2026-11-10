@@ -2289,16 +2289,30 @@ pub async fn classify_risk(
 /// Run one agent/web-search turn with MTP failure recovery (see
 /// `docs/design/DISK_OFFLOAD.md` for the full story). Brackets the turn with
 /// `begin_generation`/`end_generation` so the auto-unload idle timer stays
-/// honest, and when a turn fails *before a single answer token was emitted*
-/// on an engine whose MTP self-drafting is armed and has died or wedged,
-/// restarts that engine without the MTP args.
+/// honest, and when a turn fails on an engine whose MTP self-drafting is
+/// armed, retires MTP by restarting that engine without the `--spec-*` args.
 ///
-/// The turn itself is never replayed: agent turns may have run tools with
-/// real side effects, so resending would be wrong. Recovery re-arms a
-/// working engine for the user's *next* request and returns the original
-/// error up the stack (the frontend surfaces it as the turn's failure).
-/// This is the agent-path half of the same recovery primitive the idle-loop
-/// watchdog uses; plain chats retry their first message inside
+/// Note that the recurring `stream read failed: error decoding response
+/// body` failures of issue #6 / 2026-11-10 were post-mortemed as the agent
+/// path's 30 s client read timeout vs. disk-slow prompt processing, not MTP
+/// failures — `agent_bridge::turn_http_client` fixes the root cause. This
+/// recovery remains as defensive engineering for genuine MTP aborts.
+///
+/// The turn is **never replayed if it could have had effects**: any event it
+/// emitted — a streamed token, shown reasoning, a consent or ask prompt, a
+/// started tool call, a search — means it's visible to the user or did real
+/// work, so a replay would duplicate output or re-run side effects. A turn
+/// that failed *before emitting anything at all* (the failing request was cut
+/// off at the transport level before the first token) is provably a no-op, so
+/// it is replayed exactly once against the freshly restarted, stripped
+/// engine, with a fresh endpoint (the restart moves the port). Only a second
+/// failure falls through to the original error path.
+///
+/// `restart_without_mtp` consumes the MTP snapshot and refuses a concurrent
+/// stop/start, so recovery happens at most once per MTP-armed session and
+/// never resurrects an engine the user replaced. This is the agent-path half
+/// of the same recovery primitive the idle-loop watchdog and plain
+/// `chat_stream` use; plain chats retry their first message inside
 /// `EngineManager::chat_stream` itself.
 async fn run_agent_turn_with_recovery(
     state: &AppState,
@@ -2314,30 +2328,49 @@ async fn run_agent_turn_with_recovery(
     // switched models, a manual reload) must not be resurrected as a
     // stripped copy of the engine it replaced.
     let generation = state.engine.activity().await.map(|a| a.generation);
-    // Did any answer token stream before the failure? If so the model was
-    // working and a restart would only cost the user the reply they already
-    // saw; recovery fires only on a clean pre-answer break.
-    let emitted_answer = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    // Flipped on the first event the failed turn emits. Any event makes it
+    // unreplayable (see the doc comment above) — strictly conservative.
+    let replayable = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
 
     state.engine.begin_generation().await;
     let event_sink = on_event.clone();
-    let emitted = emitted_answer.clone();
-    let result = agent_bridge::run_turn(deps, endpoint, messages, sampling, cancel, move |event| {
-        if matches!(event, ChatEvent::Token { .. }) {
-            emitted.store(true, std::sync::atomic::Ordering::Relaxed);
-        }
-        let _ = event_sink.send(event);
-    })
-    .await;
-    state.engine.end_generation().await;
+    let mut result = {
+        let event_sink = event_sink.clone();
+        let replayable = replayable.clone();
+        agent_bridge::run_turn(
+            deps,
+            endpoint,
+            messages,
+            sampling,
+            cancel.clone(),
+            move |event| {
+                replayable.store(false, std::sync::atomic::Ordering::Relaxed);
+                let _ = event_sink.send(event);
+            },
+        )
+        .await
+    };
 
-    if result.is_err()
-        && !emitted_answer.load(std::sync::atomic::Ordering::Relaxed)
-        && state.engine.mtp_fallback_armed().await
-        && !state.engine.is_healthy().await
-    {
-        state.engine.restart_without_mtp(generation).await;
+    if result.is_err() && state.engine.mtp_fallback_armed().await {
+        let restarted = state.engine.restart_without_mtp(generation).await;
+        if restarted && replayable.load(std::sync::atomic::Ordering::Relaxed) {
+            // The failed attempt showed nothing and ran no tools — replay it
+            // once against the stripped engine. The restart moved the port,
+            // so take a fresh endpoint; the restart also reset the
+            // generating flag (SubprocessBackend::start), so re-arm it for
+            // the replay the same way the first attempt had it.
+            state.engine.begin_generation().await;
+            if let Some(fresh) = state.engine.endpoint().await {
+                let event_sink = event_sink.clone();
+                result =
+                    agent_bridge::run_turn(deps, fresh, messages, sampling, cancel, move |event| {
+                        let _ = event_sink.send(event);
+                    })
+                    .await;
+            }
+        }
     }
+    state.engine.end_generation().await;
     result
 }
 
@@ -2416,7 +2449,6 @@ async fn agent_chat_turn(
         &state.paths.data_dir,
         state.app_db.clone(),
         conversation_id,
-        state.http.clone(),
         state.agent_consent.clone(),
         state.agent_audit.clone(),
         &state.plugins,
@@ -2561,6 +2593,10 @@ async fn cloud_chat_turn(
     on_event: Channel<ChatEvent>,
 ) -> Result<(), String> {
     let (model_id, access_token) = resolve_cloud_access(state, settings).await?;
+    // Streaming client, not `state.http` — see `agent_bridge::turn_http_client`'s
+    // doc comment: the shared client's 30 s read timeout kills SSE streams that
+    // idle between chunks for any length of time.
+    let http = agent_bridge::turn_http_client()?;
 
     if !messages.iter().any(|m| m.role == "system") {
         messages.insert(
@@ -2585,7 +2621,7 @@ async fn cloud_chat_turn(
     }
 
     let result = openpal_core::cloud::chat_stream(
-        &state.http,
+        &http,
         &access_token,
         &model_id,
         &messages,
@@ -2635,7 +2671,6 @@ async fn web_search_chat_turn(
     let deps = agent_bridge::build_web_search_deps(
         &workspace_dir,
         &state.paths.data_dir,
-        state.http.clone(),
         state.agent_consent.clone(),
         state.agent_audit.clone(),
         &state.plugins,
@@ -2853,8 +2888,10 @@ async fn run_one_shot_completion(
     let cancel_flag = cancel.clone();
 
     let result = if let Some((model_id, access_token)) = cloud_access {
+        // Streaming client, not `state.http` — see `agent_bridge::turn_http_client`.
+        let http = agent_bridge::turn_http_client()?;
         openpal_core::cloud::chat_stream(
-            &state.http,
+            &http,
             &access_token,
             &model_id,
             &messages,

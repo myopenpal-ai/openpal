@@ -198,8 +198,9 @@ pub trait EngineBackend: Send + Sync {
     }
 
     /// Whether the local engine process has exited (vs. a mere
-    /// request-level failure) — the condition that makes a restart-and-resend
-    /// meaningful. Only [`subprocess::SubprocessBackend`] has a process to
+    /// request-level failure) — the engine-death side of `is_healthy`,
+    /// still observed by the MTP recovery paths and the idle-loop watchdog.
+    /// Only [`subprocess::SubprocessBackend`] has a process to
     /// observe; other backends default to `false` (no auto-restart).
     async fn child_died(&self) -> bool {
         false
@@ -464,19 +465,33 @@ impl EngineManager {
             )
             .await;
 
-        // MTP crash fallback: an engine started with MTP self-drafting can
-        // hard-abort on the *first* generation (a GGUF whose MTP heads this
-        // engine can't run — see docs/design/DISK_OFFLOAD.md), before a
-        // single token is emitted. Restart it without the MTP args and resend
-        // the request exactly once; only a second failure falls through to
-        // the normal error/failed-state path. A mid-answer crash never
-        // triggers this — `emitted_answer` proves the model was working, so a
-        // resend would duplicate tokens already shown.
-        if first.is_err()
-            && !emitted_answer.load(std::sync::atomic::Ordering::Relaxed)
-            && self.backend.child_died().await
-            && self.restart_without_mtp(generation).await
-        {
+        // MTP crash/abort fallback: an engine started with MTP self-drafting
+        // can hard-abort on the *first* generation before a single token is
+        // emitted (a GGUF whose MTP heads this engine can't run). Its own
+        // "severs an in-flight stream while staying alive" observed mode is
+        // now known NOT to be the engine: 2026-11-10 post-mortem proved the
+        // mid-stream `error decoding response body` failures were client-side
+        // (the agent path's 30 s read timeout vs. multi-minute prompt
+        // processing on a disk-streamed model — `docs/design/DISK_OFFLOAD.md`),
+        // and this plain-chat path never had that timeout. Keep the fallback
+        // as defensive engineering for genuine MTP aborts: restart the engine
+        // WITHOUT the `--spec-*` args, exactly once, whether or not tokens
+        // had streamed (restarting isn't replaying — a mid-answer break just
+        // means the *next* message runs stripped).
+        //
+        // `restart_without_mtp` consumes the MTP snapshot, so the stripped
+        // engine is never retired (or restarted) again — recovery cannot
+        // loop. The request is resent only when the restart succeeded and
+        // nothing was emitted: a retry after tokens were shown would
+        // duplicate them, so the mid-answer case surfaces its original error
+        // as-is, now against a stripped engine that works for next time.
+        if first.is_err() && !self.restart_without_mtp(generation).await {
+            // Recovery refused (no snapshot, a concurrent stop/start
+            // superseded the engine, or the restart itself failed) — the
+            // original error stands unchanged.
+            return first;
+        }
+        if first.is_err() && !emitted_answer.load(std::sync::atomic::Ordering::Relaxed) {
             return self
                 .chat_stream_once(messages, sampling, cancel, on_event, &emitted_answer)
                 .await;
@@ -943,12 +958,17 @@ mod tests {
         fail_on_call: u32,
         /// Emit a Token before failing (models a mid-answer stream break).
         emit_before_fail: bool,
+        /// Whether a failing chat call also marks the child as exited (the
+        /// "engine died" mode). When false the failure models an MTP-armed
+        /// engine severing a stream while the process stays alive — the
+        /// actual production failure, which never set `child_died`.
+        exit_on_fail: bool,
         generation: u64,
         running: bool,
         mtp_fallback: Option<MtpRestart>,
-        /// Set when a chat call fails, or directly by a test — what
-        /// [`EngineBackend::child_died`] reports (the "subprocess exited"
-        /// signal that makes recovery meaningful).
+        /// Set when a chat call fails with `exit_on_fail`, or directly by a
+        /// test — what [`EngineBackend::child_died`] reports (the "subprocess
+        /// exited" signal that used to gate recovery).
         child_exited: bool,
         /// Optional `/health`-able address; when `Some`, the fake advertises
         /// a Running engine the manager's `is_healthy` can probe.
@@ -1061,7 +1081,9 @@ mod tests {
                 });
             }
             if fails {
-                s.child_exited = true;
+                if s.exit_on_fail {
+                    s.child_exited = true;
+                }
                 return Err(crate::Error::Engine("fake died".to_string()));
             }
             on_event(ChatEvent::Token {
@@ -1116,6 +1138,7 @@ mod tests {
             chat_calls: 0,
             fail_on_call,
             emit_before_fail,
+            exit_on_fail: true,
             generation: 0,
             running: false,
             mtp_fallback: None,
@@ -1125,6 +1148,19 @@ mod tests {
         let manager = EngineManager::with_backend(Box::new(FakeMtpBackend {
             state: state.clone(),
         }));
+        (manager, state)
+    }
+
+    /// A fake that fails a chat call WITHOUT claiming the child exited — the
+    /// exact production shape this recovery exists for (an MTP-armed engine
+    /// severing a stream while staying alive, so `child_died()` stays false
+    /// and `/health` keeps answering).
+    async fn fake_manager_live_abort(
+        fail_on_call: u32,
+        emit_before_fail: bool,
+    ) -> (EngineManager, Arc<tokio::sync::Mutex<FakeMtpState>>) {
+        let (manager, state) = fake_manager_with(fail_on_call, emit_before_fail, false, None);
+        state.lock().await.exit_on_fail = false;
         (manager, state)
     }
 
@@ -1227,9 +1263,12 @@ mod tests {
     }
 
     /// A crash that happened mid-answer (a token already emitted) must NOT
-    /// trigger the resend — it would duplicate tokens the user already saw.
+    /// trigger the resend — it would duplicate tokens the user already saw —
+    /// but MTP is still retired for the next turn: the mid-answer break
+    /// proves the fragile MTP layer broke, and the *next* message should run
+    /// on a stripped engine. The original error is still surfaced.
     #[tokio::test]
-    async fn chat_stream_does_not_resend_after_a_mid_answer_crash() {
+    async fn chat_stream_retires_mtp_after_a_mid_answer_crash_without_resending() {
         let (manager, state) = fake_manager(1, true);
         manager
             .start(
@@ -1254,7 +1293,125 @@ mod tests {
         assert!(result.is_err(), "a mid-answer crash surfaces as an error");
         let s = state.lock().await;
         assert_eq!(s.chat_calls, 1, "a mid-answer crash must not resend");
-        assert_eq!(s.starts.len(), 1, "a mid-answer crash must not restart");
+        assert_eq!(
+            s.starts.len(),
+            2,
+            "a mid-answer crash still retires MTP for the next turn"
+        );
+        assert!(
+            s.starts[1].iter().all(|a| !a.starts_with("--spec-")),
+            "the retirement restart must drop every --spec-* arg: {:?}",
+            s.starts[1]
+        );
+        assert!(
+            s.mtp_fallback.is_none(),
+            "the retirement restart consumes the snapshot — no recovery loop"
+        );
+    }
+
+    /// The 2026-11-10 production shape (also issue #6's first symptom): the
+    /// MTP-armed engine severs the very first stream while the process stays
+    /// alive — `child_died()` is false and `/health` would answer, so the old
+    /// child-exit gate never fired. Recovery must still restart without MTP
+    /// and resend, because nothing was emitted yet.
+    #[tokio::test]
+    async fn chat_stream_restarts_without_mtp_and_resends_after_a_live_first_message_abort() {
+        let (manager, state) = fake_manager_live_abort(/* fail first chat */ 1, false).await;
+        manager
+            .start(
+                Path::new("/fake/llama-server"),
+                "qwen3.6-27b",
+                Path::new("/fake/qwen.gguf"),
+                &mtp_cfg(),
+                false,
+                Duration::from_secs(30),
+            )
+            .await
+            .unwrap();
+
+        let mut events: Vec<ChatEvent> = vec![];
+        let result = manager
+            .chat_stream(
+                &[],
+                &SamplingParams::default(),
+                Arc::new(AtomicBool::new(false)),
+                |ev| events.push(ev),
+            )
+            .await;
+
+        assert!(result.is_ok(), "the MTP fallback must deliver an answer");
+        let s = state.lock().await;
+        assert_eq!(s.chat_calls, 2, "exactly one resend after the live abort");
+        assert_eq!(
+            s.starts.len(),
+            2,
+            "a live abort must still trigger the stripped restart"
+        );
+        assert!(
+            !s.starts[1].iter().any(|a| a.starts_with("--spec-")),
+            "the restart must drop every --spec-* arg: {:?}",
+            s.starts[1]
+        );
+        assert!(
+            !s.child_exited,
+            "this failure is a live abort, not a process exit"
+        );
+        assert!(
+            events
+                .iter()
+                .any(|ev| matches!(ev, ChatEvent::Token { text } if text == "full answer")),
+            "the retried request must deliver the answer"
+        );
+        drop(s);
+        assert!(
+            matches!(manager.status().await, EngineStatus::Running { .. }),
+            "a recovered live abort must not leave the engine Failed"
+        );
+    }
+
+    /// Same live-abort shape, but mid-answer: tokens were already shown, so
+    /// there is no resend — yet the engine must still be retired to MTP-less
+    /// so the user's next message doesn't hit the same severed stream.
+    #[tokio::test]
+    async fn chat_stream_retires_mtp_after_a_live_mid_answer_abort_without_resending() {
+        let (manager, state) = fake_manager_live_abort(1, true).await;
+        manager
+            .start(
+                Path::new("/fake/llama-server"),
+                "qwen3.6-27b",
+                Path::new("/fake/qwen.gguf"),
+                &mtp_cfg(),
+                false,
+                Duration::from_secs(30),
+            )
+            .await
+            .unwrap();
+
+        let result = manager
+            .chat_stream(
+                &[],
+                &SamplingParams::default(),
+                Arc::new(AtomicBool::new(false)),
+                |_| {},
+            )
+            .await;
+        assert!(result.is_err(), "a mid-answer break surfaces as an error");
+        let s = state.lock().await;
+        assert_eq!(s.chat_calls, 1, "no resend after a mid-answer break");
+        assert_eq!(
+            s.starts.len(),
+            2,
+            "the live abort still retires MTP for the next turn"
+        );
+        assert!(
+            s.starts[1].iter().all(|a| !a.starts_with("--spec-")),
+            "the retirement restart must drop every --spec-* arg: {:?}",
+            s.starts[1]
+        );
+        assert!(
+            s.mtp_fallback.is_none(),
+            "the retirement restart consumes the snapshot — no recovery loop"
+        );
     }
 
     #[tokio::test]
