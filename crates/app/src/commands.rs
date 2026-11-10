@@ -15,9 +15,9 @@ use crate::parental;
 use crate::state::{AppState, BootState};
 use openpal_core::account::{Account, AccountEvent};
 use openpal_core::agent::consent::ConsentDecision;
-use openpal_core::agent::{EventSink, ReviewDecision, ToolGrant};
+use openpal_core::agent::{AgentDeps, EventSink, ReviewDecision, ToolGrant};
 use openpal_core::cloud::CloudModelInfo;
-use openpal_core::engine::{self, STARTUP_TIMEOUT};
+use openpal_core::engine::{self, EngineEndpoint, STARTUP_TIMEOUT};
 use openpal_core::injection::{self, Source, TurnGuard};
 use openpal_core::plugin::{PluginEvent, PluginInfo, PluginManager};
 use openpal_core::remote::client::{Browser, DiscoveredHost, RemotePairingRecord};
@@ -1587,6 +1587,111 @@ fn gpu_plan(
     }
 }
 
+/// Draft depth for MTP self-drafting (`--spec-draft-n-max`) on a curated
+/// entry whose [`ModelSpec::mtp`] is true. `3` is llama-server's own default;
+/// we ship `4` because the 2026-11-08 same-machine bench (16 GB M4, engine
+/// b11960, disk-slow `-ngl 0` recipe + `--mmproj` — see
+/// `docs/design/DISK_OFFLOAD.md`) measured depth 4 > 3 > 2 on qwen3.6-27b
+/// (0.074 > 0.062 > 0.050 tok/s generation, all above the <0.036 baseline
+/// upper bound), a monotone gain that matches the mechanism — one batched
+/// forward pass reads the streamed weights per draft window instead of per
+/// token. Recorded as a single-rep measurement; if a future bench
+/// contradicts it, drop this const and let llama-server's default (3) win.
+const MTP_DRAFT_N_MAX: u32 = 4;
+
+/// Parse `llama-server --help` output for MTP self-drafting support: the
+/// `draft-mtp` choice in `--spec-type`'s list. Purely string-based so the
+/// gate is unit-testable against real `--help` output. Conservative: output
+/// that lacks the string (an older binary, a help page that changed shape)
+/// reads as "not supported" — the flag must never reach a binary that would
+/// reject it.
+fn help_output_supports_mtp(help: &str) -> bool {
+    help.contains("draft-mtp")
+}
+
+/// Probe the bundled engine binary for MTP self-drafting support, fresh on
+/// every `start_engine` call. The binary is re-resolved per start
+/// (`AppPaths::engine_binary()` → `resolve_current_engine`), and an in-app
+/// engine update can swap it mid-session without a restart — so this can
+/// never be cached at boot. Mirrors `gpu::detect_vulkan_gpu`'s
+/// `--list-devices` probe: best-effort, never allowed to break startup, any
+/// failure → `false` (MTP off, rather than a `--spec-type` rejection).
+async fn engine_supports_mtp(binary: &std::path::Path) -> bool {
+    let binary = binary.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        std::process::Command::new(&binary)
+            .arg("--help")
+            .output()
+            .ok()
+            .map(|out| help_output_supports_mtp(&String::from_utf8_lossy(&out.stdout)))
+            .unwrap_or(false)
+    })
+    .await
+    .unwrap_or(false)
+}
+
+/// Assemble the llama-server extra args for an engine start, in the order
+/// `engine::spawn_server` appends them (after `-m/--port/…/-ngl/--jinja/
+/// --no-webui/--api-key`): the spec's own args first, then the
+/// "show thinking" suppression, then the disk-slow recipe, then CPU-MoE,
+/// then MTP self-drafting *last* — appended after the spec's args (and
+/// everything else the recipe adds) so the curated flag wins on any future
+/// conflict, the same rule the disk-slow flags rely on. Pure and
+/// unit-testable: turning MTP on must change nothing but the `--spec-*`
+/// tail, so an MTP catalog entry can never accidentally alter any other
+/// start argument.
+fn build_extra_args(
+    spec_extra_args: &[String],
+    show_thinking: bool,
+    disk_slow: bool,
+    cpu_moe: bool,
+    mtp_self_draft: bool,
+) -> Vec<String> {
+    let mut extra_args = spec_extra_args.to_vec();
+    // When the user has turned "Show model thinking" off, suppress reasoning
+    // at the source so no thinking is generated (saving the tokens). When
+    // on, we leave the model's default behavior — reasoning models then
+    // stream their thinking, which the UI shows as a collapsible trace. The
+    // flag is appended after the spec's own args so it overrides any
+    // per-model default the catalog set.
+    if !show_thinking {
+        extra_args.push("--reasoning-budget".to_string());
+        extra_args.push("0".to_string());
+    }
+    // A model running from disk skips warmup (near-instant readiness on
+    // macOS/Windows; llama.cpp's own warmup decode would otherwise page in
+    // extra weights we don't need resident) and never gets GPU layers on
+    // Apple Silicon: Metal wires mmapped weights into a residency set, which
+    // for a bigger-than-RAM model means wiring the *entire* file and OOMing
+    // (verified against llama.cpp issue #24510) — `-ngl 0` keeps every page
+    // file-backed and evictable, the only combination that actually streams.
+    // (On a Vulkan GPU, `gpu_plan` may still offload the hot path — that
+    // backend copies instead of wiring, so it composes safely with disk
+    // streaming.) Both batch/KV flags were measured on the dev 16 GB M4
+    // (docs/DISK_OFFLOAD.md, bench round 2) and appended after the spec's
+    // own args, so they win if a catalog entry ever sets its own batch/KV
+    // flags.
+    if disk_slow {
+        strip_gpu_layers_flag(&mut extra_args);
+        extra_args.push("--no-warmup".to_string());
+        for arg in [
+            "-b", "2048", "-ub", "2048", "-fa", "on", "-ctk", "q8_0", "-ctv", "q8_0",
+        ] {
+            extra_args.push(arg.to_string());
+        }
+    }
+    if cpu_moe {
+        extra_args.push("--cpu-moe".to_string());
+    }
+    if mtp_self_draft {
+        extra_args.push("--spec-type".to_string());
+        extra_args.push("draft-mtp".to_string());
+        extra_args.push("--spec-draft-n-max".to_string());
+        extra_args.push(MTP_DRAFT_N_MAX.to_string());
+    }
+    extra_args
+}
+
 #[tauri::command]
 pub async fn start_engine(
     state: State<'_, AppState>,
@@ -1620,48 +1725,22 @@ pub async fn start_engine(
     // DiskSlow to begin with. See `selection::exceeds_ram`'s doc comment.
     let disk_slow = selection::exceeds_ram(&spec, &state.hardware);
 
-    let mut extra_args = spec.extra_args.clone();
-    // When the user has turned "Show model thinking" off, suppress reasoning at
-    // the source so no thinking is generated (saving the tokens). When on, we
-    // leave the model's default behavior — reasoning models then stream their
-    // thinking, which the UI shows as a collapsible trace. The flag is appended
-    // last so it overrides any per-model default the catalog set.
-    if !settings.show_thinking {
-        extra_args.push("--reasoning-budget".to_string());
-        extra_args.push("0".to_string());
-    }
-    // A model running from disk skips warmup (near-instant readiness on
-    // macOS/Windows; llama.cpp's own warmup decode would otherwise page in
-    // extra weights we don't need resident) and never gets GPU layers on
-    // Apple Silicon: Metal wires mmapped weights into a residency set, which
-    // for a bigger-than-RAM model means wiring the *entire* file and OOMing
-    // (verified against llama.cpp issue #24510) — `-ngl 0` keeps every page
-    // file-backed and evictable, the only combination that actually streams.
-    // (On a Vulkan GPU, `gpu_plan` may still offload the hot path — that
-    // backend copies instead of wiring, so it composes safely with disk
-    // streaming.)
-    if disk_slow {
-        strip_gpu_layers_flag(&mut extra_args);
-        extra_args.push("--no-warmup".to_string());
-        // Both measured on the dev 16 GB M4 with glm-4.5-air (docs/
-        // DISK_OFFLOAD.md, bench round 2): a 2048 logical/physical batch
-        // doubles prompt-processing throughput (10.7 vs 5.0 tok/s on a
-        // 2354-token prompt — each expert paged in from disk serves 4x the
-        // tokens per pass), and q8_0 KV quant (which requires flash-attn)
-        // halves the KV cache's claim on the page-cache headroom the
-        // streamed weights live off, with no generation-speed regression.
-        // Appended after the spec's own extra_args, so they win if a
-        // catalog entry ever sets its own batch/KV flags.
-        for arg in [
-            "-b", "2048", "-ub", "2048", "-fa", "on", "-ctk", "q8_0", "-ctv", "q8_0",
-        ] {
-            extra_args.push(arg.to_string());
-        }
-    }
     let plan = gpu_plan(&state.hardware, &spec, settings.force_cpu, disk_slow);
-    if plan.cpu_moe {
-        extra_args.push("--cpu-moe".to_string());
-    }
+    // MTP self-drafting (speculative decoding with the model's own MTP
+    // heads) ships only when this entry is bench-verified (`spec.mtp`, see
+    // `ModelSpec::mtp`) AND the *current* engine binary supports it. The
+    // binary is resolved fresh per start, and an in-app update can swap it
+    // mid-session — so the probe runs here, per start, never cached at
+    // boot (mirror of `gpu::detect_vulkan_gpu`'s `--list-devices` probe).
+    // Conservative: any probe failure disables it.
+    let mtp_self_draft = spec.mtp && engine_supports_mtp(&binary).await;
+    let extra_args = build_extra_args(
+        &spec.extra_args,
+        settings.show_thinking,
+        disk_slow,
+        plan.cpu_moe,
+        mtp_self_draft,
+    );
     // Disk-streamed models pay for every byte of KV cache out of the same
     // tight memory budget their weights are already straining; keep it
     // modest regardless of the conversation's usual context setting.
@@ -2207,6 +2286,94 @@ pub async fn classify_risk(
     state.engine.classify_risk(&text).await.map_err(friendly)
 }
 
+/// Run one agent/web-search turn with MTP failure recovery (see
+/// `docs/design/DISK_OFFLOAD.md` for the full story). Brackets the turn with
+/// `begin_generation`/`end_generation` so the auto-unload idle timer stays
+/// honest, and when a turn fails on an engine whose MTP self-drafting is
+/// armed, retires MTP by restarting that engine without the `--spec-*` args.
+///
+/// Note that the recurring `stream read failed: error decoding response
+/// body` failures of issue #6 / 2026-11-10 were post-mortemed as the agent
+/// path's 30 s client read timeout vs. disk-slow prompt processing, not MTP
+/// failures — `agent_bridge::turn_http_client` fixes the root cause. This
+/// recovery remains as defensive engineering for genuine MTP aborts.
+///
+/// The turn is **never replayed if it could have had effects**: any event it
+/// emitted — a streamed token, shown reasoning, a consent or ask prompt, a
+/// started tool call, a search — means it's visible to the user or did real
+/// work, so a replay would duplicate output or re-run side effects. A turn
+/// that failed *before emitting anything at all* (the failing request was cut
+/// off at the transport level before the first token) is provably a no-op, so
+/// it is replayed exactly once against the freshly restarted, stripped
+/// engine, with a fresh endpoint (the restart moves the port). Only a second
+/// failure falls through to the original error path.
+///
+/// `restart_without_mtp` consumes the MTP snapshot and refuses a concurrent
+/// stop/start, so recovery happens at most once per MTP-armed session and
+/// never resurrects an engine the user replaced. This is the agent-path half
+/// of the same recovery primitive the idle-loop watchdog and plain
+/// `chat_stream` use; plain chats retry their first message inside
+/// `EngineManager::chat_stream` itself.
+async fn run_agent_turn_with_recovery(
+    state: &AppState,
+    deps: &AgentDeps,
+    endpoint: EngineEndpoint,
+    messages: &[ChatMessage],
+    sampling: &SamplingParams,
+    cancel: Arc<AtomicBool>,
+    on_event: Channel<ChatEvent>,
+) -> Result<(), String> {
+    // Which engine did this turn start talking to? Recovery restarts only
+    // the engine the caller observed — a concurrent stop/start (the user
+    // switched models, a manual reload) must not be resurrected as a
+    // stripped copy of the engine it replaced.
+    let generation = state.engine.activity().await.map(|a| a.generation);
+    // Flipped on the first event the failed turn emits. Any event makes it
+    // unreplayable (see the doc comment above) — strictly conservative.
+    let replayable = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+
+    state.engine.begin_generation().await;
+    let event_sink = on_event.clone();
+    let mut result = {
+        let event_sink = event_sink.clone();
+        let replayable = replayable.clone();
+        agent_bridge::run_turn(
+            deps,
+            endpoint,
+            messages,
+            sampling,
+            cancel.clone(),
+            move |event| {
+                replayable.store(false, std::sync::atomic::Ordering::Relaxed);
+                let _ = event_sink.send(event);
+            },
+        )
+        .await
+    };
+
+    if result.is_err() && state.engine.mtp_fallback_armed().await {
+        let restarted = state.engine.restart_without_mtp(generation).await;
+        if restarted && replayable.load(std::sync::atomic::Ordering::Relaxed) {
+            // The failed attempt showed nothing and ran no tools — replay it
+            // once against the stripped engine. The restart moved the port,
+            // so take a fresh endpoint; the restart also reset the
+            // generating flag (SubprocessBackend::start), so re-arm it for
+            // the replay the same way the first attempt had it.
+            state.engine.begin_generation().await;
+            if let Some(fresh) = state.engine.endpoint().await {
+                let event_sink = event_sink.clone();
+                result =
+                    agent_bridge::run_turn(deps, fresh, messages, sampling, cancel, move |event| {
+                        let _ = event_sink.send(event);
+                    })
+                    .await;
+            }
+        }
+    }
+    state.engine.end_generation().await;
+    result
+}
+
 /// Drive one agent-mode turn: build the per-turn `AgentDeps` from a
 /// system-managed, per-conversation workspace folder + the long-lived
 /// consent/audit state in `AppState`, then hand off to
@@ -2282,7 +2449,6 @@ async fn agent_chat_turn(
         &state.paths.data_dir,
         state.app_db.clone(),
         conversation_id,
-        state.http.clone(),
         state.agent_consent.clone(),
         state.agent_audit.clone(),
         &state.plugins,
@@ -2295,17 +2461,10 @@ async fn agent_chat_turn(
         let _ = on_event.send(ChatEvent::Error { message: e.clone() });
     })?;
 
-    state.engine.begin_generation().await;
-
-    let event_sink = on_event.clone();
-    let result =
-        agent_bridge::run_turn(&deps, endpoint, &messages, sampling, cancel, move |event| {
-            let _ = event_sink.send(event);
-        })
-        .await;
-
-    state.engine.end_generation().await;
-    result
+    run_agent_turn_with_recovery(
+        state, &deps, endpoint, &messages, sampling, cancel, on_event,
+    )
+    .await
 }
 
 #[tauri::command]
@@ -2434,6 +2593,10 @@ async fn cloud_chat_turn(
     on_event: Channel<ChatEvent>,
 ) -> Result<(), String> {
     let (model_id, access_token) = resolve_cloud_access(state, settings).await?;
+    // Streaming client, not `state.http` — see `agent_bridge::turn_http_client`'s
+    // doc comment: the shared client's 30 s read timeout kills SSE streams that
+    // idle between chunks for any length of time.
+    let http = agent_bridge::turn_http_client()?;
 
     if !messages.iter().any(|m| m.role == "system") {
         messages.insert(
@@ -2458,7 +2621,7 @@ async fn cloud_chat_turn(
     }
 
     let result = openpal_core::cloud::chat_stream(
-        &state.http,
+        &http,
         &access_token,
         &model_id,
         &messages,
@@ -2508,7 +2671,6 @@ async fn web_search_chat_turn(
     let deps = agent_bridge::build_web_search_deps(
         &workspace_dir,
         &state.paths.data_dir,
-        state.http.clone(),
         state.agent_consent.clone(),
         state.agent_audit.clone(),
         &state.plugins,
@@ -2565,17 +2727,10 @@ async fn web_search_chat_turn(
         ),
     }
 
-    state.engine.begin_generation().await;
-
-    let event_sink = on_event.clone();
-    let result =
-        agent_bridge::run_turn(&deps, endpoint, &messages, sampling, cancel, move |event| {
-            let _ = event_sink.send(event);
-        })
-        .await;
-
-    state.engine.end_generation().await;
-    result
+    run_agent_turn_with_recovery(
+        state, &deps, endpoint, &messages, sampling, cancel, on_event,
+    )
+    .await
 }
 
 /// Plain engine completion (no plugin), under the turn's `cancel`.
@@ -2733,8 +2888,10 @@ async fn run_one_shot_completion(
     let cancel_flag = cancel.clone();
 
     let result = if let Some((model_id, access_token)) = cloud_access {
+        // Streaming client, not `state.http` — see `agent_bridge::turn_http_client`.
+        let http = agent_bridge::turn_http_client()?;
         openpal_core::cloud::chat_stream(
-            &state.http,
+            &http,
             &access_token,
             &model_id,
             &messages,
@@ -6250,6 +6407,112 @@ mod tests {
         );
     }
 
+    /// The non-MTP argument list must be byte-for-byte identical to the
+    /// pre-MTP behavior — turning a catalog entry's `mtp` on must never
+    /// change any other start argument, and turning it off must look exactly
+    /// like before the feature existed.
+    #[test]
+    fn build_extra_args_matches_pre_mtp_behavior_when_mtp_is_off() {
+        let spec_args = vec!["--some-catalog-flag".to_string()];
+        // show_thinking on, not disk-slow, no cpu-moe: just the spec's args.
+        assert_eq!(
+            build_extra_args(&spec_args, true, false, false, false),
+            spec_args
+        );
+        // show_thinking off appends the reasoning budget after the spec's args.
+        assert_eq!(
+            build_extra_args(&spec_args, false, false, false, false),
+            vec!["--some-catalog-flag", "--reasoning-budget", "0",]
+        );
+        // The full disk-slow recipe (in order), then cpu-moe, then nothing.
+        assert_eq!(
+            build_extra_args(&spec_args, false, true, true, false),
+            vec![
+                "--some-catalog-flag",
+                "--reasoning-budget",
+                "0",
+                "--no-warmup",
+                "-b",
+                "2048",
+                "-ub",
+                "2048",
+                "-fa",
+                "on",
+                "-ctk",
+                "q8_0",
+                "-ctv",
+                "q8_0",
+                "--cpu-moe",
+            ]
+        );
+    }
+
+    /// The MTP self-drafting flags are appended *last* (after the spec's own
+    /// args and the disk-slow recipe), so they win on any future conflict —
+    /// the same rule the disk-slow flags rely on.
+    #[test]
+    fn build_extra_args_appends_mtp_self_drafting_last_when_enabled() {
+        let mut args = build_extra_args(&[], true, true, false, true);
+        assert!(args.ends_with(&[
+            "--spec-type".to_string(),
+            "draft-mtp".to_string(),
+            "--spec-draft-n-max".to_string(),
+            MTP_DRAFT_N_MAX.to_string(),
+        ]));
+        // Everything before the MTP tail is the normal recipe — an MTP entry
+        // never changes the pre-MTP args.
+        args.truncate(args.len() - 4);
+        assert_eq!(
+            args,
+            vec![
+                "--no-warmup",
+                "-b",
+                "2048",
+                "-ub",
+                "2048",
+                "-fa",
+                "on",
+                "-ctk",
+                "q8_0",
+                "-ctv",
+                "q8_0",
+            ]
+        );
+    }
+
+    /// A qwen3.6-27b-like entry (mtp: true) reaches the flag; a non-MTP
+    /// curated entry never does.
+    #[test]
+    fn build_extra_args_keys_off_mtp_self_draft_only() {
+        let mtp = build_extra_args(&[], true, false, false, true);
+        assert!(mtp.windows(2).any(|w| w == ["--spec-type", "draft-mtp"]));
+        let plain = build_extra_args(&[], true, false, false, false);
+        assert_eq!(plain, Vec::<String>::new());
+    }
+
+    /// Real `--help` output from the bundled engine (b11960) advertises
+    /// `draft-mtp`; an older/unknown binary must gate it off conservatively.
+    #[test]
+    fn help_output_supports_mtp_parses_the_b11960_help_text() {
+        let b11960_help = "\
+usage: llama-server [options]\n\
+...\n\
+--spec-type none,draft-simple,draft-eagle3,draft-mtp,draft-dflash,draft-dspark,ngram-simple,ngram-map-k,ngram-map-k4v,ngram-mod,ngram-cache\n\
+--spec-draft-n-max N                    number of tokens to draft for speculative decoding (default: 3)\n";
+        assert!(help_output_supports_mtp(b11960_help));
+    }
+
+    #[test]
+    fn help_output_supports_mtp_gates_off_without_the_flag() {
+        // Older binary: spec decoding, but no MTP choice.
+        assert!(!help_output_supports_mtp(
+            "--spec-type none,draft-simple,draft-eagle3\n--spec-draft-n-max N"
+        ));
+        // Empty / garbage / failed-probe-shaped output — all false.
+        assert!(!help_output_supports_mtp(""));
+        assert!(!help_output_supports_mtp("garbage\n"));
+    }
+
     fn spec(size_bytes: u64, extra_shards: Vec<openpal_core::types::ModelShard>) -> ModelSpec {
         ModelSpec {
             id: "test-model".to_string(),
@@ -6283,6 +6546,7 @@ mod tests {
             mmproj_file_name: None,
             mmproj_size_bytes: None,
             mmproj_sha256: None,
+            mtp: false,
             group_id: None,
             release_date: None,
         }

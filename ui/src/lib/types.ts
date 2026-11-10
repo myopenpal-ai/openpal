@@ -88,6 +88,11 @@ export interface ModelSpec {
   mmprojFileName?: string;
   mmprojSizeBytes?: number;
   mmprojSha256?: string;
+  /** True when this curated entry's GGUF ships MTP (multi-token prediction)
+   * heads usable by the bundled engine for speculative self-drafting
+   * (`--spec-type draft-mtp`) — a bench-verified curator decision, never
+   * auto-detected from tensor names. Absent/false for everything else. */
+  mtp?: boolean;
   /** Hand-curated 0-100 fit score per `TaskType` — how *good* this model is
    * at a task, used by the opt-in `smart-model-router` plugin's `bestModelForTag`
    * (`triage.ts`) to rank installed models. A different question from

@@ -101,7 +101,7 @@ vendor-locked and 115–650 MB — leave them to the Full product. **Ship a forc
 toggle**: buggy iGPU/old-GPU Vulkan drivers can *crash* rather than fall back. Pin
 **one** llama.cpp `b`-tag across all OSes.
 
-Staged engine sizes (≈b9833): mac arm64 ~26 MB · win Vulkan ~92 MB (CPU-only ~44 MB) ·
+Staged engine sizes (≈b11960): mac arm64 ~70 MB · win Vulkan ~92 MB (CPU-only ~44 MB) ·
 linux Vulkan ~88 MB (CPU-only ~38 MB).
 
 **Model — Lite first, assisted download.**

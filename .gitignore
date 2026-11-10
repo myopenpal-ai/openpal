@@ -31,3 +31,6 @@ bundler/out/
 
 # macOS
 .DS_Store
+
+# OpenCode agent scratch (local tool state — not part of the repo)
+.opencode/

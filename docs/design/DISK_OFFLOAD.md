@@ -363,6 +363,178 @@ NVMe report, FlexInfer (arXiv 2503.03777). ✅ = adversarially confirmed.
     wired-memory watchdog with a 13.5 GB abort threshold — deliberately
     deferred until the machine can be sacrificed; user decision
     2026-07-11).
+  - **Speed-lever bench, round 4 — MTP self-drafting on a *dense* model
+    (2026-11-08, same 16 GB M4, engine **b11960** = `0.8.0-dev (build
+    11960, commit 8642541b2)`, `scripts/bench/bench_qwen_mtp.sh`):**
+    - Model: **qwen3.6-27b** Q4_K_M (17,106,773,120 bytes, sha256-verified)
+      + its bf16 mmproj (931,146,304 bytes, sha256-verified), exact
+      DiskSlow recipe (`-ngl 0 -b 2048 -ub 2048 -fa on -ctk q8_0 -ctv
+      q8_0 --no-warmup`) + `--mmproj`, 30-token prompt, `n_predict 128`.
+      The *dense* case the MoE expert-union defeat (next section) doesn't
+      cover: MTP self-drafting batches one forward pass per draft window,
+      so the streamed weights are read once per window instead of once per
+      token.
+    - **Baseline (no spec): did NOT finish** — both reps were still
+      generating at the 60-min per-request cap, so it's recorded as an
+      upper bound of **<0.036 tok/s**.
+    - **`--spec-type draft-mtp` wins at every depth, monotonically with
+      depth**: depth 2 → **0.050 tok/s** (`draft_n` 90, 81 accepted, mean
+      draft len 2.80) · depth 3 → **0.062** (110/89, 3.41) · depth 4 →
+      **0.074** (128/95, 3.97) — all ≥ ~2× the baseline bound, clean runs
+      (RSS ~2.1–2.6 GB at health, mmproj loaded, 0 errors, clean exit).
+      Single-rep measurement (round-2 reps stopped mid-run by user
+      decision); the monotone depth ladder matches the mechanism, but
+      re-bench after any engine bump.
+    - **SHIPPED 2026-11-08**: `start_engine` enables self-drafting for the
+      `qwen3.6-27b` catalog entry only (`--spec-type draft-mtp
+      --spec-draft-n-max 4`, from the bench-verified `mtp` field — see
+      `ModelSpec::mtp`), gated on the *current* engine binary advertising
+      `draft-mtp` in `--help` (probed fresh per start, since an in-app
+      engine update can swap the binary mid-session). Depth 4 measured
+      best, so the shipped depth is 4 (llama-server's own default is 3).
+    - **GLM-4.5-Air re-probed on b11960** (same UD-IQ2_XXS GGUF, same
+      recipe): round 1's b9833 hard abort is **gone** — `draft-mtp` runs,
+      but shows **no speed win** (depth 2: 0.178, depth 3: 0.162 vs 0.181
+      baseline tok/s; `draft_n` 52–74) — the MoE expert-union effect wins
+      as predicted. The entry stays un-armed; no real-GGUF fallback repro
+      exists, so the crash fallback ships as defensive engineering verified
+      by unit tests.
+  - **Production follow-up — issue #6 (2026-11-08, the day after ship):
+    the live qwen3.6-27b MTP engine broke, so recovery is now a first-class
+    part of the feature rather than a defensive afterthought.** The user's
+    app reported `stream read failed: error decoding response body` on an
+    agent turn, then two `classify request failed` warnings 20 s apart, then
+    `request failed: error sending request`. Diagnosis against the live
+    engine + a controlled repro of the exact production recipe found:
+    - **Warm-cache generation is glacial on this machine (~0.05–0.08
+      tok/s), so a 64-token turn is 15–20 min — and that's the MTP *win*;
+      the shipped depth-4 number (0.074) is real.** The plain-chat
+      first-message fallback never fires on a mid-stream break, so the
+      original recovery didn't cover any of what actually broke.
+    - **The MTP server aborted a mid-answer stream** (partial body decode —
+      the user's first error), then **stalled a concurrent request for the
+      full 20 s** the app's classify path waits, then **hard-aborted
+      (SIGABRT)** inside Metal teardown (`ggml_metal_rsets_free` →
+      `ggml_abort`) at exit after its parent app closed (orphaned to
+      launchd) — `~/Library/Logs/DiagnosticReports/llama-server-*.ips` is
+      the crash report. A non-MTP control with the same model stalled too
+      (accepted a request, then 0.1% CPU, no generation): the engine/speed
+      story is the deep problem; MTP's marginal failures are the part the
+      app can recover from.
+    - **Built (user decision: keep MTP, recover):** `EngineManager` gained
+      three primitives — `is_healthy()` (subprocess-exit check + one
+      loopback `/health` GET, 3 s cap), `mtp_fallback_armed()` (an
+      `MtpRestart` snapshot exists), and `restart_without_mtp(generation)`
+      — the *one* restart that strips the `--spec-*` args and refuses a
+      superseded engine. Three recovery paths reuse it:
+      1. **Plain-chat first message** (already shipped): `chat_stream`
+         retries once after a pre-answer MTP crash — never resends a
+         mid-answer break.
+      2. **Agent/web-search turns** (`run_agent_turn_with_recovery`): a
+         turn error with zero tokens emitted on an armed-but-unhealthy
+         engine restarts it without MTP. The turn is **never replayed** —
+         agent turns may run tools with real side effects.
+      3. **Idle-loop watchdog** (`maybe_recover_engine`, the same 5 s tick
+         as auto-unload): when idle (never while `generating`), a dead or
+         wedged engine is restarted without MTP, or stopped if it was
+         already MTP-less.
+    - No agent turn is ever auto-resent (tool side effects); recovery
+      re-arms the engine for the user's *next* request and surfaces the
+      original error.
+    - Re-bench on the next engine bump stands — b11960's MTP on this
+      hardware is functional but not useful-speed at any depth, which the
+      round-4 single-rep green-light (with caveats) undersold; the recovery
+      layer is what makes shipping it defensible.
+  - **Second production repro — 2026-11-10 (engine b12110, same M4, GPU
+    layers active):** the identical first symptom recurred
+    (`agent turn: stream read failed: error decoding response body`), and
+    the engine log proved the recovery shipped for #6 would *not* have
+    fired: the severance happened while the process stayed alive and kept
+    serving tasks (slot 0 released 66 tokens, slot 1 later ran 1734 to
+    completion), so `is_healthy()` answered true and `child_died()` stayed
+    false — every 2026-11-08 recovery predicate was false. The recovery's
+    "dead or wedged" framing missed the actual recurring mode: **a live
+    engine severing an in-flight stream**.
+    - **Widened (keep MTP, recover — same user decision):** the MTP
+      snapshot itself is now the recovery trigger, not liveness. Any
+      request-level failure on an MTP-armed engine retires MTP for the
+      next turn: `chat_stream` restarts stripped and resends, but only
+      when zero tokens were emitted (a mid-answer break surfaces its
+      original error against the now-stripped engine — restarting is not
+      replaying); agent/web-search turns restart stripped on any turn
+      error and — because restarting is not replaying — replay the turn
+      exactly once when the failed attempt provably emitted *nothing*
+      (no token, no reasoning, no consent/ask prompt, no started tool
+      call, no search), against a freshly fetched endpoint (the restart
+      moves the port). A turn that showed anything or ran any tool is
+      never replayed. `restart_without_mtp` consumes the snapshot on the
+      stripped start, so retirement is one-shot per MTP-armed session
+      and recovery cannot loop.
+    - Re-bench on the next engine bump still stands; b12110's MTP remains
+      functional but flaky on this hardware — recovery is the product.
+  - **Post-mortem follow-up — 2026-11-10 evening: the recurring
+    `stream read failed: error decoding response body` was NOT an MTP
+    failure at all. It is a client-side 30-second read timeout.**
+    The symptom kept recurring through two MTP-recovery fixes (the
+    die/wedge restart and the widened any-failure retirement above), so the
+    root cause was hunted to ground:
+    - **The error string is reqwest's `Kind::Decode` display.** Every
+      body-read error on `Response::bytes_stream()` is mapped through
+      `reqwest::error::decode` (verified in the vendored 0.12.28 source),
+      which displays as exactly `error decoding response body`.
+    - **The trigger is a 30 s `read_timeout` on the app's shared HTTP
+      client** (`state.http` in `crates/app/src/state.rs`: `connect_timeout
+      20 s`, `read_timeout 30 s`). reqwest applies it per body read and
+      cannot override it per-request. The agent/tool loop used that exact
+      client (`AgentDeps.http` ← `state.http.clone()`), so any streaming
+      turn that produces no body bytes for 30 consecutive seconds is cut
+      off mid-body and the connection dropped.
+    - **llama-server is silent for far longer than 30 s before the first
+      body byte.** An agent turn carries OpenAI `tools` (~350-token prompt);
+      on the disk-streamed qwen3.6-27b the measured prompt processing is
+      60–100+ s of zero output (reproduced 2026-11-10: 346 tokens at 3.42
+      tok/s = 101 s before the first byte). Generation then streams at
+      ~0.05–0.08 tok/s — inter-token gaps of 12–20 s, spiking past 30 s
+      under memory pressure, which is the mid-answer variant of the same
+      cut-off (issue #6's "partial body decode" and "stalled a concurrent
+      request" observations are this too, and the 20 s classify timeout
+      that fired 20 s apart in #6 is the same class of problem one rung
+      lower).
+    - **Live reproduction (2026-11-10,** exact DiskSlow recipe + b12110,
+      MTP armed): the agent request got `200 OK` + SSE headers at +2.3 s,
+      then **zero bytes**, then a 30 s read-timeout kill at +32.4 s; the
+      server logged `stop: cancel task, id_task = 9` — the same line and
+      the same ~30 s offset as the failing production session's
+      `engine.log` (`stop: cancel task, id_task = 0` at +30.1 s). The
+      server itself never severed anything with MTP armed — it survived,
+      released the slot and kept serving, exactly as production's slot 1
+      kept running 1734 tokens. This is a client-side timeout, not a
+      server abort.
+    - **Why the failing session's engine had no MTP at all:** its
+      `engine.log` lacks the `creating MTP draft context` line and reports
+      `blk.64.nextn.*` (the MTP-head tensors) as `unused — ignoring` — the
+      fingerprints of an MTP-disabled load (the MTP-enabled repro shows the
+      draft-context line and no unused-tensor warnings). So `mtp_fallback_
+      armed()` was false and both recovery fixes correctly declined to
+      act — and if it had fired, retiring MTP couldn't help anyway: the
+      cut-off is client-side and independent of the server's `--spec-*`
+      flags. That is why two fixes "didn't work" — they were aimed at the
+      wrong layer.
+    - **Fixed at the root (shipped 2026-11-10, engine b12110):** the
+      agent/tool-loop, subagent, web-search and cloud-chat streaming paths
+      now use a dedicated client built by `agent_bridge::turn_http_client`
+      — `connect_timeout 20 s`, **no `read_timeout` and no total timeout**,
+      mirroring the engine's own `chat_stream` client. REST calls (Hugging
+      Face browser, cloud API surface) keep the 30 s read timeout, which is
+      right for them; the web-search/fetch tools keep their explicit 20 s
+      per-request timeouts on top of it. Long-hang backstops are unchanged:
+      the user cancel flag and the wedged-engine idle watchdog. `state.http`
+      now carries a comment forbidding streaming use, and
+      `build_deps`/`build_web_search_deps` no longer accept a client
+      parameter so the hazard can't be reintroduced from a call site. The
+      two MTP-recovery changes stay as defensive engineering (a real MTP
+      head abort is still handled), but they are no longer the story for
+      this error.
 
 ### Phase 4 — Catalog entries for big MoE models (≤ 50 GB single-file first) ✅ DONE
 - **Shipped visible** (user decision, accepting the gap until Phase 3's
@@ -513,6 +685,17 @@ source by a second agent.
   disk-bound expectation is a modest ~1.2-1.5×. n-gram modes (`ngram-mod`)
   are free but ~1.0× on free-form chat. Nobody has published spec-decode
   numbers in the disk-streaming regime — our A/B is a first.
+- ✅ **MTP self-drafting works on *dense* models — MEASURED + SHIPPED
+  2026-11-08** (bench round 4, qwen3.6-27b, exact DiskSlow recipe): the
+  expert-union defeat doesn't apply — one batched forward pass reads the
+  streamed weights per draft window instead of per token. Depth-4
+  `draft-mtp` measured **0.074 tok/s vs a <0.036 baseline bound** (~2×,
+  monotone in depth: 0.050 → 0.062 → 0.074). **Shipped for the
+  `qwen3.6-27b` catalog entry only**, behind a per-start `--help` probe of
+  the current engine binary (see `ModelSpec::mtp`). GLM-4.5-Air re-probed
+  on b11960 while doing this: its MTP head no longer crashes (b9833's hard
+  abort is fixed upstream) but shows **no win** (0.162–0.178 vs 0.181
+  baseline) — the MoE prediction holds, so it stays un-armed.
 - ✅ **Prompt processing scales with `-ub`** (each physical batch is one
   streaming pass over the weights, so fewer, fuller passes ≈ linear PP gain
   on long prompts), at the cost of compute-buffer RAM that competes with the

@@ -107,6 +107,21 @@ pub struct ActivityInfo {
     pub generation: u64,
 }
 
+/// Everything needed to restart a running engine *without* its MTP
+/// self-drafting args after a first-message crash — the automatic-recovery
+/// half of the MTP feature (`docs/design/DISK_OFFLOAD.md`). Built by
+/// [`subprocess::SubprocessBackend::start`] when the start carries `--spec-*`
+/// args; `cfg.extra_args` has already had every `--spec-*` flag stripped.
+#[derive(Debug, Clone)]
+pub struct MtpRestart {
+    pub server_binary: PathBuf,
+    pub model_id: String,
+    pub model_path: PathBuf,
+    pub cfg: EngineConfig,
+    pub disk_slow: bool,
+    pub startup_timeout: Duration,
+}
+
 /// The one deliberate fork point: how the engine is hosted. Every method
 /// mirrors what a bare `EngineManager` used to expose directly — this trait
 /// is a relocation of existing subprocess behavior, not a new design.
@@ -172,6 +187,25 @@ pub trait EngineBackend: Send + Sync {
     /// a different generation since `expected_generation` was captured.
     async fn stop_if_current(&self, expected_generation: u64) -> Result<()>;
 
+    /// Snapshot for restarting the current engine *without* its MTP
+    /// self-drafting args — `Some` only while an MTP-armed start is running
+    /// (the first-message crash fallback: [`EngineManager::chat_stream`]
+    /// restarts via this and resends the request once). Only
+    /// [`subprocess::SubprocessBackend`] produces one today; other backends
+    /// return `None` (no auto-restart).
+    async fn mtp_restart_snapshot(&self) -> Option<MtpRestart> {
+        None
+    }
+
+    /// Whether the local engine process has exited (vs. a mere
+    /// request-level failure) — the engine-death side of `is_healthy`,
+    /// still observed by the MTP recovery paths and the idle-loop watchdog.
+    /// Only [`subprocess::SubprocessBackend`] has a process to
+    /// observe; other backends default to `false` (no auto-restart).
+    async fn child_died(&self) -> bool {
+        false
+    }
+
     /// Stream one assistant reply.
     async fn chat_stream(
         &self,
@@ -208,12 +242,18 @@ pub trait EngineBackend: Send + Sync {
 /// `crates/app/src/state.rs`'s `AppState`).
 pub struct EngineManager {
     backend: Box<dyn EngineBackend>,
+    /// The manager's own client for out-of-band HTTP checks (`is_healthy`'s
+    /// `/health` probe and the MTP recovery watchdog) — deliberately
+    /// separate from the backend's request client, so a health probe is
+    /// never served from a pooled connection to a wedged server.
+    client: reqwest::Client,
 }
 
 impl EngineManager {
     pub fn new(log_dir: PathBuf) -> Self {
         Self {
             backend: Box::new(SubprocessBackend::new(log_dir)),
+            client: reqwest::Client::new(),
         }
     }
 
@@ -221,7 +261,10 @@ impl EngineManager {
     /// backend rather than the platform default — no production call site
     /// uses this today.
     pub fn with_backend(backend: Box<dyn EngineBackend>) -> Self {
-        Self { backend }
+        Self {
+            backend,
+            client: reqwest::Client::new(),
+        }
     }
 
     /// Set (or clear, in portable mode with no DEK) this engine's log key —
@@ -310,6 +353,91 @@ impl EngineManager {
         self.backend.stop_if_current(expected_generation).await
     }
 
+    /// True when the currently-loaded engine is genuinely responsive — or,
+    /// by default, when there is no Running engine to check (a Stopped /
+    /// Starting / Failed engine is not this check's problem). A `Running`
+    /// engine is unhealthy only if its subprocess has exited (the backend
+    /// can observe that directly) or its `/health` endpoint doesn't answer
+    /// within a short window (a wedged HTTP server — the state that made a
+    /// mid-turn MTP failure permanent). This is the probe behind the MTP
+    /// recovery watchdog and the agent-turn failure hook: quiet (one
+    /// loopback GET, 3s cap), best-effort (never throws).
+    pub async fn is_healthy(&self) -> bool {
+        let Some(endpoint) = self.backend.endpoint().await else {
+            return true; // not Running — nothing to health-check
+        };
+        if self.backend.child_died().await {
+            return false;
+        }
+        let base = endpoint.base_url.trim_end_matches("/v1");
+        self.client
+            .get(format!("{base}/health"))
+            .timeout(Duration::from_secs(3))
+            .send()
+            .await
+            .is_ok_and(|r| r.status().is_success())
+    }
+
+    /// Whether the current engine was started with MTP self-drafting armed
+    /// — i.e. it *could* be restarted without the `--spec-*` args. This is
+    /// the gate that keeps recovery strictly MTP-shaped (see [`MtpRestart`]);
+    /// an engine that was already running MTP-less has no stripped fallback
+    /// to land on.
+    pub async fn mtp_fallback_armed(&self) -> bool {
+        self.backend.mtp_restart_snapshot().await.is_some()
+    }
+
+    /// Restart the current engine *without* its MTP self-drafting args,
+    /// using the snapshot the backend armed when it was started with
+    /// `--spec-*` args. The one shared primitive behind every MTP recovery
+    /// path: the first-message retry in `chat_stream`, the agent/web-search
+    /// turn failure hook in `crates/app` (`run_agent_turn_with_recovery`),
+    /// and the idle-loop watchdog. Returns `false` (no restart) when there
+    /// is no snapshot (nothing MTP-specific to strip), when a concurrent
+    /// `stop()`/`start()` superseded the engine since `expected_generation`
+    /// was captured (only the engine the caller observed gets restarted),
+    /// or when the restart itself fails (the caller's error path stands).
+    pub async fn restart_without_mtp(&self, expected_generation: Option<u64>) -> bool {
+        let Some(restart) = self.backend.mtp_restart_snapshot().await else {
+            return false;
+        };
+        // Only restart the engine the caller actually observed — a
+        // concurrent stop()/start() (user switched models, manual reload)
+        // owns the backend now and must not be resurrected as a stripped
+        // copy of the engine it replaced. `None` keeps the historical
+        // `chat_stream` contract: when no engine was observed at all, we act
+        // only while there still isn't one (the crashed engine was ours).
+        let still_ours = match (expected_generation, self.backend.activity().await) {
+            (Some(expected), Some(info)) => info.generation == expected,
+            (None, None) => true,
+            _ => false,
+        };
+        if !still_ours {
+            return false;
+        }
+        tracing::warn!(
+            model = restart.model_id,
+            "engine died or wedged with MTP self-drafting armed; restarting without MTP"
+        );
+        match self
+            .start(
+                &restart.server_binary,
+                &restart.model_id,
+                &restart.model_path,
+                &restart.cfg,
+                restart.disk_slow,
+                restart.startup_timeout,
+            )
+            .await
+        {
+            Ok(()) => true,
+            Err(e) => {
+                tracing::error!("MTP recovery restart failed: {e}");
+                false
+            }
+        }
+    }
+
     /// Stream one assistant reply. See [`EngineBackend::chat_stream`] for
     /// the full contract.
     pub async fn chat_stream(
@@ -319,8 +447,79 @@ impl EngineManager {
         cancel: Arc<AtomicBool>,
         mut on_event: impl FnMut(ChatEvent) + Send,
     ) -> Result<()> {
+        let on_event = &mut on_event as &mut (dyn FnMut(ChatEvent) + Send);
+        // Generation snapshot for the "is the engine still ours?" check below
+        // — a concurrent start()/stop() that supersedes the engine mid-retry
+        // gets to keep it (`start()` already bails safely on a generation
+        // mismatch); we bow out to the normal error path instead of racing it.
+        let generation = self.backend.activity().await.map(|a| a.generation);
+        let emitted_answer = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+        let first = self
+            .chat_stream_once(
+                messages,
+                sampling,
+                cancel.clone(),
+                on_event,
+                &emitted_answer,
+            )
+            .await;
+
+        // MTP crash/abort fallback: an engine started with MTP self-drafting
+        // can hard-abort on the *first* generation before a single token is
+        // emitted (a GGUF whose MTP heads this engine can't run). Its own
+        // "severs an in-flight stream while staying alive" observed mode is
+        // now known NOT to be the engine: 2026-11-10 post-mortem proved the
+        // mid-stream `error decoding response body` failures were client-side
+        // (the agent path's 30 s read timeout vs. multi-minute prompt
+        // processing on a disk-streamed model — `docs/design/DISK_OFFLOAD.md`),
+        // and this plain-chat path never had that timeout. Keep the fallback
+        // as defensive engineering for genuine MTP aborts: restart the engine
+        // WITHOUT the `--spec-*` args, exactly once, whether or not tokens
+        // had streamed (restarting isn't replaying — a mid-answer break just
+        // means the *next* message runs stripped).
+        //
+        // `restart_without_mtp` consumes the MTP snapshot, so the stripped
+        // engine is never retired (or restarted) again — recovery cannot
+        // loop. The request is resent only when the restart succeeded and
+        // nothing was emitted: a retry after tokens were shown would
+        // duplicate them, so the mid-answer case surfaces its original error
+        // as-is, now against a stripped engine that works for next time.
+        if first.is_err() && !self.restart_without_mtp(generation).await {
+            // Recovery refused (no snapshot, a concurrent stop/start
+            // superseded the engine, or the restart itself failed) — the
+            // original error stands unchanged.
+            return first;
+        }
+        if first.is_err() && !emitted_answer.load(std::sync::atomic::Ordering::Relaxed) {
+            return self
+                .chat_stream_once(messages, sampling, cancel, on_event, &emitted_answer)
+                .await;
+        }
+        first
+    }
+
+    /// One `chat_stream` round trip against the backend, forwarding `on_event`
+    /// while flagging the moment any answer token ([`ChatEvent::Token`]) is
+    /// emitted — the "mid-answer" guard for the MTP crash fallback.
+    async fn chat_stream_once(
+        &self,
+        messages: &[ChatMessage],
+        sampling: &SamplingParams,
+        cancel: Arc<AtomicBool>,
+        on_event: &mut (dyn FnMut(ChatEvent) + Send),
+        emitted_answer: &std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ) -> Result<()> {
+        use std::sync::atomic::Ordering;
+        let emitted = emitted_answer.clone();
+        let mut forward: Box<dyn FnMut(ChatEvent) + Send> = Box::new(move |ev| {
+            if matches!(ev, ChatEvent::Token { .. }) {
+                emitted.store(true, Ordering::Relaxed);
+            }
+            on_event(ev);
+        });
         self.backend
-            .chat_stream(messages, sampling, cancel, &mut on_event)
+            .chat_stream(messages, sampling, cancel, forward.as_mut())
             .await
     }
 
@@ -743,5 +942,639 @@ mod tests {
         // hit the ceiling and fail visibly instead of hanging silently.
         let timeout = disk_slow_startup_timeout(50_000_000_000, Some(20_000));
         assert_eq!(timeout, MAX_DISK_SLOW_STARTUP_TIMEOUT);
+    }
+
+    // ------------------------------------------------------------------
+    // MTP first-message crash fallback
+    // ------------------------------------------------------------------
+
+    /// Test double that dies (optionally after emitting content) on a chosen
+    /// chat call, rebuilds a stripped MTP snapshot on every MTP-armed start,
+    /// and records every start's args + every chat call.
+    struct FakeMtpState {
+        starts: Vec<Vec<String>>,
+        chat_calls: u32,
+        /// 1-based call number that fails; 0 = never fails.
+        fail_on_call: u32,
+        /// Emit a Token before failing (models a mid-answer stream break).
+        emit_before_fail: bool,
+        /// Whether a failing chat call also marks the child as exited (the
+        /// "engine died" mode). When false the failure models an MTP-armed
+        /// engine severing a stream while the process stays alive — the
+        /// actual production failure, which never set `child_died`.
+        exit_on_fail: bool,
+        generation: u64,
+        running: bool,
+        mtp_fallback: Option<MtpRestart>,
+        /// Set when a chat call fails with `exit_on_fail`, or directly by a
+        /// test — what [`EngineBackend::child_died`] reports (the "subprocess
+        /// exited" signal that used to gate recovery).
+        child_exited: bool,
+        /// Optional `/health`-able address; when `Some`, the fake advertises
+        /// a Running engine the manager's `is_healthy` can probe.
+        endpoint: Option<EngineEndpoint>,
+    }
+
+    struct FakeMtpBackend {
+        state: Arc<tokio::sync::Mutex<FakeMtpState>>,
+    }
+
+    #[async_trait]
+    impl EngineBackend for FakeMtpBackend {
+        async fn start(
+            &self,
+            server_binary: &Path,
+            model_id: &str,
+            model_path: &Path,
+            cfg: &EngineConfig,
+            disk_slow: bool,
+            startup_timeout: Duration,
+        ) -> Result<()> {
+            let mut s = self.state.lock().await;
+            s.generation += 1;
+            s.running = true;
+            s.starts.push(cfg.extra_args.clone());
+            let has_mtp = cfg
+                .extra_args
+                .iter()
+                .any(|a| a == "--spec-type" || a.starts_with("--spec-type="));
+            // Mirror SubprocessBackend::start's snapshot shape: the stored
+            // config already has every --spec-* arg stripped.
+            s.mtp_fallback = has_mtp.then(|| MtpRestart {
+                server_binary: server_binary.to_path_buf(),
+                model_id: model_id.to_string(),
+                model_path: model_path.to_path_buf(),
+                cfg: EngineConfig {
+                    extra_args: cfg
+                        .extra_args
+                        .iter()
+                        .filter(|a| !a.starts_with("--spec-"))
+                        .cloned()
+                        .collect(),
+                    ..cfg.clone()
+                },
+                disk_slow,
+                startup_timeout,
+            });
+            Ok(())
+        }
+
+        async fn stop(&self) -> Result<()> {
+            let mut s = self.state.lock().await;
+            s.generation += 1;
+            s.running = false;
+            s.mtp_fallback = None;
+            Ok(())
+        }
+
+        async fn status(&self) -> EngineStatus {
+            let s = self.state.lock().await;
+            if s.running {
+                EngineStatus::Running {
+                    model_id: "fake".to_string(),
+                    port: 1,
+                    disk_slow: false,
+                    auto_unload_at: None,
+                }
+            } else {
+                EngineStatus::Stopped
+            }
+        }
+
+        async fn activity(&self) -> Option<ActivityInfo> {
+            let s = self.state.lock().await;
+            s.running.then(|| ActivityInfo {
+                disk_slow: false,
+                idle_for: Duration::ZERO,
+                generating: false,
+                generation: s.generation,
+            })
+        }
+
+        async fn touch_activity(&self) {}
+        async fn begin_generation(&self) {}
+        async fn end_generation(&self) {}
+
+        async fn stop_if_current(&self, expected_generation: u64) -> Result<()> {
+            let mut s = self.state.lock().await;
+            if s.generation == expected_generation {
+                s.generation += 1;
+                s.running = false;
+                s.mtp_fallback = None;
+            }
+            Ok(())
+        }
+
+        async fn chat_stream(
+            &self,
+            _messages: &[ChatMessage],
+            _sampling: &SamplingParams,
+            _cancel: Arc<AtomicBool>,
+            on_event: &mut (dyn FnMut(ChatEvent) + Send),
+        ) -> Result<()> {
+            let mut s = self.state.lock().await;
+            s.chat_calls += 1;
+            let fails = s.chat_calls == s.fail_on_call;
+            if fails && s.emit_before_fail {
+                on_event(ChatEvent::Token {
+                    text: "partial answer".to_string(),
+                });
+            }
+            if fails {
+                if s.exit_on_fail {
+                    s.child_exited = true;
+                }
+                return Err(crate::Error::Engine("fake died".to_string()));
+            }
+            on_event(ChatEvent::Token {
+                text: "full answer".to_string(),
+            });
+            Ok(())
+        }
+
+        async fn raw_classify(&self, _body: serde_json::Value) -> Result<Option<String>> {
+            Ok(None)
+        }
+
+        fn set_dek(&self, _dek: Option<&DataKey>) {}
+        fn tail_log(&self, _max_lines: usize) -> String {
+            String::new()
+        }
+        fn export_logs(&self) -> String {
+            String::new()
+        }
+        fn log_path(&self) -> PathBuf {
+            PathBuf::new()
+        }
+
+        async fn mtp_restart_snapshot(&self) -> Option<MtpRestart> {
+            self.state.lock().await.mtp_fallback.clone()
+        }
+
+        async fn child_died(&self) -> bool {
+            self.state.lock().await.child_exited
+        }
+
+        async fn endpoint(&self) -> Option<EngineEndpoint> {
+            self.state.lock().await.endpoint.clone()
+        }
+    }
+
+    fn fake_manager(
+        fail_on_call: u32,
+        emit_before_fail: bool,
+    ) -> (EngineManager, Arc<tokio::sync::Mutex<FakeMtpState>>) {
+        fake_manager_with(fail_on_call, emit_before_fail, false, None)
+    }
+
+    fn fake_manager_with(
+        fail_on_call: u32,
+        emit_before_fail: bool,
+        child_exited: bool,
+        endpoint: Option<EngineEndpoint>,
+    ) -> (EngineManager, Arc<tokio::sync::Mutex<FakeMtpState>>) {
+        let state = Arc::new(tokio::sync::Mutex::new(FakeMtpState {
+            starts: vec![],
+            chat_calls: 0,
+            fail_on_call,
+            emit_before_fail,
+            exit_on_fail: true,
+            generation: 0,
+            running: false,
+            mtp_fallback: None,
+            child_exited,
+            endpoint,
+        }));
+        let manager = EngineManager::with_backend(Box::new(FakeMtpBackend {
+            state: state.clone(),
+        }));
+        (manager, state)
+    }
+
+    /// A fake that fails a chat call WITHOUT claiming the child exited — the
+    /// exact production shape this recovery exists for (an MTP-armed engine
+    /// severing a stream while staying alive, so `child_died()` stays false
+    /// and `/health` keeps answering).
+    async fn fake_manager_live_abort(
+        fail_on_call: u32,
+        emit_before_fail: bool,
+    ) -> (EngineManager, Arc<tokio::sync::Mutex<FakeMtpState>>) {
+        let (manager, state) = fake_manager_with(fail_on_call, emit_before_fail, false, None);
+        state.lock().await.exit_on_fail = false;
+        (manager, state)
+    }
+
+    fn mtp_cfg() -> EngineConfig {
+        EngineConfig {
+            context_length: 4096,
+            gpu_layers: 0,
+            threads: None,
+            extra_args: vec![
+                "--spec-type".to_string(),
+                "draft-mtp".to_string(),
+                "--spec-draft-n-max".to_string(),
+                "4".to_string(),
+            ],
+            mmproj_path: None,
+        }
+    }
+
+    /// The plan's core retry test: a fake backend that dies on the first
+    /// chat request must be restarted WITHOUT its MTP args, then answer —
+    /// with no Failed status and no protocol change for the caller.
+    #[tokio::test]
+    async fn chat_stream_restarts_without_mtp_and_resends_after_a_first_message_crash() {
+        let (manager, state) = fake_manager(/* fail first chat */ 1, false);
+        manager
+            .start(
+                Path::new("/fake/llama-server"),
+                "qwen3.6-27b",
+                Path::new("/fake/qwen.gguf"),
+                &mtp_cfg(),
+                false,
+                Duration::from_secs(30),
+            )
+            .await
+            .unwrap();
+
+        let mut events: Vec<ChatEvent> = vec![];
+        let result = manager
+            .chat_stream(
+                &[],
+                &SamplingParams::default(),
+                Arc::new(AtomicBool::new(false)),
+                |ev| events.push(ev),
+            )
+            .await;
+
+        assert!(result.is_ok(), "the MTP fallback must deliver an answer");
+        let s = state.lock().await;
+        assert_eq!(s.chat_calls, 2, "exactly one resend after the crash");
+        assert_eq!(s.starts.len(), 2, "the engine must restart exactly once");
+        assert!(
+            !s.starts[1].iter().any(|a| a.starts_with("--spec-")),
+            "the restart must drop every --spec-* arg: {:?}",
+            s.starts[1]
+        );
+        assert!(
+            events
+                .iter()
+                .any(|ev| matches!(ev, ChatEvent::Token { text } if text == "full answer")),
+            "the retried request must deliver the answer"
+        );
+        drop(s);
+        assert!(
+            matches!(manager.status().await, EngineStatus::Running { .. }),
+            "a recovered MTP crash must not leave the engine Failed"
+        );
+    }
+
+    /// Without an MTP snapshot there is nothing to fall back to — a plain
+    /// crash keeps today's single-attempt error path.
+    #[tokio::test]
+    async fn chat_stream_does_not_restart_without_an_mtp_snapshot() {
+        let (manager, state) = fake_manager(1, false);
+        let mut cfg = mtp_cfg();
+        cfg.extra_args.clear(); // no MTP args -> no snapshot
+        manager
+            .start(
+                Path::new("/fake/llama-server"),
+                "plain-model",
+                Path::new("/fake/plain.gguf"),
+                &cfg,
+                false,
+                Duration::from_secs(30),
+            )
+            .await
+            .unwrap();
+
+        let result = manager
+            .chat_stream(
+                &[],
+                &SamplingParams::default(),
+                Arc::new(AtomicBool::new(false)),
+                |_| {},
+            )
+            .await;
+        assert!(result.is_err(), "a plain crash keeps the error path");
+        let s = state.lock().await;
+        assert_eq!(s.chat_calls, 1, "no retry without an MTP snapshot");
+        assert_eq!(s.starts.len(), 1, "no restart without an MTP snapshot");
+    }
+
+    /// A crash that happened mid-answer (a token already emitted) must NOT
+    /// trigger the resend — it would duplicate tokens the user already saw —
+    /// but MTP is still retired for the next turn: the mid-answer break
+    /// proves the fragile MTP layer broke, and the *next* message should run
+    /// on a stripped engine. The original error is still surfaced.
+    #[tokio::test]
+    async fn chat_stream_retires_mtp_after_a_mid_answer_crash_without_resending() {
+        let (manager, state) = fake_manager(1, true);
+        manager
+            .start(
+                Path::new("/fake/llama-server"),
+                "qwen3.6-27b",
+                Path::new("/fake/qwen.gguf"),
+                &mtp_cfg(),
+                false,
+                Duration::from_secs(30),
+            )
+            .await
+            .unwrap();
+
+        let result = manager
+            .chat_stream(
+                &[],
+                &SamplingParams::default(),
+                Arc::new(AtomicBool::new(false)),
+                |_| {},
+            )
+            .await;
+        assert!(result.is_err(), "a mid-answer crash surfaces as an error");
+        let s = state.lock().await;
+        assert_eq!(s.chat_calls, 1, "a mid-answer crash must not resend");
+        assert_eq!(
+            s.starts.len(),
+            2,
+            "a mid-answer crash still retires MTP for the next turn"
+        );
+        assert!(
+            s.starts[1].iter().all(|a| !a.starts_with("--spec-")),
+            "the retirement restart must drop every --spec-* arg: {:?}",
+            s.starts[1]
+        );
+        assert!(
+            s.mtp_fallback.is_none(),
+            "the retirement restart consumes the snapshot — no recovery loop"
+        );
+    }
+
+    /// The 2026-11-10 production shape (also issue #6's first symptom): the
+    /// MTP-armed engine severs the very first stream while the process stays
+    /// alive — `child_died()` is false and `/health` would answer, so the old
+    /// child-exit gate never fired. Recovery must still restart without MTP
+    /// and resend, because nothing was emitted yet.
+    #[tokio::test]
+    async fn chat_stream_restarts_without_mtp_and_resends_after_a_live_first_message_abort() {
+        let (manager, state) = fake_manager_live_abort(/* fail first chat */ 1, false).await;
+        manager
+            .start(
+                Path::new("/fake/llama-server"),
+                "qwen3.6-27b",
+                Path::new("/fake/qwen.gguf"),
+                &mtp_cfg(),
+                false,
+                Duration::from_secs(30),
+            )
+            .await
+            .unwrap();
+
+        let mut events: Vec<ChatEvent> = vec![];
+        let result = manager
+            .chat_stream(
+                &[],
+                &SamplingParams::default(),
+                Arc::new(AtomicBool::new(false)),
+                |ev| events.push(ev),
+            )
+            .await;
+
+        assert!(result.is_ok(), "the MTP fallback must deliver an answer");
+        let s = state.lock().await;
+        assert_eq!(s.chat_calls, 2, "exactly one resend after the live abort");
+        assert_eq!(
+            s.starts.len(),
+            2,
+            "a live abort must still trigger the stripped restart"
+        );
+        assert!(
+            !s.starts[1].iter().any(|a| a.starts_with("--spec-")),
+            "the restart must drop every --spec-* arg: {:?}",
+            s.starts[1]
+        );
+        assert!(
+            !s.child_exited,
+            "this failure is a live abort, not a process exit"
+        );
+        assert!(
+            events
+                .iter()
+                .any(|ev| matches!(ev, ChatEvent::Token { text } if text == "full answer")),
+            "the retried request must deliver the answer"
+        );
+        drop(s);
+        assert!(
+            matches!(manager.status().await, EngineStatus::Running { .. }),
+            "a recovered live abort must not leave the engine Failed"
+        );
+    }
+
+    /// Same live-abort shape, but mid-answer: tokens were already shown, so
+    /// there is no resend — yet the engine must still be retired to MTP-less
+    /// so the user's next message doesn't hit the same severed stream.
+    #[tokio::test]
+    async fn chat_stream_retires_mtp_after_a_live_mid_answer_abort_without_resending() {
+        let (manager, state) = fake_manager_live_abort(1, true).await;
+        manager
+            .start(
+                Path::new("/fake/llama-server"),
+                "qwen3.6-27b",
+                Path::new("/fake/qwen.gguf"),
+                &mtp_cfg(),
+                false,
+                Duration::from_secs(30),
+            )
+            .await
+            .unwrap();
+
+        let result = manager
+            .chat_stream(
+                &[],
+                &SamplingParams::default(),
+                Arc::new(AtomicBool::new(false)),
+                |_| {},
+            )
+            .await;
+        assert!(result.is_err(), "a mid-answer break surfaces as an error");
+        let s = state.lock().await;
+        assert_eq!(s.chat_calls, 1, "no resend after a mid-answer break");
+        assert_eq!(
+            s.starts.len(),
+            2,
+            "the live abort still retires MTP for the next turn"
+        );
+        assert!(
+            s.starts[1].iter().all(|a| !a.starts_with("--spec-")),
+            "the retirement restart must drop every --spec-* arg: {:?}",
+            s.starts[1]
+        );
+        assert!(
+            s.mtp_fallback.is_none(),
+            "the retirement restart consumes the snapshot — no recovery loop"
+        );
+    }
+
+    #[tokio::test]
+    async fn restart_without_mtp_restarts_with_stripped_cfg_and_bumps_generation() {
+        let (manager, state) = fake_manager(0, false);
+        manager
+            .start(
+                Path::new("/fake/llama-server"),
+                "qwen3.6-27b",
+                Path::new("/fake/qwen.gguf"),
+                &mtp_cfg(),
+                false,
+                Duration::from_secs(30),
+            )
+            .await
+            .unwrap();
+
+        let generation = state.lock().await.generation;
+        assert!(
+            manager.restart_without_mtp(Some(generation)).await,
+            "an MTP-armed engine restart must be reported as done"
+        );
+        let s = state.lock().await;
+        assert_eq!(s.starts.len(), 2, "the recovery restart calls start again");
+        assert!(
+            s.starts
+                .last()
+                .unwrap()
+                .iter()
+                .all(|a| !a.starts_with("--spec-")),
+            "the restarted engine must have every --spec-* arg stripped"
+        );
+        assert!(
+            s.mtp_fallback.is_none(),
+            "a stripped restart has nothing left to recover from"
+        );
+        assert!(s.running, "the restarted engine is running");
+        assert_eq!(
+            s.generation,
+            generation + 1,
+            "the recovery restart bumps the generation"
+        );
+    }
+
+    #[tokio::test]
+    async fn restart_without_mtp_is_a_noop_without_a_snapshot() {
+        let (manager, state) = fake_manager(0, false);
+        let mut cfg = mtp_cfg();
+        cfg.extra_args.clear(); // plain engine -> no snapshot armed
+        manager
+            .start(
+                Path::new("/fake/llama-server"),
+                "plain-model",
+                Path::new("/fake/plain.gguf"),
+                &cfg,
+                false,
+                Duration::from_secs(30),
+            )
+            .await
+            .unwrap();
+
+        let generation = state.lock().await.generation;
+        assert!(!manager.restart_without_mtp(Some(generation)).await);
+        let s = state.lock().await;
+        assert_eq!(s.starts.len(), 1, "no snapshot means no recovery restart");
+    }
+
+    #[tokio::test]
+    async fn restart_without_mtp_refuses_a_superseded_engine() {
+        let (manager, state) = fake_manager(0, false);
+        manager
+            .start(
+                Path::new("/fake/llama-server"),
+                "qwen3.6-27b",
+                Path::new("/fake/qwen.gguf"),
+                &mtp_cfg(),
+                false,
+                Duration::from_secs(30),
+            )
+            .await
+            .unwrap();
+
+        // The caller captured a stale generation — a concurrent stop/start
+        // already moved on — so recovery must refuse rather than resurrect a
+        // stripped copy of the engine it replaced.
+        let stale = state.lock().await.generation - 1;
+        assert!(!manager.restart_without_mtp(Some(stale)).await);
+        let s = state.lock().await;
+        assert_eq!(s.starts.len(), 1, "a superseded engine is not restarted");
+    }
+
+    #[tokio::test]
+    async fn is_healthy_is_true_when_no_engine_is_running() {
+        let (manager, _) = fake_manager(0, false);
+        assert!(
+            manager.is_healthy().await,
+            "an engine that isn't Running is vacuously healthy"
+        );
+    }
+
+    #[tokio::test]
+    async fn is_healthy_is_false_when_the_child_has_exited() {
+        // The endpoint is never reached — child_died short-circuits first.
+        let endpoint = EngineEndpoint {
+            base_url: "http://127.0.0.1:1/v1".to_string(),
+            api_key: "k".to_string(),
+            model_id: "qwen3.6-27b".to_string(),
+            request_timeout_secs: 300,
+        };
+        let (manager, _) = fake_manager_with(0, false, true, Some(endpoint));
+        assert!(!manager.is_healthy().await);
+    }
+
+    #[tokio::test]
+    async fn is_healthy_pings_the_health_endpoint() {
+        let (manager, _) = fake_manager_with(0, false, false, Some(tiny_ok_endpoint()));
+        assert!(
+            manager.is_healthy().await,
+            "a /health 200 from the live endpoint means healthy"
+        );
+    }
+
+    #[tokio::test]
+    async fn is_healthy_is_false_when_the_endpoint_is_unreachable() {
+        // Bind then drop so the port is guaranteed closed: the manager's
+        // probe must time out fast and report unhealthy, not hang the test.
+        let closed = {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let port = listener.local_addr().unwrap().port();
+            drop(listener);
+            format!("http://127.0.0.1:{port}/v1")
+        };
+        let endpoint = EngineEndpoint {
+            base_url: closed,
+            api_key: "k".to_string(),
+            model_id: "qwen3.6-27b".to_string(),
+            request_timeout_secs: 300,
+        };
+        let (manager, _) = fake_manager_with(0, false, false, Some(endpoint));
+        assert!(!manager.is_healthy().await);
+    }
+
+    /// An `EngineEndpoint` whose `/health` answers 200 once, for
+    /// `is_healthy`'s probe. The listener's thread lives for the lifetime of
+    /// the single accept, then dies with it — fine for one-shot tests.
+    fn tiny_ok_endpoint() -> EngineEndpoint {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut buf = [0u8; 1024];
+                let _ = stream.read(&mut buf);
+                let _ = stream.write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
+                );
+            }
+        });
+        EngineEndpoint {
+            base_url: format!("http://127.0.0.1:{port}/v1"),
+            api_key: "k".to_string(),
+            model_id: "qwen3.6-27b".to_string(),
+            request_timeout_secs: 300,
+        }
     }
 }

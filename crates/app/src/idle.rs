@@ -43,7 +43,71 @@ pub async fn run(app: AppHandle) {
         let Some(state) = app.try_state::<AppState>() else {
             continue;
         };
+        // Recovery first: a wedged engine should be put right before we even
+        // think about unloading (the two are mutually exclusive anyway — a
+        // restart bumps the generation, so the unload that follows it if the
+        // user is idle would stop the freshly-restarted engine, which is
+        // correct: an MTP-less restart is no more immune to auto-unload than
+        // any other engine).
+        maybe_recover_engine(&app, &state).await;
         maybe_unload(&app, &state).await;
+    }
+}
+
+/// The engine-health watchdog (the MTP recovery story is in
+/// `docs/design/DISK_OFFLOAD.md`; the production failure this exists for is
+/// issue #6). On every tick, when no chat is generating, probe the running
+/// engine once: if its subprocess died or its `/health` endpoint no longer
+/// answers, it is wedged — put it right.
+///
+/// Recovery is strictly MTP-shaped via `EngineManager::restart_without_mtp`:
+/// an engine that was started with MTP self-drafting armed gets restarted
+/// *without* the `--spec-*` args (self-drafting is the only failure mode
+/// worth changing launch args for); an already-MTP-less engine has nothing
+/// to strip, so it is simply stopped and the app's normal "engine went
+/// away" UX takes over.
+///
+/// A `generating` engine is never touched: a live generation — even one
+/// this model takes 10-20 minutes on — is proof the engine is working, and
+/// killing it would destroy an answer the user is watching. The recovery
+/// path also never replays anything (agent turns have tool side effects;
+/// `chat_stream` handles its own first-message retry).
+async fn maybe_recover_engine(app: &AppHandle, state: &AppState) {
+    let Some(info) = state.engine.activity().await else {
+        return; // not Running — nothing to watch
+    };
+    if info.generating {
+        return; // a live generation is a healthy engine
+    }
+    if state.engine.is_healthy().await {
+        return;
+    }
+    if state.engine.mtp_fallback_armed().await {
+        tracing::warn!(
+            generation = info.generation,
+            "engine wedged while idle with MTP armed; restarting without MTP"
+        );
+        if state
+            .engine
+            .restart_without_mtp(Some(info.generation))
+            .await
+        {
+            emit_engine_status_changed(app);
+        } else {
+            tracing::warn!(
+                "engine wedged but the MTP recovery restart was refused (no snapshot or superseded)"
+            );
+        }
+    } else {
+        tracing::warn!(
+            generation = info.generation,
+            "engine wedged while idle (no MTP fallback armed); stopping it"
+        );
+        if let Err(e) = state.engine.stop_if_current(info.generation).await {
+            tracing::warn!("stopping the wedged engine failed: {e}");
+        } else {
+            emit_engine_status_changed(app);
+        }
     }
 }
 

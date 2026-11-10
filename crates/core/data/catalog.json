@@ -708,6 +708,7 @@
     "mmprojFileName": "Qwen3.6-27B-mmproj-bf16.gguf",
     "mmprojSizeBytes": 931146304,
     "mmprojSha256": "05353347512982ee62317b9d8c89372bc815f4b4043580e7ef3ad411ec1a1cd3",
+    "mtp": true,
     "curated": true,
     "taskDefaults": {
       "general": {

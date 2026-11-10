@@ -23,6 +23,34 @@ use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+/// A streaming-friendly HTTP client for one chat turn against the local
+/// engine (agent/tool loop, subagent, web search) and the cloud chat path —
+/// deliberately **without** `state.http`'s 30 s `read_timeout`. That timeout
+/// is right for REST calls (Hugging Face, the cloud API surface), but fatal
+/// for streaming LLM SSE: llama-server writes no body bytes while it
+/// processes the prompt (a tool-carrying agent prompt is ~350 tokens; on a
+/// disk-streamed model that's measured at 60–100+ s), and at ~0.05–0.08
+/// tok/s generation the inter-token gaps are 12–20 s, spiking past 30 s
+/// under memory pressure. reqwest applies `read_timeout` per body read and
+/// cannot override it per-request, so a stream made with `state.http` is cut
+/// off at exactly 30 s of silence — the
+/// `agent turn: stream read failed: error decoding response body` failures
+/// recorded in `docs/design/DISK_OFFLOAD.md`. The engine's own `chat_stream`
+/// avoids this by using its own client with no read timeout; this is the
+/// same fix for the agent/tool-loop and cloud paths. Tools that hit
+/// third-party HTTP still set their own per-request timeouts
+/// (`WebSearchTool`/`FetchUrlTool` use 20 s), so dropping the client-level
+/// one doesn't weaken them. The long-hang backstops are what `chat_stream`
+/// relies on too: the user cancel flag and the wedged-engine idle watchdog.
+pub(crate) fn turn_http_client() -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .user_agent(concat!("OpenPal/", env!("CARGO_PKG_VERSION")))
+        .connect_timeout(Duration::from_secs(20))
+        .build()
+        .map_err(|e| format!("Couldn't prepare the connection settings: {e}"))
+}
 
 /// Build the per-turn dependency bundle. Cheap enough to do on every turn —
 /// the registry is a handful of small `Arc`-wrapped structs, and the
@@ -65,7 +93,6 @@ pub async fn build_deps(
     data_dir: &Path,
     conn: Arc<Mutex<Connection>>,
     conversation_id: &str,
-    http: reqwest::Client,
     consent: Arc<ConsentBroker>,
     audit: Arc<AuditLog>,
     plugins: &Arc<PluginManager>,
@@ -73,6 +100,7 @@ pub async fn build_deps(
     sampling: SamplingParams,
     injection: Arc<TurnGuard>,
 ) -> Result<AgentDeps, String> {
+    let http = turn_http_client()?;
     let home = std::env::var("HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|_| data_dir.to_path_buf());
@@ -180,13 +208,13 @@ pub const ASK_USER_FRAMING: &str =
 pub async fn build_web_search_deps(
     workspace_dir: &Path,
     data_dir: &Path,
-    http: reqwest::Client,
     consent: Arc<ConsentBroker>,
     audit: Arc<AuditLog>,
     plugins: &PluginManager,
     injection: Arc<TurnGuard>,
     on_event: &(impl Fn(ChatEvent) + Send + Sync),
 ) -> Result<Option<AgentDeps>, String> {
+    let http = turn_http_client()?;
     let port = match plugins
         .ensure_capability_service("search", |event| {
             if let Some(chat_event) = event.as_search_setup_chat_event() {
@@ -240,4 +268,22 @@ pub async fn run_turn(
     on_event: impl Fn(ChatEvent) + Send + Sync + 'static,
 ) -> Result<(), String> {
     run_agent_turn(deps, endpoint, messages, sampling, cancel, on_event).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The turn client must build. Its behavioral contract — **no**
+    /// `read_timeout`, so a server that idles >30 s between SSE chunks isn't
+    /// cut off mid-stream with `error decoding response body` — can't be
+    /// asserted through reqwest's API (the builder config isn't exposed), so
+    /// it's pinned here by the docs: `docs/design/DISK_OFFLOAD.md` records
+    /// the production failure and its live reproduction. The one thing this
+    /// test guards is that the dedicated client keeps existing and building
+    /// rather than silently reverting to `state.http`.
+    #[test]
+    fn turn_http_client_builds() {
+        assert!(turn_http_client().is_ok());
+    }
 }

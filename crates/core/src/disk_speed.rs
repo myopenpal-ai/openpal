@@ -312,6 +312,7 @@ mod tests {
             mmproj_file_name: None,
             mmproj_size_bytes: None,
             mmproj_sha256: None,
+            mtp: false,
             group_id: None,
             release_date: None,
         }
