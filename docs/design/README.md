@@ -21,6 +21,7 @@ Read them as **point-in-time records, not specs**:
 | [MOBILE.md](MOBILE.md) | Extending OpenPal to Android and iOS (roadmap) |
 | [MULTI_DEVICE_SYNC.md](MULTI_DEVICE_SYNC.md) | Syncing conversations across devices |
 | [PORTABLE.md](PORTABLE.md) | The no-install Portable build for Windows, Linux and macOS |
+| [PRIVATE_COMPUTE.md](PRIVATE_COMPUTE.md) | Spike finding: can the inference host share compute without reading requests or replies? (issue #44) |
 | [PROMPT_ENHANCER.md](PROMPT_ENHANCER.md) | "Improve my message", the one-shot draft rewrite |
 | [SPEED_ESTIMATE_ACCURACY.md](SPEED_ESTIMATE_ACCURACY.md) | Making the tokens/second estimate match reality |
 | [WRITING_TOOLS.md](WRITING_TOOLS.md) | The writing tools plugin |
