@@ -19,8 +19,21 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  rust:
-    name: rust (fmt, clippy, test)
+  # The Rust gate used to be one serial job (fmt, clippy, then the three
+  # per-crate test runs) — a ~31m cold path paid one step at a time on a
+  # single runner. Its two big costs, clippy's whole-workspace *check*
+  # compile and the tests' whole-workspace *build* compile, are disjoint
+  # artifact sets, and the three crates' test builds only waited on each
+  # other because they shared the same disk. It's now split: rust-clippy (fmt
+  # + whole-workspace clippy) and a rust-test matrix that runs each crate's
+  # `cargo test` on its own runner. Same commands, same assertions, same
+  # checks — just overlapping instead of queuing. Each job owns a rust-cache
+  # key, so a warm PR restores only what each job needs (the app job's cache
+  # carries core's artifacts too, so a normal PR doesn't re-pay core's
+  # compile). `rust-test` keeps fail-fast off so one crate's failure can't
+  # hide another's results.
+  rust-clippy:
+    name: rust-clippy (fmt, clippy)
     runs-on: ubuntu-latest
     steps:
       # A hosted runner has roughly 14 GB free and this workspace's debug
@@ -44,7 +57,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          key: ci
+          key: ci-clippy
 
       # crates/app links against Tauri/WebKitGTK and cpal (ALSA) even to
       # compile — mirrors portable.yml's Linux dependency list.
@@ -67,16 +80,57 @@ jobs:
       - name: cargo clippy (whole workspace)
         run: cargo clippy --workspace --all-targets -- -D warnings
 
-      # Per-crate, not `--workspace`, so one crate's failure doesn't hide the
-      # others' results in the same step's output.
-      - name: cargo test (openpal-core)
-        run: cargo test -p openpal-core
+  rust-test:
+    name: rust-test (${{ matrix.crate }})
+    runs-on: ubuntu-latest
+    # One job per crate, all started in parallel. fail-fast off, so a failure
+    # in one crate's tests can't cancel the other two crates' results (the
+    # same isolation the old three serial steps gave us).
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - crate: openpal-core
+            cache-key: ci-test-core
+          - crate: openpal-app
+            cache-key: ci-test-app
+          - crate: openpal-bundler
+            cache-key: ci-test-bundler
+    steps:
+      # Same disk-pressure context as rust-clippy: each job's debug `target/`
+      # is a multi-GB slice (the test builds), which is what originally forced
+      # the free-disk step.
+      - name: Free disk space
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /opt/hostedtoolcache/CodeQL
+          df -h /
 
-      - name: cargo test (openpal-app)
-        run: cargo test -p openpal-app
+      - uses: actions/checkout@v4
 
-      - name: cargo test (openpal-bundler)
-        run: cargo test -p openpal-bundler
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.cache-key }}
+
+      # Same system deps as ever — the crates build in one workspace and can
+      # pull GUI/audio dependencies transitively even when compiling tests.
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libjavascriptcoregtk-4.1-dev \
+            libgtk-3-dev \
+            librsvg2-dev \
+            libayatana-appindicator3-dev \
+            libasound2-dev \
+            libssl-dev \
+            build-essential
+
+      - name: cargo test
+        run: cargo test -p ${{ matrix.crate }}
 
   frontend:
     name: frontend (typecheck, unit, mocked e2e)
@@ -111,6 +165,14 @@ jobs:
 
       # Chromium only — this tier drives the Vite dev server with the Tauri
       # IPC layer mocked, never a real webview, so one browser is enough.
+      # Keep the downloaded browser between runs so a warm PR doesn't re-fetch
+      # it; `playwright install` still verifies and installs system deps (and
+      # a newer browser once one is released).
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ms-playwright-chromium-${{ runner.os }}
       - name: Install Playwright's Chromium
         working-directory: ui
         run: npx playwright install --with-deps chromium
