@@ -4397,6 +4397,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "tempfile",
+ "toml 1.1.2+spec-1.1.0",
 ]
 
 [[package]]

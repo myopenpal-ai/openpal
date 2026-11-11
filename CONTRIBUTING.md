@@ -83,6 +83,17 @@ checks pass: the always-on `ci.yml` gate plus the path-filtered `plugin-tests`,
 don't change). The exact check names are in
 [docs/TESTING.md](docs/TESTING.md#branch-strategy-and-required-checks).
 
+## Releasing
+
+OpenPal releases on the semver rule in [docs/RELEASING.md](docs/RELEASING.md):
+`fix` → patch, `feat` → minor, breaking change → major, decided by the
+Conventional-Commits merged since the last tag. Cutting a release is one
+reviewable step — `node scripts/bump-version.mjs` bumps the workspace version
+in `Cargo.toml` (the single source), the five `plugins/*/plugin.json`
+manifests, `Cargo.lock` and `CHANGELOG.md` together — then push a `vX.Y.Z`
+tag so the `portable` workflow builds the signed draft release, and promote
+the draft by hand. A release bump commits as `chore(release): vX.Y.Z`.
+
 ## Where things are
 
 - [ARCHITECTURE.md](ARCHITECTURE.md) — how the app is put together.
