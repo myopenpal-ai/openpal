@@ -182,4 +182,48 @@ mod tests {
         assert!(dest.join("openpal_plugin/__init__.py").is_file());
         assert!(dest.join("openpal_plugin/server.py").is_file());
     }
+
+    /// Every built-in plugin manifest must carry the exact version the
+    /// workspace ships (`[workspace.package] version` in the root Cargo.toml
+    /// — the single source every crate reads via `version.workspace = true`),
+    /// or a bundle built from tag vX.Y.Z would ship plugins that still report
+    /// the previous version. `scripts/bump-version.mjs` keeps them in sync on
+    /// each release; this test is the backstop that flags a drifted hand edit.
+    /// (The staged copies under `crates/app/resources/plugins/` are copied
+    /// verbatim from these sources, so checking the sources suffices.)
+    #[test]
+    fn builtin_plugin_manifests_carry_the_workspace_version() {
+        let root = paths::repo_root();
+        let cargo_toml = fs::read_to_string(root.join("Cargo.toml")).unwrap();
+        let ws: toml::Value = toml::from_str(&cargo_toml).unwrap();
+        let ws_version = ws["workspace"]["package"]["version"]
+            .as_str()
+            .expect("[workspace.package] version must be a string");
+
+        let mut checked = 0usize;
+        for entry in fs::read_dir(root.join("plugins")).unwrap() {
+            let entry = entry.unwrap();
+            let manifest_path = entry.path().join("plugin.json");
+            if !manifest_path.is_file() {
+                continue;
+            }
+            checked += 1;
+            let raw = fs::read_to_string(&manifest_path)
+                .unwrap_or_else(|e| panic!("failed to read {}: {e}", manifest_path.display()));
+            let manifest: serde_json::Value = serde_json::from_str(&raw)
+                .unwrap_or_else(|e| panic!("{} is not valid JSON: {e}", manifest_path.display()));
+            assert_eq!(
+                manifest["version"].as_str().unwrap_or_default(),
+                ws_version,
+                "{} must be versioned {} to match [workspace.package] version, \
+                 or the release bundle reports a stale plugin version",
+                manifest_path.display(),
+                ws_version,
+            );
+        }
+        assert!(
+            checked >= 5,
+            "expected the five built-in plugin manifests under plugins/, found {checked}"
+        );
+    }
 }

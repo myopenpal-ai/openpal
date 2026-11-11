@@ -60,10 +60,12 @@ required status checks without blocking unrelated PRs.
 `crates/core` already had strong inline coverage (182 tests across 22
 modules) before this pass. `crates/app` had thin coverage (pure functions in
 `commands.rs`/`logging.rs` only). `bundler/` had effectively none (3 tests in
-one function) despite being release-critical — it's now at 27, covering the
+one function) despite being release-critical — it's now at 47, covering the
 pure/deterministic logic in every file (path joiners, `sha256_hex`,
 `artifact_names`, `check_license`, `copy_plugin_dir`, `first_line`,
-`resolve_identity`, the icon SDF math).
+`resolve_identity`, the icon SDF math) plus the release-critical parity that
+every built-in `plugins/*/plugin.json` manifest carries the workspace
+`[workspace.package]` version.
 
 **Workspace-wide prerequisite fixed in this pass**: `cargo fmt --check` and
 `cargo clippy --all-targets -- -D warnings` had never been run against this
@@ -513,7 +515,9 @@ GitHub Flow (no release branches at all) and full GitFlow (a permanent
   patch release with no separate stabilization period) and trigger
   `portable.yml`'s existing build + signed **draft** release. A human
   promotes the draft after checking it (and, once native e2e exists, after a
-  green run against it).
+  green run against it). The whole runbook — version rule, the single
+  `scripts/bump-version.mjs` bump commit, tag, promotion — is
+  [docs/RELEASING.md](docs/RELEASING.md).
 - **Hotfixes** branch from the tag/release branch, PR back into that release
   branch, and get cherry-picked forward into `main` (or vice versa) so a
   patch never silently regresses on the next release.

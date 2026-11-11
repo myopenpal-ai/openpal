@@ -139,35 +139,51 @@ mod tests {
         }
     }
 
+    /// The version this build actually reports (`env!("CARGO_PKG_VERSION")`).
+    /// The comparison fixtures below derive from it instead of hardcoding
+    /// literals, so a workspace version bump can never leave a stale "0.1.0"
+    /// in the update tests — they always describe whatever build they run in.
+    fn current() -> Version {
+        current_version()
+    }
+
+    /// The smallest version that is strictly newer than `current` (patch+1).
+    fn next_patch(current: &Version) -> Version {
+        Version::new(current.major, current.minor, current.patch + 1)
+    }
+
     #[test]
     fn newer_version_is_available() {
-        let current = Version::parse("0.1.0").unwrap();
-        let update = is_update_available(&current, &manifest("0.2.0")).unwrap();
-        assert_eq!(update.version, "0.2.0");
+        let current = current();
+        let newer = next_patch(&current);
+        let update = is_update_available(&current, &manifest(&newer.to_string())).unwrap();
+        assert_eq!(update.version, newer.to_string());
     }
 
     #[test]
     fn same_version_is_not_available() {
-        let current = Version::parse("0.1.0").unwrap();
-        assert!(is_update_available(&current, &manifest("0.1.0")).is_none());
+        let current = current();
+        assert!(is_update_available(&current, &manifest(&current.to_string())).is_none());
     }
 
     #[test]
     fn older_version_is_not_available() {
-        let current = Version::parse("0.2.0").unwrap();
-        assert!(is_update_available(&current, &manifest("0.1.0")).is_none());
+        let current = current();
+        let older = next_patch(&current);
+        assert!(is_update_available(&older, &manifest(&current.to_string())).is_none());
     }
 
     #[test]
     fn a_leading_v_is_tolerated() {
-        let current = Version::parse("0.1.0").unwrap();
-        let update = is_update_available(&current, &manifest("v0.2.0")).unwrap();
-        assert_eq!(update.version, "v0.2.0");
+        let current = current();
+        let newer = next_patch(&current);
+        let update = is_update_available(&current, &manifest(&format!("v{newer}"))).unwrap();
+        assert_eq!(update.version, format!("v{newer}"));
     }
 
     #[test]
     fn malformed_manifest_version_is_not_available() {
-        let current = Version::parse("0.1.0").unwrap();
+        let current = current();
         assert!(is_update_available(&current, &manifest("not-a-version")).is_none());
     }
 
