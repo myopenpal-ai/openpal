@@ -1,5 +1,5 @@
 # Real macOS Seatbelt (sandbox-exec) enforcement tests for agent mode
-# (crates/core/src/agent/sandbox/macos.rs). ci.yml's rust jobs run on
+# (crates/core/src/agent/sandbox/macos.rs). ci.yml's rust job runs on
 # ubuntu-latest, where this module doesn't even compile (cfg(target_os =
 # "macos")) — its tests are silently absent there, so without this workflow
 # they would never actually run in CI. Path-filtered to what it exercises,
