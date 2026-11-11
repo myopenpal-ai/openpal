@@ -20,15 +20,18 @@ concurrency:
 
 jobs:
   # The Rust gate used to be one serial job (fmt, clippy, then the three
-  # per-crate test runs). Its two big costs — clippy's whole-workspace *check*
-  # compile and the tests' whole-workspace *build* compile — are disjoint
-  # artifact sets that a single job could only pay one after the other (the
-  # ~30m cold path, ~6m of clippy check plus ~20m of test builds). Splitting
-  # them into two parallel jobs makes those two worlds overlap instead: same
-  # commands, same assertions, same total compile work, shorter wall-clock.
-  # Each job keeps its own cache key so a warm re-run restores only what it
-  # needs, and the split keeps the per-crate test steps serial inside their
-  # job so one crate's failure still can't hide another's results.
+  # per-crate test runs) — a ~31m cold path paid one step at a time on a
+  # single runner. Its two big costs, clippy's whole-workspace *check*
+  # compile and the tests' whole-workspace *build* compile, are disjoint
+  # artifact sets, and the three crates' test builds only waited on each
+  # other because they shared the same disk. It's now split: rust-clippy (fmt
+  # + whole-workspace clippy) and a rust-test matrix that runs each crate's
+  # `cargo test` on its own runner. Same commands, same assertions, same
+  # checks — just overlapping instead of queuing. Each job owns a rust-cache
+  # key, so a warm PR restores only what each job needs (the app job's cache
+  # carries core's artifacts too, so a normal PR doesn't re-pay core's
+  # compile). `rust-test` keeps fail-fast off so one crate's failure can't
+  # hide another's results.
   rust-clippy:
     name: rust-clippy (fmt, clippy)
     runs-on: ubuntu-latest
@@ -78,11 +81,24 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
 
   rust-test:
-    name: rust-test (cargo test per crate)
+    name: rust-test (${{ matrix.crate }})
     runs-on: ubuntu-latest
+    # One job per crate, all started in parallel. fail-fast off, so a failure
+    # in one crate's tests can't cancel the other two crates' results (the
+    # same isolation the old three serial steps gave us).
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - crate: openpal-core
+            cache-key: ci-test-core
+          - crate: openpal-app
+            cache-key: ci-test-app
+          - crate: openpal-bundler
+            cache-key: ci-test-bundler
     steps:
-      # Same disk-pressure context as rust-clippy: this job's debug `target/`
-      # is the ~12 GB slice (the test builds), which is what originally forced
+      # Same disk-pressure context as rust-clippy: each job's debug `target/`
+      # is a multi-GB slice (the test builds), which is what originally forced
       # the free-disk step.
       - name: Free disk space
         run: |
@@ -96,8 +112,10 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          key: ci-test
+          key: ${{ matrix.cache-key }}
 
+      # Same system deps as ever — the crates build in one workspace and can
+      # pull GUI/audio dependencies transitively even when compiling tests.
       - name: Install Linux build dependencies
         run: |
           sudo apt-get update
@@ -111,16 +129,8 @@ jobs:
             libssl-dev \
             build-essential
 
-      # Per-crate, not `--workspace`, so one crate's failure doesn't hide the
-      # others' results in the same step's output.
-      - name: cargo test (openpal-core)
-        run: cargo test -p openpal-core
-
-      - name: cargo test (openpal-app)
-        run: cargo test -p openpal-app
-
-      - name: cargo test (openpal-bundler)
-        run: cargo test -p openpal-bundler
+      - name: cargo test
+        run: cargo test -p ${{ matrix.crate }}
 
   frontend:
     name: frontend (typecheck, unit, mocked e2e)

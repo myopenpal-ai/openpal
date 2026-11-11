@@ -22,7 +22,7 @@ Rust core, a Python-sidecar plugin system, and no server to deploy.
 
 | Workflow | Triggers | Blocks merge? | What it runs |
 |---|---|---|---|
-| `.github/workflows/ci.yml` | every PR, push to `main` | **yes** (required) | two parallel Rust jobs — `rust-clippy` (`cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`) and `rust-test` (`cargo test` per crate: openpal-core, openpal-app, openpal-bundler) — plus the `frontend` job (`ui` typecheck + `vite build`, ESLint, Vitest, Playwright mocked-IPC e2e) |
+| `.github/workflows/ci.yml` | every PR, push to `main` | **yes** (required) | four parallel Rust jobs — `rust-clippy` (`cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`) and a `rust-test` matrix with one job per crate (`rust-test (openpal-core)`, `rust-test (openpal-app)`, `rust-test (openpal-bundler)`, each running `cargo test -p <crate>`) — plus the `frontend` job (`ui` typecheck + `vite build`, ESLint, Vitest, Playwright mocked-IPC e2e) |
 | `.github/workflows/plugin-tests.yml` | PR/push touching `plugins/web-search/**` or `plugins/speech/**` | yes, scoped | pytest for whichever plugin(s) changed |
 | `.github/workflows/engine-e2e.yml` | PR/push touching `crates/core/src/engine/**`, `download.rs`, `sse.rs`, `writing_tools.rs`, `prompt_enhancer.rs`, or any file under `crates/core/tests/` | yes, scoped | the real llama-server engine tests (stages the engine via the bundler, downloads the ~140MB SmolLM2 test model, runs a real chat round-trip for plain chat, Writing Tools Translate/Correct, and the Message improver) |
 | `.github/workflows/injection-e2e.yml` | PR/push touching `crates/core/src/injection/**`, `crates/core/tests/prompt_injection_corpus.rs`, `crates/core/tests/fixtures/prompt_injection/**` or `Cargo.lock` | scoped | the real prompt-injection classifier (downloads the pinned ~300MB model, cached by its sha256) over the documented benign/injection sample sets, one known payload per route, a buried payload's most suspicious window, and a review card's excerpt holding a payload at the end of a window longer than the card shows |
@@ -486,7 +486,8 @@ GitHub Flow (no release branches at all) and full GitFlow (a permanent
 
 - **`main`** is trunk: always releasable, protected. Feature/fix branches
   branch from it and land back via PR + squash merge. Required status
-  checks: `ci.yml`'s `rust-clippy`, `rust-test` and `frontend` jobs (always
+  checks: `ci.yml`'s `rust-clippy`, `rust-test (openpal-core)`,
+  `rust-test (openpal-app)`, `rust-test (openpal-bundler)` and `frontend` jobs (always
   run), plus
   `plugin-tests.yml`/`engine-e2e.yml`/`notify-platforms.yml` (path-filtered — satisfied
   automatically when not triggered, so safe to mark required).
