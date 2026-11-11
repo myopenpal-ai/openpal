@@ -484,13 +484,22 @@ release branches** — the common SaaS-industry middle ground between plain
 GitHub Flow (no release branches at all) and full GitFlow (a permanent
 `develop` branch, which adds process weight this project doesn't need):
 
-- **`main`** is trunk: always releasable, protected. Feature/fix branches
-  branch from it and land back via PR + squash merge. Required status
-  checks: `ci.yml`'s `rust-clippy`, `rust-test (openpal-core)`,
-  `rust-test (openpal-app)`, `rust-test (openpal-bundler)` and `frontend` jobs (always
-  run), plus
-  `plugin-tests.yml`/`engine-e2e.yml`/`notify-platforms.yml` (path-filtered — satisfied
-  automatically when not triggered, so safe to mark required).
+- **`main`** is trunk: always releasable, protected — both now enforced in the
+  repository, not just documented. Feature/fix branches branch from it and
+  land back via **PR + squash merge**, and the repository settings plus
+  `main`'s branch protection make that the only path: squash is the only
+  merge method offered (merge commits and rebase merges are disabled), head
+  branches are deleted automatically on merge, direct pushes to `main` are
+  rejected, and force-pushes and branch deletion are blocked. The required
+  checks are recorded on `main`'s branch protection:
+  - `ci.yml` (always run): `rust-clippy (fmt, clippy)`,
+    `rust-test (openpal-core)`, `rust-test (openpal-app)`,
+    `rust-test (openpal-bundler)`,
+    `frontend (typecheck, unit, mocked e2e)`.
+  - Path-filtered (auto-satisfied when their paths don't change, so safe to
+    mark required): `plugin-tests.yml` → `speech`; `engine-e2e.yml` →
+    `engine-e2e`; `notify-platforms.yml` → `notify on macos (clippy, tests)`,
+    `notify on windows (clippy, tests)`, `notify on android (clippy)`.
 - **`release/vX.Y`** branches are cut from `main` when stabilizing a release
   — only fixes land here after the cut, no new features. Same required
   checks as `main`; also protected.
@@ -503,10 +512,12 @@ GitHub Flow (no release branches at all) and full GitFlow (a permanent
   branch, and get cherry-picked forward into `main` (or vice versa) so a
   patch never silently regresses on the next release.
 
-Setting the actual GitHub branch-protection rules (which checks are
-"required", merge restrictions) is a repo-admin action outside this plan's
-scope — apply the mapping above via **Settings → Branches** once these
-workflows have a few green runs to build confidence in.
+These rules are live, not a plan: the repository is set to squash-only with
+head-branch deletion, and `main`'s branch protection enforces the
+required-check set above (also for admins) and blocks direct pushes,
+force-pushes and deletions. Keep them in sync: if a workflow is renamed,
+moved or dropped, update the required set on `main`'s branch protection in
+the same change, so no PR is ever blocked on a check that no longer exists.
 
 ## Coverage tooling
 
