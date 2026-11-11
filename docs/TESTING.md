@@ -496,10 +496,16 @@ GitHub Flow (no release branches at all) and full GitFlow (a permanent
     `rust-test (openpal-core)`, `rust-test (openpal-app)`,
     `rust-test (openpal-bundler)`,
     `frontend (typecheck, unit, mocked e2e)`.
-  - Path-filtered (auto-satisfied when their paths don't change, so safe to
-    mark required): `plugin-tests.yml` → `speech`; `engine-e2e.yml` →
-    `engine-e2e`; `notify-platforms.yml` → `notify on macos (clippy, tests)`,
-    `notify on windows (clippy, tests)`, `notify on android (clippy)`.
+  - Path-filtered in effect (auto-satisfied when their paths don't change,
+    so safe to mark required): `plugin-tests.yml` → `speech`; `engine-e2e.yml`
+    → `engine-e2e`; `notify-platforms.yml` → `notify on macos (clippy, tests)`,
+    `notify on windows (clippy, tests)`, `notify on android (clippy)`. These
+    workflows always run on every PR but skip their heavy jobs behind a
+    `dorny/paths-filter` job-level condition, so the check always reports a
+    conclusion (a skipped job reports success) — GitHub leaves a required
+    check "Expected" and blocks the merge when the whole workflow is skipped
+    by a workflow-level `paths` filter, which is why filtering lives at the
+    job level here.
 - **`release/vX.Y`** branches are cut from `main` when stabilizing a release
   — only fixes land here after the cut, no new features. Same required
   checks as `main`; also protected.

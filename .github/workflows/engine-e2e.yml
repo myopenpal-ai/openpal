@@ -8,16 +8,15 @@
 # rather than gating every PR.
 name: engine-e2e
 
+# The pull_request trigger deliberately has NO workflow-level `paths`
+# filter: a required check whose workflow is skipped by path filtering stays
+# "Expected"/Pending and blocks merging (GitHub docs: "Avoid requiring
+# workflows that can be skipped"). Instead the workflow always runs and the
+# heavy `engine-e2e` job below is skipped by a job-level condition when the
+# engine's paths didn't change — a skipped job reports success, so the
+# required check is always satisfied without taxing unrelated PRs.
 on:
   pull_request:
-    paths:
-      - "crates/core/src/engine/**"
-      - "crates/core/src/download.rs"
-      - "crates/core/src/sse.rs"
-      - "crates/core/src/writing_tools.rs"
-      - "crates/core/src/prompt_enhancer.rs"
-      - "crates/core/tests/**"
-      - ".github/workflows/engine-e2e.yml"
   push:
     branches: [main]
     paths:
@@ -33,7 +32,29 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Lightweight always-run gate: decides whether `engine-e2e` needs to run.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      engine: ${{ steps.filter.outputs.engine }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            engine:
+              - "crates/core/src/engine/**"
+              - "crates/core/src/download.rs"
+              - "crates/core/src/sse.rs"
+              - "crates/core/src/writing_tools.rs"
+              - "crates/core/src/prompt_enhancer.rs"
+              - "crates/core/tests/**"
+              - ".github/workflows/engine-e2e.yml"
+
   engine-e2e:
+    needs: changes
+    if: needs.changes.outputs.engine == 'true'
     runs-on: ubuntu-latest
     # A cold build cache (every new stable Rust changes the cache key) spends
     # about 12 minutes compiling openpal-core's tests, now that they include
