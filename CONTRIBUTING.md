@@ -74,6 +74,15 @@ Then open the PR with `Closes #<issue>` at the top of the description (the
 template has the slot) and fill in how you verified it. Say plainly if a check
 was skipped or couldn't run.
 
+Merging is **squash-only**: every PR lands on `main` as exactly one commit
+carrying its Conventional-Commits title, and the head branch is deleted
+automatically. `main` is protected — direct pushes are rejected, force-pushes
+and branch deletion are blocked, and a PR cannot merge until its required
+checks pass: the always-on `ci.yml` gate plus the path-filtered `plugin-tests`,
+`engine-e2e` and `notify-platforms` checks (auto-satisfied when their paths
+don't change). The exact check names are in
+[docs/TESTING.md](docs/TESTING.md#branch-strategy-and-required-checks).
+
 ## Where things are
 
 - [ARCHITECTURE.md](ARCHITECTURE.md) — how the app is put together.
