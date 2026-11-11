@@ -14,6 +14,11 @@ export default defineConfig({
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
   reporter: process.env.CI ? "github" : "list",
+  // The CI runner has 4 vCPUs and Playwright's default caps workers at half of
+  // them; run the e2e specs across all four on CI (the CI e2e tier was ~5.5m
+  // of the frontend job's wall-clock with 2 workers). Local runs keep the
+  // default so a dev laptop isn't saturated.
+  workers: process.env.CI ? 4 : undefined,
   use: {
     baseURL: "http://localhost:5173",
     trace: "retain-on-failure",

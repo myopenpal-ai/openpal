@@ -48,6 +48,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: engine-e2e
+          # Like notify-platforms.yml: a red run that keeps nothing makes the
+          # next push re-pay the ~12m cold-harness compile on this path.
+          cache-on-failure: true
 
       - name: Install Linux build dependencies
         run: |
