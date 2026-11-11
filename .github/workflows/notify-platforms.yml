@@ -49,18 +49,52 @@ jobs:
               - "Cargo.lock"
               - ".github/workflows/notify-platforms.yml"
 
-  desktop:
+  # Two separate static-named jobs instead of a matrix on purpose (#46): a
+  # matrix job whose `name:` embeds `${{ matrix.name }}` reports the literal,
+  # unexpanded name when it is skipped by the job-level `if` below, so required
+  # checks named `notify on macos (clippy, tests)` / `notify on windows
+  # (clippy, tests)` never appear and stay "Expected", blocking the merge
+  # (skipped speech/engine-e2e/android jobs merge fine because their names are
+  # static). Static names keep the required check satisfiable on every PR while
+  # unrelated PRs still don't pay the macOS/Windows build.
+  macos:
     needs: changes
     if: needs.changes.outputs.notify == 'true'
-    name: notify on ${{ matrix.name }} (clippy, tests)
-    runs-on: ${{ matrix.os }}
+    name: notify on macos (clippy, tests)
+    runs-on: macos-15-intel
     timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { name: macos, os: macos-15-intel }
-          - { name: windows, os: windows-latest }
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      # Saved on failure too: a cold build that keeps nothing makes the next
+      # push pay it again.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: notify-macos
+          cache-on-failure: true
+
+      # The whole app crate, not just notify/: a backend's dead-code allowances
+      # and its callers in commands.rs and lib.rs only hold together as one
+      # build per OS.
+      - name: cargo clippy (openpal-app)
+        run: cargo clippy -p openpal-app --all-targets -- -D warnings
+
+      # The notify tests run each backend this OS can build against the shared
+      # contract (notify::assert_contract); the macOS center itself refuses to
+      # exist outside an app bundle, so only its pure parts run here.
+      - name: cargo test (notify)
+        run: cargo test -p openpal-app notify
+
+  windows:
+    needs: changes
+    if: needs.changes.outputs.notify == 'true'
+    name: notify on windows (clippy, tests)
+    runs-on: windows-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
@@ -72,7 +106,7 @@ jobs:
       # that keeps nothing makes the next push pay it again.
       - uses: Swatinem/rust-cache@v2
         with:
-          key: notify-${{ matrix.name }}
+          key: notify-windows
           cache-on-failure: true
 
       # SQLCipher's vendored OpenSSL (crates/core/Cargo.toml) is a ~13 min
@@ -81,7 +115,6 @@ jobs:
       # bin/ already on PATH for the test binary's DLLs). Releases still
       # vendor it: portable.yml doesn't set OPENSSL_NO_VENDOR.
       - name: Use the runner's OpenSSL (Windows)
-        if: runner.os == 'Windows'
         shell: bash
         run: |
           dir="C:/Program Files/OpenSSL"
@@ -107,8 +140,7 @@ jobs:
         run: cargo clippy -p openpal-app --all-targets -- -D warnings
 
       # The notify tests run each backend this OS can build against the shared
-      # contract (notify::assert_contract); the macOS center itself refuses to
-      # exist outside an app bundle, so only its pure parts run here.
+      # contract (notify::assert_contract).
       - name: cargo test (notify)
         run: cargo test -p openpal-app notify
 
