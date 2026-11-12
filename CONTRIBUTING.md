@@ -74,14 +74,20 @@ Then open the PR with `Closes #<issue>` at the top of the description (the
 template has the slot) and fill in how you verified it. Say plainly if a check
 was skipped or couldn't run.
 
-Merging is **squash-only**: every PR lands on `main` as exactly one commit
-carrying its Conventional-Commits title, and the head branch is deleted
-automatically. `main` is protected — direct pushes are rejected, force-pushes
-and branch deletion are blocked, and a PR cannot merge until its required
-checks pass: the always-on `ci.yml` gate plus the path-filtered `plugin-tests`,
-`engine-e2e` and `notify-platforms` checks (auto-satisfied when their paths
-don't change). The exact check names are in
+Merging is **squash-only** through the **merge queue**: every PR lands on
+`main` as exactly one commit carrying its Conventional-Commits title, and the
+head branch is deleted automatically. `main` is protected (ruleset
+`main: required checks + merge queue`) — direct pushes are rejected,
+force-pushes and branch deletion are blocked, and a PR goes through the queue,
+which re-tests it against the latest `main` (and the other queued PRs) before
+merging. Required checks are the always-on `ci.yml` gate plus the
+path-filtered `plugin-tests`, `engine-e2e` and `notify-platforms` checks
+(auto-satisfied when their paths don't change). The exact check names are in
 [docs/TESTING.md](docs/TESTING.md#branch-strategy-and-required-checks).
+Because the queue keeps branches up to date itself, **an open PR never needs a
+manual rebase just because another PR merged** — rebase only to resolve a real
+conflict. To merge, click **Merge when ready** once checks pass, or enable
+**auto-merge** on the PR for green PRs to queue by themselves.
 
 ## Releasing
 
