@@ -22,7 +22,9 @@ concurrency:
 
 jobs:
   agent-sandbox-e2e:
-    runs-on: macos-14
+    # macOS 14 images were retired 2026-11-02 (cf. the notify-platforms
+    # migration in 4952409); macos-15-intel matches the old leg's resources.
+    runs-on: macos-15-intel
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
