@@ -52,3 +52,29 @@ cd ui && npm run build && npm run lint && npm test && npm run test:e2e
 
 Every change is linked to a GitHub issue, and the PR body says `Closes #N`.
 Branch names and the PR checklist are in [CONTRIBUTING.md](CONTRIBUTING.md).
+
+### Merging: the merge queue on `main`
+
+`main` is protected and merges through a **merge queue** (ruleset
+`main: required checks + merge queue`, squash-only). How it interacts with
+pushing and merging PRs:
+
+- **No manual rebase is needed** when an earlier PR merges while yours is
+  open. Merging a PR does *not* invalidate the others: the queue re-tests
+  each queued PR against the latest `main` (and the other queued PRs) and
+  merges them once green, in order. Don't rebase just "to be up to date" —
+  only rebase to resolve a *real* conflict.
+- **To merge a PR**: either click **Merge when ready** in the PR once checks
+  pass (it joins the queue immediately), or enable **auto-merge** so green PRs
+  queue by themselves. This is a manual, per-PR action — enabling auto-merge
+  on `main` is a repo setting, not something that applies to every PR.
+- If a queued PR ends up failing its checks against latest `main` (e.g. a real
+  conflict with another queued PR), it is removed from the queue and stays
+  open; fix the branch (rebase/merge `main`) and queue it again.
+- Head branches are deleted automatically after merge. Since history is
+  squash-only, force-pushing a stray fix to a merged branch is expected and
+  harmless (`force-with-lease`).
+- CI: every workflow whose checks gate `main` must also fire on `merge_group`
+  events (the queue runs required checks on a throwaway `gh-readonly-queue/`
+  branch). If you add a new gating workflow, add `merge_group:` to its
+  triggers or the queue will stall waiting for checks that never run.

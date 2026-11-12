@@ -22,12 +22,7 @@ concurrency:
 
 jobs:
   agent-sandbox-e2e:
-    # macOS 14 images were retired 2026-11-02 (cf. the notify-platforms
-    # migration in 4952409); macos-15-intel matches the old leg's resources.
     runs-on: macos-15-intel
-    # Cold rust-cache on this runner + the Seatbelt suite runs well past 10m
-    # (the pre-merge-queue run of this job took ~21m); 60m matches what the
-    # merge-queue PR (#49) uses so the check isn't killed mid-test.
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
