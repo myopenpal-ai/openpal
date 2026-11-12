@@ -28,6 +28,14 @@ const hasVoice = ({ plugins }: SettingsSearchContext) => plugins.some((p) => p.i
 const showsNotifications = ({ appInfo }: SettingsSearchContext) => hasNativeNotifications(appInfo);
 /** Android words the same switch for a phone (the `_mobile` keys). */
 const onAndroid = ({ appInfo }: SettingsSearchContext) => appInfo?.isAndroid ?? false;
+/** The Remote inference section only shows on desktop, and only while the
+ * `remote-inference` add-on is on (see `RemoteInferenceSection`). The
+ * capability read is defensive — settingsSearch's tests build minimal
+ * plugins (an `id` alone), and `remoteInferenceAvailable` expects the full
+ * shape that real plugin state always carries. */
+const hasRemoteInference = ({ plugins, appInfo }: SettingsSearchContext) =>
+  !(appInfo?.isAndroid ?? false) &&
+  plugins.some((p) => p.capabilities?.includes("remote-inference") && p.enabled);
 
 /**
  * Everything the More dialog's search can find inside Settings, in nav
@@ -158,6 +166,12 @@ export const SETTINGS_SEARCH_ENTRIES = [
     label: "remoteClient:summary",
     hint: "remoteClient:hint",
     when: (c) => c.appInfo?.isAndroid ?? false,
+  },
+  {
+    section: "devices",
+    label: "remoteInference:pluginName",
+    hint: "remoteInference:hint",
+    when: (c) => hasRemoteInference(c),
   },
   { section: "devices", label: "settingsSheet.sync.summary" },
   {

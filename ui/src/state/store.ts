@@ -1878,6 +1878,17 @@ export function smartModelRouterAvailable(plugins: PluginInfo[]): boolean {
   return plugins.some((p) => p.capabilities.includes("smart-model-router") && p.enabled);
 }
 
+/** Whether the Remote inference plugin is enabled — gates Settings → Devices'
+ * "Remote inference" section (`RemoteInferenceSection`). Same
+ * capability-and-`enabled` check as `modelBrowserAvailable`, not a fixed
+ * plugin id, so any plugin that advertises `remote-inference` lights it up.
+ * Deliberately does NOT check `service` (a python-less plugin's service is
+ * always "notApplicable", never "running" — see plugins/PLUGINS.md section 8)
+ * or `setup` (trivially "ready" the instant a python-less plugin is enabled). */
+export function remoteInferenceAvailable(plugins: PluginInfo[]): boolean {
+  return plugins.some((p) => p.capabilities.includes("remote-inference") && p.enabled);
+}
+
 /** Whether the signed-in account can chat with a cloud model. A UX guard
  * only — the real gate is the backend refusing the request server-side (see
  * `require_entitlement` on the Rust side); this just decides whether to show

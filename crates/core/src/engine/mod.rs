@@ -24,7 +24,7 @@ use crate::types::{
     AttachmentKind, ChatEvent, ChatMessage, EngineConfig, EngineStatus, RiskSignal, SamplingParams,
     TaskType,
 };
-use crate::Result;
+use crate::{Error, Result};
 use async_trait::async_trait;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
@@ -240,8 +240,22 @@ pub trait EngineBackend: Send + Sync {
 /// place mono-model-first is enforced, on every platform: whichever backend
 /// this wraps, there is only ever one `EngineManager` per app instance (see
 /// `crates/app/src/state.rs`'s `AppState`).
+///
+/// The one backend does not have to stay fixed for the app's whole life: the
+/// remote-inference plugin's "connect" swaps the engine surface over to a
+/// [`RemoteBackend`](crate::remote::client::RemoteBackend) — parking the
+/// local backend (loaded model, running process, idle clock — everything)
+/// untouched, to be restored on "disconnect". That swap is still exactly-one:
+/// while a remote engine is active it is *the* model every chat/status/
+/// classify call hits; nothing ever consults two backends at once.
 pub struct EngineManager {
-    backend: Box<dyn EngineBackend>,
+    /// `backends.active` is the engine every method below delegates to;
+    /// `backends.parked` holds the local backend aside while a remote one is
+    /// active. A `std::sync::Mutex` around both (not `tokio`'s) so each
+    /// method can clone the cheap `Arc` snapshot once and then run the
+    /// backend without holding the lock across an `.await` — a connect /
+    /// disconnect can never block behind a long streaming turn.
+    backends: std::sync::Mutex<EngineBackends>,
     /// The manager's own client for out-of-band HTTP checks (`is_healthy`'s
     /// `/health` probe and the MTP recovery watchdog) — deliberately
     /// separate from the backend's request client, so a health probe is
@@ -249,40 +263,116 @@ pub struct EngineManager {
     client: reqwest::Client,
 }
 
+struct EngineBackends {
+    /// The engine every [`EngineManager`] method currently routes to.
+    active: Arc<dyn EngineBackend>,
+    /// The replaced backend, kept aside while `active` is a remote one —
+    /// `Some` exactly between [`EngineManager::activate_remote`] and
+    /// [`EngineManager::deactivate_remote`], `None` otherwise.
+    parked: Option<Arc<dyn EngineBackend>>,
+}
+
 impl EngineManager {
     pub fn new(log_dir: PathBuf) -> Self {
         Self {
-            backend: Box::new(SubprocessBackend::new(log_dir)),
+            backends: std::sync::Mutex::new(EngineBackends {
+                active: Arc::from(SubprocessBackend::new(log_dir)),
+                parked: None,
+            }),
             client: reqwest::Client::new(),
         }
     }
 
     /// Zero-cost seam for tests (and later phases) that need a specific
     /// backend rather than the platform default — no production call site
-    /// uses this today.
+    /// uses this today (desktop goes through [`Self::new`], Android goes
+    /// through this with a `RemoteBackend`, and the remote-inference
+    /// plugin's connect swaps via [`Self::activate_remote`] instead).
     pub fn with_backend(backend: Box<dyn EngineBackend>) -> Self {
         Self {
-            backend,
+            backends: std::sync::Mutex::new(EngineBackends {
+                active: Arc::from(backend),
+                parked: None,
+            }),
             client: reqwest::Client::new(),
+        }
+    }
+
+    /// Cheap `Arc` snapshot of whichever engine is currently active — the
+    /// only way this module's methods touch `self.backends`, so a swap can
+    /// never race a method across an `.await`.
+    fn active(&self) -> Arc<dyn EngineBackend> {
+        self.backends.lock().unwrap().active.clone()
+    }
+
+    /// Whether the app's single engine surface currently routes to a remote
+    /// backend rather than the local engine — `false` by default, and on
+    /// any backend the app was started with directly (`with_backend`).
+    /// Nothing in `EngineManager` decides this on its own: `crates/app`'s
+    /// `remote_inference_*` commands flip it when the remote-inference
+    /// plugin connects or disconnects. `crates/app`'s `start_engine` checks
+    /// it to refuse loading a local model mid-remote-connection.
+    pub fn remote_active(&self) -> bool {
+        self.backends.lock().unwrap().parked.is_some()
+    }
+
+    /// Swap the app's engine surface from the local backend to `remote` —
+    /// the second half of the remote-inference plugin's "Connect" (the
+    /// first half being `RemoteBackend::pair`, which establishes the
+    /// encrypted, pinned, authenticated connection the remote backend
+    /// talks over). The local backend is parked exactly as it is — loaded
+    /// model, running process, idle clock — and restored untouched by
+    /// [`Self::deactivate_remote`], so connecting never starts a local
+    /// engine and disconnecting never loses one. While a remote is active
+    /// it is *the* engine: chat, status, and the request-triage/risk
+    /// classify calls all route to it (mono-model — one model, wherever it
+    /// runs). An already-active remote is refused: one connection at a time.
+    pub async fn activate_remote(&self, remote: Box<dyn EngineBackend>) -> Result<()> {
+        let mut backends = self.backends.lock().unwrap();
+        if backends.parked.is_some() {
+            return Err(Error::Engine(
+                "A remote engine is already active.".to_string(),
+            ));
+        }
+        backends.parked = Some(backends.active.clone());
+        backends.active = Arc::from(remote);
+        Ok(())
+    }
+
+    /// Restore the parked local backend, dropping the remote one — the
+    /// engine-routing half of the remote-inference plugin's "Disconnect"
+    /// and of disabling that plugin mid-connection. Idempotent: a no-op
+    /// when nothing is parked.
+    pub async fn deactivate_remote(&self) {
+        let mut backends = self.backends.lock().unwrap();
+        if let Some(local) = backends.parked.take() {
+            backends.active = local;
         }
     }
 
     /// Set (or clear, in portable mode with no DEK) this engine's log key —
     /// called once from `state::finish_unlock`, right alongside
-    /// `crate::logging::upgrade_to_encrypted`'s app-log equivalent.
+    /// `crate::logging::upgrade_to_encrypted`'s app-log equivalent. Applied
+    /// to the parked backend too (if any), so the remote client's own
+    /// connectivity log is never left plaintext when a connection outlives
+    /// a later switch.
     pub fn set_dek(&self, dek: Option<&DataKey>) {
-        self.backend.set_dek(dek)
+        let backends = self.backends.lock().unwrap();
+        backends.active.set_dek(dek);
+        if let Some(parked) = &backends.parked {
+            parked.set_dek(dek);
+        }
     }
 
     /// Last `max_lines` lines of the currently-active engine log.
     pub fn tail_log(&self, max_lines: usize) -> String {
-        self.backend.tail_log(max_lines)
+        self.active().tail_log(max_lines)
     }
 
     /// Both engine log generations, decrypted and concatenated with headers,
     /// for "Export logs".
     pub fn export_logs(&self) -> String {
-        self.backend.export_logs()
+        self.active().export_logs()
     }
 
     /// Start (or restart) the engine with the given model. See
@@ -296,7 +386,7 @@ impl EngineManager {
         disk_slow: bool,
         startup_timeout: Duration,
     ) -> Result<()> {
-        self.backend
+        self.active()
             .start(
                 server_binary,
                 model_id,
@@ -310,47 +400,47 @@ impl EngineManager {
 
     /// Kill the engine if running. Idempotent.
     pub async fn stop(&self) -> Result<()> {
-        self.backend.stop().await
+        self.active().stop().await
     }
 
     pub async fn status(&self) -> EngineStatus {
-        self.backend.status().await
+        self.active().status().await
     }
 
     /// Connection details for the running engine, or `None` if it isn't
     /// running (or the backend has no HTTP surface at all — see
     /// [`EngineBackend::endpoint`]).
     pub async fn endpoint(&self) -> Option<EngineEndpoint> {
-        self.backend.endpoint().await
+        self.active().endpoint().await
     }
 
     /// Idle/activity snapshot for the auto-unload feature, or `None` unless
     /// the engine is currently `Running`.
     pub async fn activity(&self) -> Option<ActivityInfo> {
-        self.backend.activity().await
+        self.active().activity().await
     }
 
     /// Reset the auto-unload idle clock to now. Called after a chat turn
     /// completes, and by the explicit "snooze" command — both are just
     /// "activity happened". A no-op unless the engine is `Running`.
     pub async fn touch_activity(&self) {
-        self.backend.touch_activity().await
+        self.active().touch_activity().await
     }
 
     /// Mark a chat turn starting. Pairs with [`Self::end_generation`].
     pub async fn begin_generation(&self) {
-        self.backend.begin_generation().await
+        self.active().begin_generation().await
     }
 
     /// Mark a chat turn ending, and reset the idle clock.
     pub async fn end_generation(&self) {
-        self.backend.end_generation().await
+        self.active().end_generation().await
     }
 
     /// Like [`Self::stop`], but a no-op if the engine has moved on to a
     /// different generation since `expected_generation` was captured.
     pub async fn stop_if_current(&self, expected_generation: u64) -> Result<()> {
-        self.backend.stop_if_current(expected_generation).await
+        self.active().stop_if_current(expected_generation).await
     }
 
     /// True when the currently-loaded engine is genuinely responsive — or,
@@ -363,10 +453,11 @@ impl EngineManager {
     /// recovery watchdog and the agent-turn failure hook: quiet (one
     /// loopback GET, 3s cap), best-effort (never throws).
     pub async fn is_healthy(&self) -> bool {
-        let Some(endpoint) = self.backend.endpoint().await else {
+        let active = self.active();
+        let Some(endpoint) = active.endpoint().await else {
             return true; // not Running — nothing to health-check
         };
-        if self.backend.child_died().await {
+        if active.child_died().await {
             return false;
         }
         let base = endpoint.base_url.trim_end_matches("/v1");
@@ -384,7 +475,7 @@ impl EngineManager {
     /// an engine that was already running MTP-less has no stripped fallback
     /// to land on.
     pub async fn mtp_fallback_armed(&self) -> bool {
-        self.backend.mtp_restart_snapshot().await.is_some()
+        self.active().mtp_restart_snapshot().await.is_some()
     }
 
     /// Restart the current engine *without* its MTP self-drafting args,
@@ -398,7 +489,8 @@ impl EngineManager {
     /// was captured (only the engine the caller observed gets restarted),
     /// or when the restart itself fails (the caller's error path stands).
     pub async fn restart_without_mtp(&self, expected_generation: Option<u64>) -> bool {
-        let Some(restart) = self.backend.mtp_restart_snapshot().await else {
+        let active = self.active();
+        let Some(restart) = active.mtp_restart_snapshot().await else {
             return false;
         };
         // Only restart the engine the caller actually observed — a
@@ -407,7 +499,7 @@ impl EngineManager {
         // copy of the engine it replaced. `None` keeps the historical
         // `chat_stream` contract: when no engine was observed at all, we act
         // only while there still isn't one (the crashed engine was ours).
-        let still_ours = match (expected_generation, self.backend.activity().await) {
+        let still_ours = match (expected_generation, active.activity().await) {
             (Some(expected), Some(info)) => info.generation == expected,
             (None, None) => true,
             _ => false,
@@ -452,7 +544,7 @@ impl EngineManager {
         // — a concurrent start()/stop() that supersedes the engine mid-retry
         // gets to keep it (`start()` already bails safely on a generation
         // mismatch); we bow out to the normal error path instead of racing it.
-        let generation = self.backend.activity().await.map(|a| a.generation);
+        let generation = self.active().activity().await.map(|a| a.generation);
         let emitted_answer = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
 
         let first = self
@@ -518,7 +610,7 @@ impl EngineManager {
             }
             on_event(ev);
         });
-        self.backend
+        self.active()
             .chat_stream(messages, sampling, cancel, forward.as_mut())
             .await
     }
@@ -534,7 +626,10 @@ impl EngineManager {
     /// logged (`tracing::info!`) — this classification never appears in the
     /// chat UI, only in the app's log file.
     pub async fn classify(&self, text: &str) -> Result<Option<TaskType>> {
-        let label = self.backend.raw_classify(build_classify_body(text)).await?;
+        let label = self
+            .active()
+            .raw_classify(build_classify_body(text))
+            .await?;
         let tag = label.and_then(|l| TaskType::ALL.into_iter().find(|t| t.wire() == l));
         if let Some(tag) = tag {
             tracing::info!("triage: classified request as {}", tag.wire());
@@ -559,7 +654,7 @@ impl EngineManager {
     /// access to that file to find.
     pub async fn classify_risk(&self, text: &str) -> Result<Option<RiskSignal>> {
         let label = self
-            .backend
+            .active()
             .raw_classify(build_risk_classify_body(text))
             .await?;
         Ok(label.and_then(|l| RiskSignal::ALL.into_iter().find(|s| s.wire() == l)))
@@ -567,7 +662,7 @@ impl EngineManager {
 
     /// Path of the engine log file (shown to users in "help me debug" flows).
     pub fn log_path(&self) -> PathBuf {
-        self.backend.log_path()
+        self.active().log_path()
     }
 }
 
@@ -1576,5 +1671,178 @@ mod tests {
             model_id: "qwen3.6-27b".to_string(),
             request_timeout_secs: 300,
         }
+    }
+
+    // ------------------------------------------------------------------
+    // Remote routing: the remote-inference plugin's connect/disconnect
+    // ------------------------------------------------------------------
+
+    /// Counts how many times its callers hit each observable method, so a
+    /// test can prove the active backend really is the one being routed to
+    /// — and that the parked one is left untouched.
+    #[derive(Default)]
+    struct ProbeCounts {
+        statuses: u32,
+        chats: u32,
+        classifies: u32,
+    }
+
+    struct ProbeBackend {
+        counts: Arc<std::sync::Mutex<ProbeCounts>>,
+    }
+
+    #[async_trait]
+    impl EngineBackend for ProbeBackend {
+        async fn start(
+            &self,
+            _server_binary: &Path,
+            _model_id: &str,
+            _model_path: &Path,
+            _cfg: &EngineConfig,
+            _disk_slow: bool,
+            _startup_timeout: Duration,
+        ) -> Result<()> {
+            Ok(())
+        }
+        async fn stop(&self) -> Result<()> {
+            Ok(())
+        }
+        async fn status(&self) -> EngineStatus {
+            self.counts.lock().unwrap().statuses += 1;
+            EngineStatus::Stopped
+        }
+        async fn activity(&self) -> Option<ActivityInfo> {
+            None
+        }
+        async fn touch_activity(&self) {}
+        async fn begin_generation(&self) {}
+        async fn end_generation(&self) {}
+        async fn stop_if_current(&self, _expected_generation: u64) -> Result<()> {
+            Ok(())
+        }
+        async fn chat_stream(
+            &self,
+            _messages: &[ChatMessage],
+            _sampling: &SamplingParams,
+            _cancel: Arc<AtomicBool>,
+            _on_event: &mut (dyn FnMut(ChatEvent) + Send),
+        ) -> Result<()> {
+            self.counts.lock().unwrap().chats += 1;
+            Ok(())
+        }
+        async fn raw_classify(&self, _body: serde_json::Value) -> Result<Option<String>> {
+            self.counts.lock().unwrap().classifies += 1;
+            Ok(None)
+        }
+        fn set_dek(&self, _dek: Option<&DataKey>) {}
+        fn tail_log(&self, _max_lines: usize) -> String {
+            String::new()
+        }
+        fn export_logs(&self) -> String {
+            String::new()
+        }
+        fn log_path(&self) -> PathBuf {
+            PathBuf::new()
+        }
+    }
+
+    fn probe() -> (ProbeBackend, Arc<std::sync::Mutex<ProbeCounts>>) {
+        let counts = Arc::new(std::sync::Mutex::new(ProbeCounts::default()));
+        let backend = ProbeBackend {
+            counts: counts.clone(),
+        };
+        (backend, counts)
+    }
+
+    /// Chat, status, and classify all route to the remote backend once
+    /// `activate_remote` runs, and back to the (untouched) local backend on
+    /// `deactivate_remote` — one engine at a time, mono-model preserved.
+    #[tokio::test]
+    async fn remote_activation_routes_every_surface_and_disconnect_restores_local() {
+        let (local, local_counts) = probe();
+        let (remote, remote_counts) = probe();
+        let manager = EngineManager::with_backend(Box::new(local));
+
+        assert!(!manager.remote_active(), "local by default");
+        manager.status().await;
+        manager
+            .chat_stream(
+                &[],
+                &SamplingParams::default(),
+                Arc::new(AtomicBool::new(false)),
+                |_| {},
+            )
+            .await
+            .unwrap();
+        manager.classify("hello").await.unwrap();
+        assert_eq!(local_counts.lock().unwrap().statuses, 1);
+        assert_eq!(local_counts.lock().unwrap().chats, 1);
+        assert_eq!(local_counts.lock().unwrap().classifies, 1);
+
+        manager.activate_remote(Box::new(remote)).await.unwrap();
+        assert!(manager.remote_active(), "route to the remote engine now");
+
+        manager.status().await;
+        manager
+            .chat_stream(
+                &[],
+                &SamplingParams::default(),
+                Arc::new(AtomicBool::new(false)),
+                |_| {},
+            )
+            .await
+            .unwrap();
+        manager.classify("hello").await.unwrap();
+        assert_eq!(
+            remote_counts.lock().unwrap().statuses,
+            1,
+            "status reflects the remote engine while connected"
+        );
+        assert_eq!(remote_counts.lock().unwrap().chats, 1);
+        assert_eq!(
+            remote_counts.lock().unwrap().classifies,
+            1,
+            "triage/risk run against the remote engine while connected"
+        );
+        assert_eq!(
+            local_counts.lock().unwrap().statuses,
+            1,
+            "the parked local backend must not be touched"
+        );
+
+        manager.deactivate_remote().await;
+        assert!(!manager.remote_active(), "back to the local engine");
+        manager.status().await;
+        assert_eq!(
+            local_counts.lock().unwrap().statuses,
+            2,
+            "status routes to the restored local backend after disconnect"
+        );
+        assert_eq!(
+            remote_counts.lock().unwrap().statuses,
+            1,
+            "the dropped remote backend is never routed to again"
+        );
+    }
+
+    #[tokio::test]
+    async fn activate_remote_refuses_a_second_connection() {
+        let (local, _) = probe();
+        let (remote, _) = probe();
+        let (second, _) = probe();
+        let manager = EngineManager::with_backend(Box::new(local));
+        manager.activate_remote(Box::new(remote)).await.unwrap();
+        assert!(manager.activate_remote(Box::new(second)).await.is_err());
+        // Deactivate still restores the one parked backend.
+        manager.deactivate_remote().await;
+        assert!(!manager.remote_active());
+    }
+
+    #[tokio::test]
+    async fn deactivate_remote_is_idempotent() {
+        let manager = EngineManager::new(tempfile::tempdir().unwrap().path().join("logs"));
+        manager.deactivate_remote().await;
+        manager.deactivate_remote().await;
+        assert!(!manager.remote_active());
     }
 }
