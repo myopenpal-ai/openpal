@@ -327,6 +327,9 @@ pub fn run() {
             commands::remote_pair,
             commands::remote_client_status,
             commands::remote_forget,
+            commands::remote_inference_connect,
+            commands::remote_inference_disconnect,
+            commands::remote_inference_status,
         ])
         .build(tauri::generate_context!())
         .expect("failed to build OpenPal")
