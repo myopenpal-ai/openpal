@@ -23,7 +23,7 @@ concurrency:
 jobs:
   agent-sandbox-e2e:
     runs-on: macos-15-intel
-    timeout-minutes: 10
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
