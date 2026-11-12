@@ -1,0 +1,27 @@
+{
+  "pluginName": "Remote inference",
+  "summary": "Chat through another device's AI model",
+  "hint": "Run this computer's chat, request triage, and safety check on a model that runs on another OpenPal device — handy for a model too big for this computer. One engine at a time: while connected, this computer's own model isn't used.",
+  "connectedLabel": "Connected",
+  "connectedTo": "Routed to {{name}} ({{addr}}:{{port}}).",
+  "connect": "Connect",
+  "disconnect": "Disconnect",
+  "connecting": "Connecting…",
+  "manual": {
+    "hint": "On the other device, turn on Settings → Devices → Remote access, then press \"Add a device\" to get its address, port, and code.",
+    "address": "Address",
+    "addrPlaceholder": "e.g. 192.168.1.20",
+    "port": "Port",
+    "portPlaceholder": "e.g. 7443",
+    "code": "Pairing code",
+    "codePlaceholder": "e.g. 1234"
+  },
+  "engine": {
+    "running": "Chat runs on {{model}}.",
+    "starting": "Loading {{model}} on the other device…",
+    "stopped": "No model is loaded on the other device.",
+    "failed": "The other device's engine needs attention.",
+    "unreachable": "Can't reach {{name}} — chat will resume when it's back.",
+    "unpaired": "The other device ended this connection."
+  }
+}

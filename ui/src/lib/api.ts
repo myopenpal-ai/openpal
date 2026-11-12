@@ -53,6 +53,7 @@ import type {
   PluginInfo,
   Project,
   RemoteAccessStatusInfo,
+  RemoteInferenceStatus,
   RemotePairingRecord,
   RestoreOutcome,
   RiskSignal,
@@ -426,6 +427,28 @@ export const api = {
   /** The current pairing, if any. */
   remoteClientStatus: () => invoke<RemotePairingRecord | null>("remote_client_status"),
   remoteForget: () => invoke<void>("remote_forget"),
+
+  // Remote inference (the `remote-inference` add-on): route this device's
+  // chat/triage/risk through another OpenPal device's engine. Distinct from
+  // the client commands above — these are what make the *engine* use the
+  // pairing, and only while the add-on is on and Connect was pressed.
+  /** Pair with the device at `addr:port` using `code` (unless already
+   * paired) and route the app's engine surface over to it. `addr`/`port`/
+   * `code` are ignored when a pairing already exists. Resolves with the
+   * fresh status. */
+  remoteInferenceConnect: (addr: string, port: number, code: string) =>
+    invoke<RemoteInferenceStatus>("remote_inference_connect", {
+      addr,
+      port,
+      code,
+    }),
+  /** Take the engine surface back to the local engine and forget the
+   * pairing's record and token. Idempotent. */
+  remoteInferenceDisconnect: () => invoke<void>("remote_inference_disconnect"),
+  /** Whether the engine surface is routed to the remote device, who it's
+   * paired with, and the active engine's status — the remote engine while
+   * connected, the local one otherwise. */
+  remoteInferenceStatus: () => invoke<RemoteInferenceStatus>("remote_inference_status"),
 
   // Conversations
   listConversations: () => invoke<ConversationMeta[]>("list_conversations"),

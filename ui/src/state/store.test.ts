@@ -8,6 +8,7 @@ import {
   matchSkillInvocation,
   modelBrowserAvailable,
   moreDialogPageAvailable,
+  remoteInferenceAvailable,
   smartModelRouterAvailable,
   parseSkillInvocationDisplay,
   SETTINGS_SECTIONS,
@@ -280,6 +281,30 @@ describe("smartModelRouterAvailable", () => {
       plugin({ id: "speech", capabilities: ["tts", "stt"], enabled: true }),
     ];
     expect(smartModelRouterAvailable(plugins)).toBe(false);
+  });
+});
+
+describe("remoteInferenceAvailable", () => {
+  it("is false with no plugins", () => {
+    expect(remoteInferenceAvailable([])).toBe(false);
+  });
+
+  it("is true when an enabled plugin advertises remote-inference", () => {
+    const plugins = [plugin({ capabilities: ["remote-inference"], enabled: true })];
+    expect(remoteInferenceAvailable(plugins)).toBe(true);
+  });
+
+  it("is false when the capability is present but the plugin is disabled", () => {
+    const plugins = [plugin({ capabilities: ["remote-inference"], enabled: false })];
+    expect(remoteInferenceAvailable(plugins)).toBe(false);
+  });
+
+  it("is false when other plugins are enabled but lack the capability", () => {
+    const plugins = [
+      plugin({ id: "hf-browser", capabilities: ["model-browser"], enabled: true }),
+      plugin({ id: "speech", capabilities: ["tts", "stt"], enabled: true }),
+    ];
+    expect(remoteInferenceAvailable(plugins)).toBe(false);
   });
 });
 
