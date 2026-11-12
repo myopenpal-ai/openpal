@@ -17,6 +17,7 @@ name: engine-e2e
 # required check is always satisfied without taxing unrelated PRs.
 on:
   pull_request:
+  merge_group:
   push:
     branches: [main]
     paths:

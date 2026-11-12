@@ -233,11 +233,7 @@ fn is_denylisted(canonical: &Path, home_dir: &Path, data_dir: &Path) -> bool {
         "/etc/sudoers",
         "/etc/sudoers.d",
     ];
-    if SYSTEM_PERSISTENCE.iter().any(|p| canonical.starts_with(p)) {
-        return true;
-    }
-
-    false
+    SYSTEM_PERSISTENCE.iter().any(|p| canonical.starts_with(p))
 }
 
 fn reject_if_symlink(path: &Path) -> Result<(), ToolError> {
