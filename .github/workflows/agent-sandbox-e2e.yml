@@ -6,6 +6,10 @@
 # same pattern as engine-e2e.yml.
 name: agent-sandbox-e2e
 
+# Least privilege — read-only (docs/SECURITY_POSTURE.md).
+permissions:
+  contents: read
+
 on:
   pull_request:
     paths:
@@ -25,13 +29,13 @@ jobs:
     runs-on: macos-15-intel
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
-          key: agent-sandbox-e2e
+          key: ${{ github.event_name == 'pull_request' && github.head_ref || 'base' }}-agent-sandbox-e2e
 
       # openpal-core has no GUI deps (Tauri-free), so unlike ci.yml/
       # engine-e2e.yml's Linux jobs, no webkit/GTK packages are needed here.
