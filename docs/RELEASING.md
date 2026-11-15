@@ -100,6 +100,11 @@ Everything below is the whole job; there are no unrecorded steps.
     keypair, required by the per-target smoke gate (`smoke` fails closed
     without it). It is the bare `RW…` string: if your keypair is stored as a
     `.pub` file, base64-decode the file and take its second line.
+- The same `RW…` string is **baked into the app**: `crates/app/tauri.conf.json`
+  → `plugins.updater.pubkey`. That compiled-in key is what an installed app
+  verifies downloaded artifacts against — the secret above only gates CI. When
+  the keypair rotates, update the three secrets *and* this file in the same
+  change, or the smoke gate passes while real installs reject every artifact.
 - For a patch release with no stabilization period, tag from `main` directly;
   for a release that needs a stabilization window, cut `release/vX.Y` from
   `main` first, land only fixes there, and tag from it.
