@@ -27,6 +27,8 @@ normal PR.
 | Release signing keys scoped away from every non-release job | `TAURI_SIGNING_*` live on the `production-release` environment; `publish` targets `environment: production-release` | 2026-11-15 |
 | A release tag is only signed if its commit is an ancestor of `main` | `publish` job, `Verify the tag is an ancestor of main` step | 2026-11-15 |
 | Secret scanning (incl. push protection) + dependabot security updates + automated security fixes | repo → Settings → Code security and analysis | 2026-11-15 |
+| Dependabot PRs auto-merge only when `.github/dependabot-policy.json` passes them (known publisher, allowlisted, not blocklisted, patch/minor incl. 0.x, release age within its window); a daily sweep re-evaluates every open Dependabot PR | workflow `dependabot-automerge.yml` + engine `scripts/dependabot-policy.sh`, single source of truth `.github/dependabot-policy.json` (trusted publishers / allowlist / blocklist / windows) | 2026-11-15 |
+| Routine dependency updates batch into one grouped weekly PR per ecosystem; security-only updates stay individual and fast-laned | `.github/dependabot.yml` `groups.*` with `applies-to: version-updates` | 2026-11-15 |
 
 > **On the free plan**, `secret_scanning_non_provider_patterns` and
 > `secret_scanning_validity_checks` require **GitHub Advanced Security** and stay

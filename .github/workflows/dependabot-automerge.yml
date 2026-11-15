@@ -1,0 +1,81 @@
+# Dependabot auto-merge policy (issue #84, docs/SECURITY_POSTURE.md).
+#
+# Decides, per Dependabot PR, whether auto-merge may be enabled, against the
+# tracked lists in .github/dependabot-policy.json, and records the verdict with
+# the `automerge-ok` / `needs-human-review` labels. Routine version updates are
+# already batched by dependabot.yml's groups (`applies-to: version-updates`);
+# this workflow only GATES. Design notes:
+#
+#   * `pull_request_target`: base-repo context (write perms for labels/merge)
+#     and deliberately never checks out or executes PR code — the checkout is
+#     pinned to the base ref and only used to reach the repo's own policy
+#     script (labeler.yml is the same pattern; docs/SECURITY_POSTURE.md).
+#   * No third-party actions: `gh` + `curl` + `jq` + `python3` only, so the
+#     `action-pins` gate has nothing to scan.
+#   * The daily sweep re-evaluates every open Dependabot PR, which is what
+#     flips an age-gated PR to auto-merge once its release window passes and
+#     re-arms after any policy-file change.
+#   * Security-only updates arrive as ungrouped individual PRs (they are not
+#     covered by the version-update groups) and are gated by the same policy —
+#     the fast lane is automatic: they are never stuck in the weekly batch.
+name: dependabot-automerge
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize]
+  schedule:
+    - cron: "30 6 * * *"
+  workflow_dispatch:
+
+# Least privilege: contents read for the base-ref checkout and the policy
+# fetch; pull-requests write to label and request auto-merge; issues write so
+# the verdict labels can be created if they ever go missing.
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  evaluate:
+    name: Dependabot auto-merge policy
+    runs-on: ubuntu-latest
+    if: >-
+      github.event_name != 'schedule' &&
+      (github.event.pull_request.user.login == 'app/dependabot' ||
+       github.event.pull_request.user.login == 'dependabot[bot]')
+    steps:
+      # Base ref only — never the PR head. The policy script is the repo's own
+      # tracked code, not PR content.
+      - name: Check out the base ref (never PR code)
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha || 'main' }}
+
+      - name: Run the policy engine
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: bash .github/scripts/dependabot-policy.sh --pr "$PR"
+
+  sweep:
+    name: Sweep open Dependabot PRs
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Check out main
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          ref: main
+
+      - name: Evaluate every open Dependabot PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          while IFS= read -r n; do
+            [ -n "$n" ] || continue
+            bash .github/scripts/dependabot-policy.sh --pr "$n" \
+              || echo "::warning::sweep: PR #$n could not be evaluated"
+          done < <(gh pr list --repo "$GH_REPO" --state open --search "author:app/dependabot" --json number --jq '.[].number')
