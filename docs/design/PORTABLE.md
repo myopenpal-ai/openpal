@@ -207,13 +207,21 @@ documented limits, not parity targets.
   the weights into the bundle, behind a license gate (`--accept-license` required
   for Llama/Gemma pass-through licenses); `LICENSE` + a generated `NOTICE`
   (llama.cpp, WebView2, model attribution) ship in every bundle.
-- **Phase 4 — CI/release** ✅ *(scaffold; release runs validate the matrix)*:
-  `.github/workflows/portable.yml` builds on native runners (macOS arm64
-  `macos-14` · macOS x64 `macos-13` · Windows x64 `windows-latest` + `crt-static`
-  + optional fixed WebView2 · Ubuntu 22.04 x64 · Ubuntu 24.04 arm64) and uploads
-  each artifact; the engine smoke-test runs in-fetch and the AppImage is
-  extract-verified. Deeper smoke (24.04 FUSE-removed host, GPU-less Vulkan
-  fallback) and Windows-ARM cross-compile remain manual follow-ups.
+- **Phase 4 — CI/release** ✅: `.github/workflows/portable.yml` builds on native
+  runners (macOS arm64 `macos-14` · macOS x64 `macos-13` · Windows x64
+  `windows-latest` + `crt-static` + optional fixed WebView2 · Ubuntu 22.04 x64
+  · Ubuntu 24.04 arm64) and uploads each artifact. Per-run cost controls: a
+  `prepare` job resolves the llama.cpp engine tag once and cuts the matrix to a
+  canary subset (`macos-arm64` + `ubuntu-vulkan-x64`, overridable via the
+  `NIGHTLY_CANARY_TARGETS` variable) on `b*` nightly tags, keeping the full five
+  for `v*`; the UI is compiled once per run; the GB-scale engine download is
+  cached per-target keyed on the resolved tag. At the stable cut, `publish`
+  signs the artifacts and assembles the draft release, then a per-target
+  `smoke` matrix verifies each shipped bundle (version, SHA-256, updater
+  signature, packaged engine) before `promote` issues the promote instructions
+  — or `discard` deletes the draft if any leg fails. Deeper smoke (24.04
+  FUSE-removed host, GPU-less Vulkan fallback) and Windows-ARM cross-compile
+  remain manual follow-ups.
 
 ---
 

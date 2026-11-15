@@ -92,6 +92,14 @@ Everything below is the whole job; there are no unrecorded steps.
 - `git` on PATH, `gh` installed and authenticated.
 - On the branch you tag from: `main` (or `release/vX.Y` when stabilizing that
   release line), freshly fetched, working tree **clean**.
+- The updater signing keypair's Actions secrets configured on the repo (they
+  gate the release pipeline — see below):
+  - `TAURI_SIGNING_PRIVATE_KEY` + `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` — the
+    Tauri updater key the `publish` job signs artifacts with;
+  - `TAURI_SIGNING_PUBLIC_KEY` — the minisign public key half of that **same**
+    keypair, required by the per-target smoke gate (`smoke` fails closed
+    without it). It is the bare `RW…` string: if your keypair is stored as a
+    `.pub` file, base64-decode the file and take its second line.
 - For a patch release with no stabilization period, tag from `main` directly;
   for a release that needs a stabilization window, cut `release/vX.Y` from
   `main` first, land only fixes there, and tag from it.
@@ -136,24 +144,50 @@ git fetch origin
 git push origin vX.Y.Z            # tag created from the merged main/release branch
 ```
 
+Nightly/canary tags (`b*`) use the same pipeline in a **slim form**: only the
+canary subset of targets builds (`macos-arm64` + `ubuntu-vulkan-x64` by
+default, overridable via the `NIGHTLY_CANARY_TARGETS` repo variable — see
+`.github/workflows/portable.yml`), against the just-resolved llama.cpp engine
+tag, reusing the per-target engine cache. They deliberately skip the draft
+release and the smoke/promote gate; they exist to keep the full matrix honest
+between stable cuts at a fraction of the cost (pushing a `b*` from `main` is
+how a "per-merge" build is triggered cheaply).
+
 ### 4. Wait for the draft release
 
-Watch Actions → **portable**. The tag-triggered run builds and signs the
-Portable bundles on all five targets and publishes a **draft** release with the
-artifacts and `latest.json`. The first tag pays a cold, full pipeline (engine
-fetch, all-platform native builds, signing) — expect it to be slow, and check
-it end to end rather than assuming the trigger works.
+Watch Actions → **portable**. The tag-triggered run:
+
+1. `prepare` resolves the llama.cpp engine tag once and computes the target
+   matrix (canary subset for `b*`, full five for `v*`); a single `ui` job
+   compiles the frontend once for every target.
+2. The matrix `build` jobs assemble each bundle (restoring the shared UI and
+   the per-target engine cache keyed on the resolved tag).
+3. `publish` (stable cuts only) signs every artifact and assembles a
+   **draft** release with them and `latest.json` — deliberately inert until a
+   human promotes it (`/releases/latest` never resolves to a draft).
+4. The per-target `smoke` matrix downloads each shipped bundle from the draft
+   and verifies it end to end: the cut's version in `latest.json`, the
+   artifact's SHA-256 and updater signature, the version the bundle itself
+   reports, and that the packaged engine executes.
+
+The first tag for an engine bump pays a cold, full pipeline (engine fetch on
+all-platform native builds, signing) — expect it to be slow, and check it end
+to end rather than assuming the trigger works.
 
 ### 5. Verify and promote
 
-- Confirm the built app reports `X.Y.Z` (About screen) and that the draft
-  release's `latest.json` lists the expected targets.
-- Promote the draft — deliberately inert until now (`/releases/latest` never
-  resolves to a draft, so no install auto-updates before this step):
+- If every smoke leg passed, the final job's summary says **✓ Smoke passed —
+  promote** and prints the one command. Promote the draft — the only step
+  that makes the release live (until now `/releases/latest` deliberately
+  doesn't resolve to it, so no install auto-updates):
 
 ```bash
 gh release edit vX.Y.Z --draft=false --repo myopenpal-ai/openpal
 ```
+
+- If any smoke leg failed, the run instead deletes the draft and its summary
+  says **❌ Smoke failed — draft discarded**; **no promote instructions are
+  issued**. Investigate the failing leg, fix the build, and re-cut.
 
 Done: users' in-app update check now finds `vX.Y.Z`.
 
@@ -177,7 +211,13 @@ Done: users' in-app update check now finds `vX.Y.Z`.
   `scripts/ensure-labels.sh` (owner-level, before the labeler and gate go
   live); the labeler keeps the `release:` one in sync with the title.
 - The draft release is the intentional soft-launch gate from the auto-updater
-  plan; nothing reaches users until the human promotion in step 5.
+  plan; nothing reaches users until the human promotion in step 5. The
+  per-target smoke gate is the quality gate in front of it — a smoke failure
+  deletes the draft automatically, so a release only survives a run that fully
+  verified it.
+- `TAURI_SIGNING_PUBLIC_KEY` must be the public half of the **same** keypair as
+  `TAURI_SIGNING_PRIVATE_KEY`; a mismatch makes every smoke leg fail (and the
+  draft get discarded), exactly as it should.
 - `ui/package.json` is `"private": true` with no version — there is no
   frontend version to keep in sync; only the Rust workspace version, its
   `CARGO_PKG_VERSION` consumers and the plugin manifests.

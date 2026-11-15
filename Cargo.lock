@@ -4391,8 +4391,10 @@ name = "openpal-bundler"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "clap",
  "image",
+ "minisign-verify",
  "serde",
  "serde_json",
  "sha2",

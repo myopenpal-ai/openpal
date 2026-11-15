@@ -16,6 +16,8 @@
 //!   cargo run -p openpal-bundler -- release
 //!   cargo run -p openpal-bundler -- manifest --tag v0.2.0 --portable-dir target/portable-artifacts
 //!   cargo run -p openpal-bundler -- engine-manifest --target macos-arm64
+//!   cargo run -p openpal-bundler -- resolve-engine-tag
+//!   cargo run -p openpal-bundler -- smoke --target macos-arm64 --artifact target/portable/OpenPal-portable-macos-arm64.zip --manifest latest.json --tag v0.2.0
 
 mod build;
 mod doctor;
@@ -29,6 +31,7 @@ mod node;
 mod paths;
 mod portable;
 mod signing;
+mod smoke;
 mod stage_plugins;
 
 use std::path::PathBuf;
@@ -91,6 +94,12 @@ enum Command {
         /// "win-vulkan-x64", "win-cpu-arm64", "ubuntu-vulkan-x64".
         #[arg(long, default_value = "macos-arm64")]
         target: String,
+        /// llama.cpp release tag to build against, e.g. "b10621". Defaults to
+        /// the latest release. CI resolves this in the workflow's `prepare`
+        /// job (`resolve-engine-tag`) and passes it here so the bundle uses
+        /// exactly the tag the per-target engine cache was keyed on.
+        #[arg(long, default_value = "latest")]
+        engine_tag: String,
         /// Build a debug bundle (much faster, for testing the pipeline).
         #[arg(long)]
         debug: bool,
@@ -157,6 +166,37 @@ enum Command {
         #[arg(long)]
         notes: Option<String>,
     },
+    /// Resolve the concrete llama.cpp build tag for a release reference
+    /// ("latest" or an explicit tag), following the nightly pointer release,
+    /// and print just that tag. Used by `portable.yml`'s `prepare` job so the
+    /// per-target engine cache key is the resolved tag, never the literal
+    /// "latest".
+    ResolveEngineTag {
+        /// llama.cpp release reference to resolve, e.g. "latest" or "b10621".
+        #[arg(long, default_value = "latest")]
+        tag: String,
+    },
+    /// Smoke-test an assembled Portable bundle for one target: the cut's
+    /// `latest.json` (from the draft release) must carry our target whose
+    /// SHA-256 and minisign signature (verified against
+    /// `TAURI_SIGNING_PUBLIC_KEY`) match the artifact, the bundle must report
+    /// the cut's version from its own metadata, and the packaged engine must
+    /// execute. Runs on the native runner matching the target.
+    Smoke {
+        /// Engine target / OS-arch, e.g. "macos-arm64" — must match a
+        /// `portable` build this runner's OS can execute.
+        #[arg(long)]
+        target: String,
+        /// The bundle artifact: `OpenPal-portable-<target>.{zip,AppImage}`.
+        #[arg(long)]
+        artifact: PathBuf,
+        /// The release's `latest.json`, downloaded from the draft.
+        #[arg(long)]
+        manifest: PathBuf,
+        /// The release tag, e.g. "v0.2.0" (`github.ref_name`).
+        #[arg(long)]
+        tag: String,
+    },
     /// Package, sign, and publish the currently-staged llama.cpp engine
     /// (crates/app/resources/llama/) as an OpenPal-controlled, minisign-signed
     /// artifact on the rolling `engine-latest` GitHub Release — the channel the
@@ -192,12 +232,14 @@ fn main() -> anyhow::Result<()> {
         Command::Build { debug } => build::run(debug),
         Command::Portable {
             target,
+            engine_tag,
             debug,
             webview2,
             model,
             accept_license,
         } => portable::run(
             &target,
+            &engine_tag,
             debug,
             webview2.as_deref(),
             model.as_deref(),
@@ -229,5 +271,16 @@ fn main() -> anyhow::Result<()> {
             notes,
         } => manifest::run(&tag, portable_dir.as_deref(), notes.as_deref()),
         Command::EngineManifest { tag, target } => engine_manifest::run(tag.as_deref(), &target),
+        Command::ResolveEngineTag { tag } => {
+            let (resolved, _release) = fetch::resolve_tag(&tag, None, true)?;
+            println!("{resolved}");
+            Ok(())
+        }
+        Command::Smoke {
+            target,
+            artifact,
+            manifest,
+            tag,
+        } => smoke::run(&target, &artifact, &manifest, &tag),
     }
 }
