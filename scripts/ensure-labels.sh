@@ -64,6 +64,18 @@ labels=(
   "severity/data-loss|b60205|This can destroy or corrupt user data, whatever its priority."
   "philosophy-override|d876e3|Deliberately departs from beginner-first or mono-model. The ticket records why."
   "no-ticket|ededed|Pull request that deliberately has no issue behind it (a revert, or repo bootstrap)."
+
+  # -- release: the PR's version-bump declaration (docs/RELEASING.md). --------
+  # Applied automatically by .github/workflows/labeler.yml from the PR title's
+  # Conventional-Commits type; scripts/check-version-bump.mjs verifies the
+  # actual version increase matches, and fails the merge otherwise.
+  "release: patch|0e8a16|PR ships a patch-level version bump (fix:). Applied by the labeler from the PR title."
+  "release: minor|1d76db|PR ships a minor-level version bump (feat:). Applied by the labeler from the PR title."
+  "release: major|b60205|PR ships a major-level version bump (breaking change). Applied by the labeler from the PR title."
+  # PRs that change user-facing code but deliberately ship no release. The
+  # version-bump gate also accepts "[no release]" in the PR title; this label
+  # is the explicit, reviewer-visible form.
+  "no-release|8b949e|User-facing change that deliberately ships without a release (equivalent to [no release] in the PR title)."
 )
 
 for entry in "${labels[@]}"; do

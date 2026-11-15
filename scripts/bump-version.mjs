@@ -1,15 +1,26 @@
 #!/usr/bin/env node
-// Cut a release in one reviewable step: apply the semver rule to the commits
-// since the last tag, then bump every place the version lives — the root
-// Cargo.toml `[workspace.package] version` (the single source all five crates
-// read via `version.workspace = true`), the five built-in plugin manifests
-// (`plugins/*/plugin.json`), the five workspace entries in `Cargo.lock` and
-// `CHANGELOG.md`. Full runbook: docs/RELEASING.md.
+// Version bumps are PR-driven: the author of a user-facing change decides the
+// bucket, bumps the workspace version and adds their changelog line in the SAME
+// PR, and CI (version-bump.yml) enforces that no releasable PR ships without a
+// bump. This script makes that one reviewable edit — it rewrites every place
+// the version lives — the root Cargo.toml `[workspace.package] version` (the
+// single source all five crates read via `version.workspace = true`), the five
+// built-in plugin manifests (`plugins/*/plugin.json`), the five workspace
+// entries in `Cargo.lock` and `CHANGELOG.md`, then verifies the result. Full
+// runbook: docs/RELEASING.md.
 //
-//   node scripts/bump-version.mjs                    # next version, from conventional commits
-//   node scripts/bump-version.mjs --target 0.2.0     # force a specific version
-//   node scripts/bump-version.mjs --dry-run          # print the plan, write nothing
-//   node scripts/bump-version.mjs --force            # allow a dirty working tree
+//   node scripts/bump-version.mjs --bump patch --notes "Added: …"  # PR author: bump + changelog line
+//   node scripts/bump-version.mjs --bump minor                      # bump without a changelog note
+//   node scripts/bump-version.mjs --target 0.2.0 --notes "…"        # force a specific version
+//   node scripts/bump-version.mjs finalize                          # maintainer: [Unreleased] → [X.Y.Z]
+//   node scripts/bump-version.mjs --bump patch --dry-run            # print the plan, write nothing
+//   node scripts/bump-version.mjs --bump patch --force              # allow a dirty working tree
+//
+// The next version comes from the current workspace version, never from git
+// history: `--bump patch|minor|major` applies the doc/RELEASING.md semver table
+// to it, `--target X.Y.Z` pins it exactly. `finalize` (run at cut time, on an
+// already-bumped main) renames `## [Unreleased]` into a dated `## [X.Y.Z]`
+// section and opens a fresh `[Unreleased]` for the next cycle.
 //
 // Hand-rolled rather than release-please / cargo-release on purpose: the bump
 // must stay a single, reviewable diff that touches exactly the files below,
@@ -49,20 +60,7 @@ const WORKSPACE_CRATES = [
 ];
 
 const SEMVER_RE = /^\d+\.\d+\.\d+$/;
-const CONVENTIONAL_TYPES = new Set([
-  "feat",
-  "fix",
-  "chore",
-  "docs",
-  "refactor",
-  "perf",
-  "test",
-  "build",
-  "ci",
-  "style",
-  "revert",
-  "deps",
-]);
+const BUCKETS = ["patch", "minor", "major"];
 
 // ---------------------------------------------------------------------------
 // CLI
@@ -72,24 +70,64 @@ function argValue(name) {
   const i = args.indexOf(name);
   return i >= 0 && i + 1 < args.length ? args[i + 1] : null;
 }
+function argGiven(name) {
+  return args.includes(name);
+}
+
+const bump = argValue("--bump");
 const target = argValue("--target");
-if (args.includes("--target") && target === null) die("--target needs a value (e.g. --target 0.2.0)");
+const notes = argValue("--notes");
 const dryRun = args.includes("--dry-run");
 const force = args.includes("--force");
-const badFlags = args.filter(
-  (a) => a.startsWith("--") && !["--target", "--dry-run", "--force"].includes(a)
-);
+// Positionals = anything that isn't a flag or the value of a value-taking flag.
+const valueFlags = ["--bump", "--target", "--notes"];
+const positionals = args.filter((a, i) => {
+  if (a.startsWith("--")) return false;
+  return !valueFlags.includes(args[i - 1]);
+});
+const finalize = positionals.includes("finalize");
+
+const knownFlags = ["--bump", "--target", "--notes", "--dry-run", "--force"];
+const badFlags = args.filter((a) => a.startsWith("--") && !knownFlags.includes(a));
 if (badFlags.length > 0) die(`unknown flag: ${badFlags[0]}`);
-if (args.some((a) => !a.startsWith("--") && a !== target)) die("unexpected positional argument");
+if (argGiven("--bump") && bump === null) die("--bump needs a value: patch, minor or major");
+if (argGiven("--target") && target === null) die("--target needs a value (e.g. --target 0.2.0)");
+if (argGiven("--notes") && notes === null) die("--notes needs a value (the changelog line, in quotes)");
+
+let mode;
+if (bump !== null && target !== null) die("--bump and --target are mutually exclusive");
+if (finalize && (bump !== null || target !== null)) die("finalize cannot be combined with --bump or --target");
+if (finalize && positionals.length !== 1) die(`unexpected positional argument: ${positionals.find((p) => p !== "finalize")}`);
+if (!finalize && positionals.length > 0) die(`unexpected positional argument: ${positionals[0]}`);
+if (finalize) {
+  mode = "finalize";
+} else if (bump !== null) {
+  mode = "bump";
+} else if (target !== null) {
+  mode = "target";
+} else {
+  die("nothing to do — specify one of --bump patch|minor|major, --target X.Y.Z, or finalize (see --help)");
+}
+if (notes !== null && mode === "finalize") {
+  die("--notes makes no sense with finalize — finalize releases whatever notes the PRs already added");
+}
 if (process.argv.includes("-h") || process.argv.includes("--help")) {
-  console.log(`Usage: node scripts/bump-version.mjs [--target X.Y.Z] [--dry-run] [--force]
+  console.log(`Usage:
+  node scripts/bump-version.mjs --bump <patch|minor|major> [--notes "..."] [--dry-run] [--force]
+  node scripts/bump-version.mjs --target X.Y.Z       [--notes "..."] [--dry-run] [--force]
+  node scripts/bump-version.mjs finalize              [--dry-run] [--force]
+  --bump <bucket>  PR author: bump the next version from the current one
+                   (patch 0.1.0 → 0.1.1, minor → 0.2.0, major → 1.0.0)
   --target X.Y.Z   release this exact version instead of computing it
+  --notes "…"      append this curated line under [Unreleased] in CHANGELOG.md
+  finalize         maintainer: rename [Unreleased] into a dated [X.Y.Z]
+                   section and open a fresh [Unreleased] (version already bumped)
   --dry-run        print the plan without changing any file
   --force          run even with a dirty working tree (default: refuse)
-See docs/RELEASING.md for the full release runbook.`);
+See docs/RELEASING.md for the PR-driven release flow.`);
   process.exit(0);
 }
-if (target !== null && !SEMVER_RE.test(target)) {
+if (mode !== "finalize" && target !== null && !SEMVER_RE.test(target)) {
   die(`--target must be a bare semver like 0.2.0 (got "${target}")`);
 }
 
@@ -125,74 +163,22 @@ function cargoVersion(cargoToml) {
   return m[1];
 }
 
-function lastTag() {
-  try {
-    return git(["describe", "--tags", "--abbrev=0"], { stdio: ["ignore", "pipe", "ignore"] });
-  } catch {
-    return null; // no tags yet — the repo has never released
-  }
-}
-
-function commitsInScope(tag) {
-  // `git log <last-tag>..HEAD` with nothing between prints nothing but still
-  // exits 0; `git log HEAD` (no tag) sweeps the whole history for the first
-  // release. `--no-merges`: the repo merges squash-only, so every PR lands as
-  // one conventional-commits commit and the occasional historical merge
-  // commit is just noise ("Merge pull request #N …").
-  const range = tag ? `${tag}..HEAD` : "HEAD";
-  const raw = git(["log", "--no-merges", `--format=%H%x1f%s%x1f%b%x1e`, range]);
-  return raw
-    .split("\x1e")
-    .filter(Boolean)
-    .map((record) => {
-      const [hash, subject, body = ""] = record.split("\x1f");
-      return { hash, subject, body };
-    });
-}
-
-// Conventional-Commits classification (CONTRIBUTING.md). "breaking" wins over
-// everything; otherwise feat/fix drive the bump and everything else (chore,
-// docs, refactor, perf, test, build, ci, style, revert, ...) only feeds the
-// changelog.
-function classify(commit) {
-  const breaking =
-    /!:/.test(commit.subject) || /^BREAKING[ -]CHANGE:/m.test(commit.body);
-  if (breaking) return "breaking";
-  const type = typeOf(commit.subject);
-  if (type === "feat") return "feat";
-  if (type === "fix") return "fix";
-  return "other";
-}
-
-function typeOf(subject) {
-  const m = subject.match(/^([a-zA-Z][\w-]*)(?:\([^)]*\))?!?:\s*/);
-  if (!m) return null;
-  const type = m[1].toLowerCase();
-  return CONVENTIONAL_TYPES.has(type) ? type : null;
-}
-
-// Changelog bullets drop the `type(scope): ` prefix — "## Fixed" is already
-// the category, so "(core): handle X" would be redundant.
-function stripConventionalPrefix(subject) {
-  const m = subject.match(/^([a-zA-Z][\w-]*)(?:\([^)]*\))?!?:\s*/);
-  if (!m) return subject;
-  return CONVENTIONAL_TYPES.has(m[1].toLowerCase()) ? subject.slice(m[0].length) : subject;
-}
-
-function nextFromCommits(current, kinds) {
-  const [major, minor, patch] = current.split(".").map(Number);
-  if (kinds.breaking > 0) return `${major + 1}.0.0`;
-  if (kinds.feat > 0) return `${major}.${minor + 1}.0`;
-  if (kinds.fix > 0) return `${major}.${minor}.${patch + 1}`;
-  return null;
-}
-
 function compareSemver(a, b) {
   return a
     .split(".")
     .map(Number)
     .join(".")
     .localeCompare(b.split(".").map(Number).join("."), undefined, { numeric: true });
+}
+
+// The doc/RELEASING.md semver table applied to the *current* version — the PR
+// author's decision, not something computed from git history.
+function bumpBucket(current, bucket) {
+  const [major, minor, patch] = current.split(".").map(Number);
+  if (bucket === "major") return `${major + 1}.0.0`;
+  if (bucket === "minor") return `${major}.${minor + 1}.0`;
+  if (bucket === "patch") return `${major}.${minor}.${patch + 1}`;
+  die(`--bump must be one of ${BUCKETS.join(", ")} (got "${bucket}")`);
 }
 
 // ---------------------------------------------------------------------------
@@ -217,108 +203,101 @@ function setPluginVersion(json, next) {
   return json.replace(re, `$1${next}$2`);
 }
 
-function changelogVersionSection(groups) {
-  const order = [
-    ["breaking", "### Breaking changes"],
-    ["feat", "### Added"],
-    ["fix", "### Fixed"],
-    ["other", "### Changed"],
-  ];
-  const blocks = [];
-  for (const [key, heading] of order) {
-    const items = groups[key];
-    if (items.length === 0) continue;
-    blocks.push(heading, ...items.map((c) => `- ${stripConventionalPrefix(c.subject)}`));
-  }
-  return blocks.join("\n") + "\n";
-}
-
-// Replace the whole "## [Unreleased]" block (heading + body, up to the next
-// "## [" heading or EOF) with a fresh placeholder and the new release section
-// beneath it — CHANGELOG stays newest-first.
-function setChangelog(changelog, next, section) {
-  const headerRe = /^(## \[Unreleased\]\n)/m;
+// The [Unreleased] block is CHANGELOG's first section (heading + body, up to
+// the next "## [" heading or EOF). Extract it and return { body, tail }.
+function unreleasedBlock(changelog) {
+  const headerRe = /^## \[Unreleased\]\n/m;
   const m = changelog.match(headerRe);
   if (!m) die('CHANGELOG.md has no "## [Unreleased]" section — restore it');
   const bodyStart = m.index + m[0].length;
   const rest = changelog.slice(bodyStart);
   const nextHeading = rest.search(/^## \[/m);
   const bodyEnd = nextHeading === -1 ? rest.length : nextHeading;
-  const tail = rest.slice(bodyEnd);
+  return {
+    head: changelog.slice(0, bodyStart),
+    body: rest.slice(0, bodyEnd),
+    tail: rest.slice(bodyEnd),
+  };
+}
+
+// Turn --notes into changelog lines: a raw phrase becomes a bullet, a phrase
+// that already carries its own formatting (`- item`, `### Heading`, blank
+// lines) is kept as the author wrote it. Changelog bullets drop the
+// `type(scope): ` Conventional-Commits prefix — "### Added" is already the
+// category.
+function changelogLines(notes) {
+  return notes.split("\n").map((line) => {
+    const trimmed = line.trimEnd();
+    if (/^[-*] |^#{1,6} |^$/.test(trimmed)) return trimmed;
+    return `- ${stripConventionalPrefix(trimmed)}`;
+  });
+}
+
+function stripConventionalPrefix(subject) {
+  const m = subject.match(/^([a-zA-Z][\w-]*)(?:\([^)]*\))?!?:\s*/);
+  if (!m) return subject;
+  return subject.slice(m[0].length);
+}
+
+function appendChangelogNotes(changelog, notes) {
+  const block = unreleasedBlock(changelog);
+  // Drop the "(No notable changes yet.)" placeholder when the first note lands.
+  const body = block.body.replace(/^\s*\(No notable changes yet\.\)\s*$/m, "").trimEnd();
+  const lines = changelogLines(notes);
+  if (lines.length === 0) die("--notes produced no changelog lines");
+  const items = [body, ...lines].filter(Boolean).join("\n");
+  return block.head + "\n" + items + "\n\n" + block.tail;
+}
+
+// Cut time: rename [Unreleased] into a dated [X.Y.Z] section (the version is
+// already the workspace version — the last PR bumped it) and open a fresh,
+// empty [Unreleased] above it. CHANGELOG stays newest-first.
+function finalizeChangelog(changelog, version) {
+  const block = unreleasedBlock(changelog);
+  const released = block.body.replace(/^\s*\(No notable changes yet\.\)\s*$/m, "").trim();
+  if (released === "") {
+    console.warn("warning: [Unreleased] has no notes — nothing user-facing will appear in this release");
+  }
   const today = new Date().toISOString().slice(0, 10);
   return (
-    changelog.slice(0, bodyStart) +
-    `\n(No notable changes yet.)\n\n` +
-    `## [${next}] - ${today}\n\n` +
-    section +
-    "\n" +
-    tail
+    block.head +
+    "\n(No notable changes yet.)\n\n" +
+    `## [${version}] - ${today}\n\n` +
+    (released === "" ? "(No notable changes yet.)" : released) +
+    "\n\n" +
+    block.tail
   );
 }
 
 // ---------------------------------------------------------------------------
-// Main
+// Plan
 
 console.log(
   `\nOpenPal release bump — ${dryRun ? "DRY RUN (nothing written)" : "about to edit files"}\n`
 );
 
 const current = cargoVersion(read(CARGO_TOML));
-const tag = lastTag();
-const commits = commitsInScope(tag);
 
-const kinds = { breaking: 0, feat: 0, fix: 0, other: 0 };
-const groups = { breaking: [], feat: [], fix: [], other: [] };
-for (const commit of commits) {
-  const kind = classify(commit);
-  kinds[kind] += 1;
-  groups[kind].push(commit);
-}
+if (mode === "bump" && !BUCKETS.includes(bump)) die(`--bump must be one of ${BUCKETS.join(", ")} (got "${bump}")`);
 
-if (commits.length === 0) {
-  die(
-    tag
-      ? `no commits since ${tag} — nothing to release`
-      : "no commits found in this repository"
-  );
-}
-
-let next;
-if (target !== null) {
+let next = null;
+if (mode === "bump") {
+  next = bumpBucket(current, bump);
+} else if (mode === "target") {
+  if (compareSemver(target, current) <= 0) {
+    die(`--target ${target} is not newer than the current workspace version ${current}`);
+  }
   next = target;
-  if (tag !== null && compareSemver(next, tag.replace(/^v/, "")) <= 0) {
-    die(`--target ${next} is not newer than the last tag ${tag}`);
-  }
-  if (next !== current && compareSemver(next, current) < 0) {
-    die(`--target ${next} is older than the current workspace version ${current}`);
-  }
-} else {
-  if (tag === null) {
-    die(
-      `no git tags exist yet — the first release needs an explicit --target ` +
-        `(e.g. --target 0.1.0 to tag the current state); see docs/RELEASING.md`
-    );
-  }
-  next = nextFromCommits(current, kinds);
-  if (next === null) {
-    die(
-      `no version bump: the ${commits.length} commit(s) since ${tag} contain no ` +
-        `feat, fix or breaking change (they are ${kinds.other} chore/docs/refactor/...). ` +
-        `Cut a release only for releasable changes, per docs/RELEASING.md`
-    );
-  }
 }
 
-console.log([
-  `current workspace version : ${current}`,
-  tag ? `last tag                  : ${tag}` : "last tag                  : (none — first release)",
-  `commits in scope           : ${commits.length} (${kinds.breaking} breaking, ${kinds.feat} feat, ${kinds.fix} fix, ${kinds.other} other)`,
-  `next version               : v${next}${target !== null ? " (--target)" : ""}`,
-].join("\n"));
+console.log(`current workspace version : ${current}`);
+if (mode !== "finalize") {
+  console.log(`next version               : v${next}${mode === "target" ? " (--target)" : ` (--bump ${bump})`}`);
+  if (notes !== null) console.log(`changelog note(s)         : ${changelogLines(notes).length}`);
+}
 
-// Dirty-tree guard: the bump is meant to be the entire release commit, and the
-// changelog entries are generated from the committed history — so it must
-// start from a clean tree.
+// Dirty-tree guard: the bump is meant to be the entire release/bump commit, so
+// it must start from a clean tree.
 if (!dryRun && !force) {
   const dirty = git(["status", "--porcelain"]);
   if (dirty !== "") {
@@ -329,48 +308,68 @@ if (!dryRun && !force) {
   }
 }
 
-const section = changelogVersionSection(groups);
-
 if (dryRun) {
-  const files = [pathOf(CARGO_TOML), pathOf(CARGO_LOCK), ...PLUGIN_MANIFESTS.map(pathOf), pathOf(CHANGELOG)];
-  console.log("\nWould update:");
-  for (const f of files) console.log(`  - ${f}`);
-  console.log(`\nChangelog section that would be written:\n\n## [${next}] - ${new Date().toISOString().slice(0, 10)}\n`);
-  console.log(section);
-  console.log("Dry run only — no files were changed.\n");
+  if (mode === "finalize") {
+    console.log("\nWould update:");
+    console.log(`  - ${pathOf(CHANGELOG)}`);
+    console.log(
+      `\nWould turn [Unreleased] into:\n\n## [${current}] - ${new Date().toISOString().slice(0, 10)}\n`
+    );
+    console.log("Dry run only — no files were changed.\n");
+  } else {
+    const files = [pathOf(CARGO_TOML), pathOf(CARGO_LOCK), ...PLUGIN_MANIFESTS.map(pathOf), pathOf(CHANGELOG)];
+    console.log("\nWould update:");
+    for (const f of files) console.log(`  - ${f}`);
+    if (notes !== null) {
+      console.log(`\nChangelog lines that would be appended under [Unreleased]:`);
+      for (const line of changelogLines(notes)) console.log(`  ${line}`);
+    }
+    console.log("Dry run only — no files were changed.\n");
+  }
   process.exit(0);
 }
 
-if (tag === null) {
-  console.log(
-    `\nnote: no prior tag — the changelog section covers the full commit history. ` +
-      `Trim it to a user-facing summary before committing.`
-  );
-}
-
+// ---------------------------------------------------------------------------
 // Apply.
-let edits = 0;
-edits += write(CARGO_TOML, setCargoVersion(read(CARGO_TOML), next)) ? 1 : 0;
-for (const crate of WORKSPACE_CRATES) {
-  edits += write(CARGO_LOCK, setLockVersion(read(CARGO_LOCK), crate, next)) ? 1 : 0;
-}
-for (const manifest of PLUGIN_MANIFESTS) {
-  edits += write(manifest, setPluginVersion(read(manifest), next)) ? 1 : 0;
-}
-edits += write(CHANGELOG, setChangelog(read(CHANGELOG), next, section)) ? 1 : 0;
 
-// Verify the postconditions the release depends on.
-verify(next);
+let edits = 0;
+if (mode !== "finalize") {
+  edits += write(CARGO_TOML, setCargoVersion(read(CARGO_TOML), next)) ? 1 : 0;
+  for (const crate of WORKSPACE_CRATES) {
+    edits += write(CARGO_LOCK, setLockVersion(read(CARGO_LOCK), crate, next)) ? 1 : 0;
+  }
+  for (const manifest of PLUGIN_MANIFESTS) {
+    edits += write(manifest, setPluginVersion(read(manifest), next)) ? 1 : 0;
+  }
+}
+if (notes !== null) {
+  edits += write(CHANGELOG, appendChangelogNotes(read(CHANGELOG), notes)) ? 1 : 0;
+} else if (mode === "finalize") {
+  edits += write(CHANGELOG, finalizeChangelog(read(CHANGELOG), current)) ? 1 : 0;
+}
+
+// Verify the postconditions the release depends on — only when a version was
+// written (finalize leaves the version files alone by design).
+if (mode !== "finalize") verify(next);
 
 console.log(
-  `\n✓ bumped to v${next} (${edits} file(s) edited): Cargo.toml, Cargo.lock, 5 plugin manifests, CHANGELOG.md\n`
+  mode === "finalize"
+    ? `\n✓ finalized the changelog for v${current} (${edits} file(s) edited): CHANGELOG.md — version files were already bumped by the PRs`
+    : `\n✓ bumped to v${next} (${edits} file(s) edited): Cargo.toml, Cargo.lock, 5 plugin manifests${notes !== null ? ", CHANGELOG.md" : ""}\n`
 );
+
 console.log("Next steps (docs/RELEASING.md):");
-console.log(`  1. git commit -m "chore(release): v${next}"  (single reviewable commit)`);
-console.log("  2. open the release PR, get the required checks green, squash-merge");
-console.log(`  3. git tag v${next} && git push origin v${next}`);
-console.log("  4. wait for the `portable` workflow's draft release, then:");
-console.log(`     gh release edit v${next} --draft=false\n`);
+if (mode === "finalize") {
+  console.log(`  1. git commit -m "chore(release): finalize CHANGELOG for v${current}"`);
+  console.log(`  2. git tag v${current} && git push origin v${current}`);
+  console.log("  3. wait for the `portable` workflow's draft release, then:");
+  console.log(`     gh release edit v${current} --draft=false`);
+} else {
+  console.log(`  1. commit ${notes !== null ? "the bump and changelog line" : "the bump"} in the SAME PR as the change — `);
+  console.log(`     git commit -m "<conventional-type>: what changed"`);
+  console.log("  2. the version-bump check passes, squash-merge the PR");
+  console.log("  3. repeat per PR; at cut time a maintainer runs `node scripts/bump-version.mjs finalize`\n");
+}
 
 function verify(next) {
   if (cargoVersion(read(CARGO_TOML)) !== next) {
