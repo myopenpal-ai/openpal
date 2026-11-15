@@ -1,17 +1,34 @@
 # Releasing OpenPal
 
-Releases are the sum of already-merged PRs. Every PR that changes user-facing
-code decides its own version bump and adds its own changelog line **when it
-merges**; CI (`version-bump.yml`) blocks anything releasable that would ship
-without one. At cut time the maintainer's only job is to finalize the changelog
-(`## [Unreleased]` → a dated `## [X.Y.Z]`), push a `vX.Y.Z` tag, and let the
-`portable` workflow build and sign a **draft** release that a human promotes.
+OpenPal ships on two tracks, mirroring ggml-org/llama.cpp's release
+philosophy:
 
-OpenPal ships versioned, signed releases (not a continuously-deployed service),
-on trunk-based development with short-lived release branches — the branch model
-and tag flow are described in
-[docs/TESTING.md](TESTING.md#branch-strategy-and-required-checks). This page is
-the runbook: for PR authors, when to bump; for maintainers, how to cut.
+- **Rolling nightly** — every *user-facing* merge to `main` auto-creates a
+  monotonic `b{N}` build-number tag (`N = git rev-list --count HEAD`), which
+  builds a slim **canary** subset of targets and publishes a **pre-release**.
+  This is machinery, not releases: nightlies are smoke-check targets for the
+  full matrix between stable cuts, never something users auto-update to.
+- **Stable** — a deliberately cut `vX.Y.Z`, created only by a human running
+  the manual **Make Release** workflow, which builds the full five-target
+  matrix, assembles a signed **draft** release and a per-target **smoke** gate,
+  and stays inert until a human promotes the draft.
+
+The version rule and PR-driven bumping are unchanged (below); what changed is
+who creates the tags: `b*` tags are pushed by CI automatically, `v*` tags are
+pushed by the Make Release workflow instead of by hand from a laptop.
+
+## The two tracks in one picture
+
+```
+user-facing PR merged to main ──► rolling-nightly ──► b{N} tag ──► portable (canary 2-target)
+                                                                         └─► pre-release (X.Y.Z+b{N})
+                                                                            invisible to auto-update
+
+maintainer: bump (PRs) → finalize (PR) → Make Release ──► vX.Y.Z tag ──► portable (full 5-target)
+  (dry-run first)                                                       ├─► signed draft release
+                                                                        ├─► per-target smoke gate
+                                                                        └─► human promote (draft=false)
+```
 
 ## The version rule (semver, decided by the PR author)
 
@@ -72,26 +89,71 @@ node scripts/bump-version.mjs --bump <patch|minor|major> --notes "One curated li
 
 Not every user-facing diff must ship a release. When yours is one of these,
 add `[no release]` to the PR title (or set the `no-release` label) so the
-version-bump check passes without a bump:
+version-bump check passes without a bump *and* the rolling-nightly workflow
+skips the merge:
 
 - a refactor or codemod with **zero behavior change** (the byte-level diff is
   real, the user-facing effect is not);
 - a change that will roll out to users under a later PR/release anyway;
 - a revert that should not be re-released alone.
 
+Merges that only touch release-exempt paths (`docs/`, `*.md`, `.github/`,
+`scripts/`) are skipped by `rolling.yml`'s `paths-ignore` automatically, so
+they need no marker.
+
 `[no release]` is a statement that the author and reviewer signed off on the
 "no user-facing effect" reading — not an escape hatch for "I forgot to bump".
 Code-only PRs that actually change behavior must bump.
 
-## Cut a release
+## The rolling nightly track
+
+`.github/workflows/rolling.yml` fires on every push to `main` that touches a
+non-exempt path (same set as the version-bump gate). It:
+
+1. skips cheaply (before any checkout) when the squash-merge message contains
+   `[no release]`,
+2. counts `N = git rev-list --count HEAD` — monotonic because `main` is
+   squash-only and linear,
+3. creates a lightweight `b{N}` tag and pushes it **via the `DEPLOY_KEY_RELEASE`
+   SSH deploy key**, so the push cascades into `portable.yml` (a tag push made
+   by `GITHUB_TOKEN` would not spawn further workflows — see the prerequisite
+   below),
+4. a tag-exists guard plus workflow concurrency make batched queue merges safe:
+   a rerun or a race that resolves the same count skips (never fails), and a
+   `workflow_dispatch` on the workflow forces a nightly for current `main`.
+
+`portable.yml`'s `prepare` job then builds the slim **canary** subset — by
+default `ubuntu-vulkan-x64` + `win-vulkan-x64`, the targets with a runner in
+this org today, overridable via the `NIGHTLY_CANARY_TARGETS` repo variable —
+against the just-resolved llama.cpp engine tag, reusing the per-target engine
+cache, and `publish` runs the bundler with `--kind nightly`: the release is a
+**pre-release** whose manifest version is the workspace semver plus `+b{N}`
+build metadata (`0.1.0+b45`).
+
+**What nightlies are and are not.** They are canary targets only: a cheap,
+per-merge signal that the full matrix is healthy between stable cuts, at a
+fraction of the cost. They are *not* updater feeds: `/releases/latest` never
+resolves to a pre-release, so no installed app ever auto-updates to a nightly
+(`crates/core/src/update.rs` is untouched by this track). They are *not*
+promised artifacts: a nightly tag can be deleted/replaced without ceremony.
+
+## Cut a stable release
 
 Everything below is the whole job; there are no unrecorded steps.
 
 ### 0. Prerequisites
 
 - `git` on PATH, `gh` installed and authenticated.
-- On the branch you tag from: `main` (or `release/vX.Y` when stabilizing that
-  release line), freshly fetched, working tree **clean**.
+- The **`DEPLOY_KEY_RELEASE` SSH deploy keypair** — an operator step, not
+  code. Because tags pushed by `GITHUB_TOKEN` cannot spawn further workflow
+  runs, both tag-pushing workflows (`rolling.yml` and `make-release.yml`)
+  authenticate with this key:
+  - private key → the `DEPLOY_KEY_RELEASE` **Actions secret** (PEM, exactly as
+    generated — no newlines mangled);
+  - public key → a **write-enabled deploy key** on the repository (Settings →
+    Deploy keys → *Allow write access*).
+  Without it, the `b*`/`v*` tag cascade into `portable.yml` never fires and the
+  workflows fail at the push step.
 - The updater signing keypair's Actions secrets configured on the repo (they
   gate the release pipeline — see below):
   - `TAURI_SIGNING_PRIVATE_KEY` + `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` — the
@@ -107,7 +169,9 @@ Everything below is the whole job; there are no unrecorded steps.
   change, or the smoke gate passes while real installs reject every artifact.
 - For a patch release with no stabilization period, tag from `main` directly;
   for a release that needs a stabilization window, cut `release/vX.Y` from
-  `main` first, land only fixes there, and tag from it.
+  `main` first, land only fixes there, and tag from it. **Make Release
+  validates against `main`** — a release-branch cut passes `skip_checks`
+  deliberately, or is cut from `main` after the fixes merge back.
 
 ### 1. Finalize (one reviewable step)
 
@@ -139,24 +203,29 @@ git add -A && git commit -m "chore(release): finalize CHANGELOG for vX.Y.Z"
 # required checks green, squash-merge.
 ```
 
-### 3. Tag
+> The change is release-exempt (`CHANGELOG.md` is a `*.md`), so no bump is
+> needed and this PR intentionally does **not** carry `[no release]`-style
+> markers governing the next version.
 
-Tag the **merged** commit (not the local one), pushing the tag triggers the
-`portable` workflow:
+### 3. Run the Make Release workflow
 
-```bash
-git fetch origin
-git push origin vX.Y.Z            # tag created from the merged main/release branch
-```
+Tags are pushed by the workflow, not by hand — **Actions → Make Release →
+Run workflow**:
 
-Nightly/canary tags (`b*`) use the same pipeline in a **slim form**: only the
-canary subset of targets builds (`macos-arm64` + `ubuntu-vulkan-x64` by
-default, overridable via the `NIGHTLY_CANARY_TARGETS` repo variable — see
-`.github/workflows/portable.yml`), against the just-resolved llama.cpp engine
-tag, reusing the per-target engine cache. They deliberately skip the draft
-release and the smoke/promote gate; they exist to keep the full matrix honest
-between stable cuts at a fraction of the cost (pushing a `b*` from `main` is
-how a "per-merge" build is triggered cheaply).
+1. **Dry run first** (the default `dry_run: true`): pick the commit (leave
+   empty for `main` HEAD) and run. It validates that the chosen commit belongs
+   to `main`, is not stale vs HEAD, and that the workspace version on it is
+   strictly newer than the last `v*` tag — otherwise it fails naming the bump
+   command (`node scripts/bump-version.mjs --bump …`), because version bumps
+   are PR-driven and must land before the cut.
+2. **Re-run with `dry_run: false`**: the workflow creates an **annotated
+   `vX.Y.Z` tag** and pushes it via `DEPLOY_KEY_RELEASE`, which cascades into
+   `portable.yml`. Its summary then carries the promote instructions (gated on
+   the per-target smoke check).
+
+`skip_checks` exists for deliberate exceptions (cutting an older commit, a
+release-line tag); use it only when you know why — the checks catch real
+mistakes.
 
 ### 4. Wait for the draft release
 
@@ -167,9 +236,10 @@ Watch Actions → **portable**. The tag-triggered run:
    compiles the frontend once for every target.
 2. The matrix `build` jobs assemble each bundle (restoring the shared UI and
    the per-target engine cache keyed on the resolved tag).
-3. `publish` (stable cuts only) signs every artifact and assembles a
-   **draft** release with them and `latest.json` — deliberately inert until a
-   human promotes it (`/releases/latest` never resolves to a draft).
+3. `publish` (this track is `v*`, so `--kind stable`) signs every artifact and
+   assembles a **draft** release with them and `latest.json` — deliberately
+   inert until a human promotes it (`/releases/latest` never resolves to a
+   draft).
 4. The per-target `smoke` matrix downloads each shipped bundle from the draft
    and verifies it end to end: the cut's version in `latest.json`, the
    artifact's SHA-256 and updater signature, the version the bundle itself
@@ -206,6 +276,8 @@ Done: users' in-app update check now finds `vX.Y.Z`.
   single version location on its own — if a `plugins/*/plugin.json` version
   ever drifts from the workspace version, the bundler test
   `builtin_plugin_manifests_carry_the_workspace_version` fails CI.
+- **Nightlies** need no after-action: the next user-facing merge tops up the
+  `b{N}` sequence by itself.
 
 ## Gotchas
 
@@ -215,11 +287,16 @@ Done: users' in-app update check now finds `vX.Y.Z`.
 - The `release: patch|minor|major` and `no-release` labels are created by
   `scripts/ensure-labels.sh` (owner-level, before the labeler and gate go
   live); the labeler keeps the `release:` one in sync with the title.
+- **`DEPLOY_KEY_RELEASE` is an operator step.** Both tag-pushing workflows
+  fail at the push if the secret or the write-enabled deploy key is missing —
+  the failure message says so. This is intentional: the key is the thing that
+  lets CI-created tags trigger CI, which `GITHUB_TOKEN` never can.
 - The draft release is the intentional soft-launch gate from the auto-updater
   plan; nothing reaches users until the human promotion in step 5. The
   per-target smoke gate is the quality gate in front of it — a smoke failure
   deletes the draft automatically, so a release only survives a run that fully
-  verified it.
+  verified it. Nightlies skip the smoke gate by design (canary subset, and
+  nothing auto-updates to them).
 - `TAURI_SIGNING_PUBLIC_KEY` must be the public half of the **same** keypair as
   `TAURI_SIGNING_PRIVATE_KEY`; a mismatch makes every smoke leg fail (and the
   draft get discarded), exactly as it should.

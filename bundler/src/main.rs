@@ -15,6 +15,7 @@
 //!   cargo run -p openpal-bundler -- notarize
 //!   cargo run -p openpal-bundler -- release
 //!   cargo run -p openpal-bundler -- manifest --tag v0.2.0 --portable-dir target/portable-artifacts
+//!   cargo run -p openpal-bundler -- manifest --tag b1234 --kind nightly --portable-dir target/portable-artifacts
 //!   cargo run -p openpal-bundler -- engine-manifest --target macos-arm64
 //!   cargo run -p openpal-bundler -- resolve-engine-tag
 //!   cargo run -p openpal-bundler -- smoke --target macos-arm64 --artifact target/portable/OpenPal-portable-macos-arm64.zip --manifest latest.json --tag v0.2.0
@@ -37,6 +38,8 @@ mod stage_plugins;
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
+
+use crate::manifest::ManifestKind;
 
 #[derive(Parser)]
 #[command(name = "openpal-bundler", about, version)]
@@ -161,6 +164,13 @@ enum Command {
         /// the release's manifest are preserved either way.
         #[arg(long)]
         portable_dir: Option<PathBuf>,
+        /// Release track (docs/RELEASING.md): `stable` (default) creates the
+        /// draft-plus-human-promote release with manifest version `X.Y.Z`;
+        /// `nightly` creates a **pre-release** whose manifest version is the
+        /// workspace semver plus `+b{N}` build metadata (the rolling `b*`
+        /// track — `/releases/latest` never resolves to a pre-release).
+        #[arg(long, value_enum, default_value_t = ManifestKind::Stable)]
+        kind: ManifestKind,
         /// Release notes shown in the update dialog. Omitted: keeps
         /// whatever the manifest already has.
         #[arg(long)]
@@ -268,8 +278,9 @@ fn main() -> anyhow::Result<()> {
         Command::Manifest {
             tag,
             portable_dir,
+            kind,
             notes,
-        } => manifest::run(&tag, portable_dir.as_deref(), notes.as_deref()),
+        } => manifest::run(&tag, kind, portable_dir.as_deref(), notes.as_deref()),
         Command::EngineManifest { tag, target } => engine_manifest::run(tag.as_deref(), &target),
         Command::ResolveEngineTag { tag } => {
             let (resolved, _release) = fetch::resolve_tag(&tag, None, true)?;

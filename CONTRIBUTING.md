@@ -118,8 +118,19 @@ when it fails.
 
 At cut time a maintainer runs `node scripts/bump-version.mjs finalize` (turns
 the accumulated `[Unreleased]` into a dated `[X.Y.Z]` section and opens a
-fresh one), then pushes a `vX.Y.Z` tag so the `portable` workflow builds the
-signed draft release, and promotes the draft by hand.
+fresh one), then cuts the release **through the manual Make Release workflow**
+(Actions → Make Release — dry-run first, then `dry_run: false`), which creates
+and pushes the `vX.Y.Z` tag so the `portable` workflow builds the signed draft
+release, and promotes the draft by hand once the per-target smoke gate passes.
+It is the only way a `v*` tag gets created — nothing on `main` auto-cuts a
+stable release.
+
+Rebuilds in between are automatic: every user-facing merge to `main` creates a
+rolling `b{N}` nightly tag, which builds a slim canary subset and publishes a
+**pre-release** (never visible to users' auto-updater). A `[no release]` PR
+title (or `no-release` label) skips that merge's nightly too. `[no release]`
+means the author and reviewer agree the diff has no user-facing effect. Full
+runbook: [docs/RELEASING.md](docs/RELEASING.md).
 
 ## Where things are
 

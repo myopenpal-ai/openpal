@@ -29,7 +29,7 @@ Rust core, a Python-sidecar plugin system, and no server to deploy.
 | `.github/workflows/notify-platforms.yml` | PR/push touching `crates/app/src/notify/**`, `crates/app/src/lib.rs`, `crates/app/Cargo.toml` or `Cargo.lock` | yes, scoped | `cargo clippy -p openpal-app --all-targets -- -D warnings` and `cargo test -p openpal-app notify` on macOS and Windows runners, and `cargo clippy -p openpal-app` for `aarch64-linux-android` with the runner's NDK — the platform-gated notification backends `ci.yml`'s Linux job never compiles. Not the Kotlin half (no Gradle build), and nothing that shows a notification |
 | `.github/workflows/version-bump.yml` | every PR (`pull_request` **and** `merge_group`) | **yes** (required) | the PR-driven release gate (`scripts/check-version-bump.mjs`): passes when only release-exempt paths changed (`docs/`, `*.md`, `.github/`, `scripts/`), when the PR carries `[no release]` in its title or the `no-release` label, or when the workspace version increased since the merge-base — when `release:` labels are present the increase must match the declared patch/minor/major bucket, unlabeled PRs pass on any increase. Failing runs name the bump command to run |
 | `.github/workflows/labeler.yml` | PR created/edited (`pull_request_target`) | no (label housekeeping, not a check) | applies `release: patch\|minor\|major` from the PR title's Conventional-Commits type — breaking (`type!:` / `BREAKING CHANGE:`) → major, `feat:` → minor, `fix:` → patch, anything else sheds the `release:` label |
-| `.github/workflows/portable.yml` (pre-existing, unchanged) | manual dispatch, `v*` tags | no (release pipeline, not a test gate) | cross-platform Portable builds + signed draft release |
+| `.github/workflows/portable.yml` | manual dispatch, `v*` stable tags (Make Release), `b*` nightly tags (rolling-nightly) | no (release pipeline, not a test gate) | cross-platform Portable builds; `v*` → signed **draft** release + per-target smoke gate + human promote, `b*` → canary **pre-release** (`--kind nightly`, `X.Y.Z+b{N}` manifest version, invisible to the auto-updater) |
 
 Path-filtered workflows (`plugin-tests.yml`, `engine-e2e.yml`,
 `injection-e2e.yml`, `notify-platforms.yml`) simply don't run at all on a
@@ -516,9 +516,14 @@ GitHub Flow (no release branches at all) and full GitFlow (a permanent
 - **`release/vX.Y`** branches are cut from `main` when stabilizing a release
   — only fixes land here after the cut, no new features. Same required
   checks as `main`; also protected.
-- **Tags** (`vX.Y.Z`) are pushed from a release branch (or `main`, for a
-  patch release with no separate stabilization period) and trigger
-  `portable.yml`'s existing build + signed **draft** release. A human
+- **Tags** (`b{N}` nightlies, `vX.Y.Z` stables) are pushed by workflows — not
+  by hand — via the `DEPLOY_KEY_RELEASE` deploy key (a tag push made by
+  `GITHUB_TOKEN` cannot spawn further workflows), and trigger `portable.yml`:
+  `b*` builds a canary subset and publishes a **pre-release** (invisible to
+  the auto-updater), `v*` builds the full matrix and a signed **draft**
+  release. Nightlies are automatic on every user-facing merge to `main`
+  (`rolling.yml`); a `v*` tag is created only by the manual Make Release
+  workflow (from `main`, or a release branch with `skip_checks`). A human
   promotes the draft after checking it (and, once native e2e exists, after a
   green run against it). The whole runbook — the PR-driven bump rule (each
   user-facing PR bumps its own version), the `finalize` step at cut time,
