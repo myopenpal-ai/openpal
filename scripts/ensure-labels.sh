@@ -30,19 +30,19 @@ labels=(
 
   # -- area: which part of OpenPal. Exactly one per ticket, required. --------
   "area/ui|006b75|Frontend shell, navigation, shared components, CSS design system, store plumbing."
-  "area/chat|006b75|Conversations: composer, streaming render, sidebar, projects, attachments, export, skills, writing tools."
+  "area/chat|006b75|Conversations: composer, streaming, sidebar, projects, attachments, export, skills, writing tools."
   "area/engine|006b75|llama.cpp subprocess: spawn/health/stop, SSE streaming, sampling, engine updates, hardware probing."
   "area/models|006b75|Catalog, fit and recommendation, HF search, custom models, downloads, Models and Discover screens."
-  "area/agent|006b75|Agent mode: tool-calling loop, built-in tools, sandbox, consent, workspace jailing, subagents, audit."
+  "area/agent|006b75|Agent mode: tool-calling loop, built-in tools, sandbox, consent, workspace jailing, subagents, audit"
   "area/web-search|006b75|Web search turn: SearXNG sidecar, web_search and fetch_url tools, extraction, reranking, citations."
   "area/sync|006b75|Multi-device conversation sync: HLC merge, outbox, mailbox, pairing, roster, relay server."
   "area/remote-access|006b75|Serving this desktop's engine to another device: gateway, pairing, remote client, discovery, WOL."
-  "area/security|006b75|Keys and locks: SQLCipher, secret store, recovery codes, device identity, app lock, parental controls."
-  "area/plugins|006b75|Plugin system: manifest contract, discovery, Python venv, sidecar lifecycle, Add-ons UI, Voice plugin."
-  "area/app|006b75|Tauri app layer: IPC command surface, AppState and lifecycle, logging, settings, sign-in, in-app updates."
+  "area/security|006b75|Keys and locks: SQLCipher, secret store, recovery codes, device identity, parental controls."
+  "area/plugins|006b75|Plugin system: manifest, discovery, Python venv, sidecar lifecycle, Add-ons UI, Voice plugin."
+  "area/app|006b75|Tauri app layer: IPC, AppState and lifecycle, logging, settings, sign-in, in-app updates."
   "area/build|006b75|Bundler, Tauri packaging and signing, the portable SKU, Android bring-up, CI workflows."
   "area/docs|006b75|README, ARCHITECTURE, CONTRIBUTING, docs/*, plugin contract prose, AGENTS.md."
-  "area/i18n-a11y|006b75|Translations (en/fr and the split bundles) and accessibility: focus, contrast, keyboard nav, screen readers."
+  "area/i18n-a11y|006b75|Translations (en/fr) and accessibility: focus, contrast, keyboard nav, screen readers."
 
   # -- priority: decided at filing, changed freely afterwards. ---------------
   "priority/p0|b60205|Drop everything. Data loss, crash on launch, or the app is unusable."
@@ -75,7 +75,7 @@ labels=(
   # PRs that change user-facing code but deliberately ship no release. The
   # version-bump gate also accepts "[no release]" in the PR title; this label
   # is the explicit, reviewer-visible form.
-  "no-release|8b949e|User-facing change that deliberately ships without a release (equivalent to [no release] in the PR title)."
+  "no-release|8b949e|User-facing change shipping without a release ([no release] in title)."
 )
 
 for entry in "${labels[@]}"; do
