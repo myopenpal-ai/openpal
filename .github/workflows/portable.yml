@@ -33,6 +33,12 @@
 # (auto-created by rolling.yml on every user-facing merge to `main`).
 name: portable
 
+# Least privilege: read-only by default; the `publish`/`discard` jobs re-open
+# `contents: write` (and `deployments: write` under the release environment)
+# where the release pipeline needs it (docs/SECURITY_POSTURE.md).
+permissions:
+  contents: read
+
 on:
   workflow_dispatch:
     inputs:
@@ -73,11 +79,11 @@ jobs:
       engine_tag: ${{ steps.engine.outputs.tag }}
       kind: ${{ steps.matrix.outputs.kind }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           key: portable-prepare
 
@@ -172,9 +178,9 @@ jobs:
     name: build shared UI
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 20
           cache: npm
@@ -186,7 +192,7 @@ jobs:
       - name: Build the UI once
         run: npm --prefix ui run build
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ui-dist
           path: ui/dist
@@ -203,16 +209,16 @@ jobs:
         include: ${{ fromJson(needs.prepare.outputs.matrix) }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 20
           cache: npm
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           key: portable-${{ matrix.target }}
 
@@ -285,7 +291,7 @@ jobs:
       # target), so the bundler's own "already staged for this target" fast path
       # skips the GB-scale download; an engine bump is a deliberate one-time miss.
       - name: Restore engine cache (per target + resolved tag)
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: crates/app/resources/llama
           key: portable-engine-${{ matrix.target }}-${{ needs.prepare.outputs.engine_tag }}
@@ -293,7 +299,7 @@ jobs:
       # The UI was built once in the `ui` job; drop its `dist/` in place so the
       # Tauri build finds it and skips its own beforeBuildCommand entirely.
       - name: Restore shared UI build
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: ui-dist
           path: target/ui-dist
@@ -348,7 +354,7 @@ jobs:
             echo "No bare .AppImage (model bundle ships a .tar.gz instead) — skipping."
           fi
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: OpenPal-portable-${{ matrix.target }}
           path: |
@@ -374,26 +380,47 @@ jobs:
     needs: build
     if: github.event_name == 'push' && (startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/tags/b'))
     runs-on: ubuntu-latest
+    # Release-signing runs target a protected environment so the signing
+    # secrets are scoped to it (docs/SECURITY_POSTURE.md), and they refuse to
+    # sign a tag that doesn't point into main.
+    environment: production-release
     permissions:
       contents: write
+      deployments: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          # Full history so the "tag is on main" check below can run.
+          fetch-depth: 0
 
-      - uses: actions/setup-node@v4
+      - name: Verify the tag is an ancestor of main
+        run: |
+          set -euo pipefail
+          if ! git rev-parse --verify origin/main >/dev/null 2>&1; then
+            echo "::error::origin/main not found in this checkout — cannot verify the tag is on main."
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::Refusing to sign ${GITHUB_REF_NAME} ($GITHUB_SHA) — not an ancestor of main."
+            exit 1
+          fi
+          echo "${GITHUB_REF_NAME} ($GITHUB_SHA) is an ancestor of main."
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 20
           cache: npm
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           key: publish
 
       - name: Install npm dependencies (root — for the Tauri CLI signer)
         run: npm ci
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           pattern: OpenPal-portable-*
           path: target/portable-artifacts
@@ -458,11 +485,11 @@ jobs:
       matrix:
         include: ${{ fromJson(needs.prepare.outputs.matrix) }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           key: portable-smoke-${{ matrix.target }}
 

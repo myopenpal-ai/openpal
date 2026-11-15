@@ -114,10 +114,11 @@ non-exempt path (same set as the version-bump gate). It:
    `[no release]`,
 2. counts `N = git rev-list --count HEAD` — monotonic because `main` is
    squash-only and linear,
-3. creates a lightweight `b{N}` tag and pushes it **over HTTPS with the
+3. signs a `b{N}` tag in the runner (`git tag -s` with `GIT_SIGNING_KEY` — the
+   tag ruleset requires signed `b*` tags) and pushes it **over HTTPS with the
    `RELEASE_PUSH_TOKEN` fine-grained PAT**, so the push cascades into
    `portable.yml` (a tag push made by `GITHUB_TOKEN` would not spawn further
-   workflows — see the prerequisite below),
+   workflows — see the prerequisites below),
 4. a tag-exists guard plus workflow concurrency make batched queue merges safe:
    a rerun or a race that resolves the same count skips (never fails), and a
    `workflow_dispatch` on the workflow forces a nightly for current `main`.
@@ -157,6 +158,22 @@ Everything below is the whole job; there are no unrecorded steps.
     creation, so set it immediately).
   Without it, the `b*`/`v*` tag cascade into `portable.yml` never fires and
   the workflows fail at the push step.
+- The **`GIT_SIGNING_KEY` SSH private key** — the `v*`/`b*` tag ruleset
+  requires **signed tags**, so both tag-pushing workflows sign the tag in the
+  runner with this key:
+  - generate a dedicated ed25519 keypair (never reuse a personal key):
+    `ssh-keygen -t ed25519 -N "" -C "openpal-actions-release-tag-signing" -f id_ed25519`;
+  - register the **public** half as an **SSH signing key** on the operator's
+    GitHub account (Settings → SSH and GPG keys → New SSH key → key type
+    *Signing Key*) — GitHub resolves the signature to that account;
+  - store the **private** half's content exactly as the `GIT_SIGNING_KEY`
+    **Actions secret** on this repo (Settings → Secrets and variables →
+    Actions; shown only once at creation);
+  - rotate it (new keypair, re-register the public half, update the secret)
+    on a schedule or if it ever leaks.
+  Without it, tag pushes are rejected by the `v*`/`b*` ruleset's
+  `required_signatures` — the workflows fail at the signing step with a
+  message naming the missing secret.
 - The updater signing keypair's Actions secrets configured on the repo (they
   gate the release pipeline — see below):
   - `TAURI_SIGNING_PRIVATE_KEY` + `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` — the
@@ -175,6 +192,12 @@ Everything below is the whole job; there are no unrecorded steps.
   `main` first, land only fixes there, and tag from it. **Make Release
   validates against `main`** — a release-branch cut passes `skip_checks`
   deliberately, or is cut from `main` after the fixes merge back.
+- **Release tags are signed** — the `v*`/`b*` tag ruleset requires
+  `required_signatures` (and makes tags immovable and undeletable). Tags are
+  created by the workflows, which sign them in the runner with the
+  `GIT_SIGNING_KEY` from the prerequisite above; the `publish` job
+  additionally refuses to sign any tag whose commit isn't an ancestor of
+  `main`.
 
 ### 1. Finalize (one reviewable step)
 
@@ -212,8 +235,10 @@ git add -A && git commit -m "chore(release): finalize CHANGELOG for vX.Y.Z"
 
 ### 3. Run the Make Release workflow
 
-Tags are pushed by the workflow, not by hand — **Actions → Make Release →
-Run workflow**:
+Tags are created and pushed by the workflow, **not by hand** — **Actions →
+Make Release → Run workflow**. The workflow signs the tag in the runner with
+`GIT_SIGNING_KEY` (the ruleset requires signed `v*`/`b*` tags), so no personal
+git signing setup is needed:
 
 1. **Dry run first** (the default `dry_run: true`): pick the commit (leave
    empty for `main` HEAD) and run. It validates that the chosen commit belongs
@@ -221,10 +246,10 @@ Run workflow**:
    strictly newer than the last `v*` tag — otherwise it fails naming the bump
    command (`node scripts/bump-version.mjs --bump …`), because version bumps
    are PR-driven and must land before the cut.
-2. **Re-run with `dry_run: false`**: the workflow creates an **annotated
-   `vX.Y.Z` tag** and pushes it with `RELEASE_PUSH_TOKEN`, which cascades into
-   `portable.yml`. Its summary then carries the promote instructions (gated on
-   the per-target smoke check).
+2. **Re-run with `dry_run: false`**: the workflow creates a **signed annotated
+   `vX.Y.Z` tag** (`git tag -s` with `GIT_SIGNING_KEY`) and pushes it with
+   `RELEASE_PUSH_TOKEN`, which cascades into `portable.yml`. Its summary then
+   carries the promote instructions (gated on the per-target smoke check).
 
 `skip_checks` exists for deliberate exceptions (cutting an older commit, a
 release-line tag); use it only when you know why — the checks catch real
@@ -290,12 +315,14 @@ Done: users' in-app update check now finds `vX.Y.Z`.
 - The `release: patch|minor|major` and `no-release` labels are created by
   `scripts/ensure-labels.sh` (owner-level, before the labeler and gate go
   live); the labeler keeps the `release:` one in sync with the title.
-- **`RELEASE_PUSH_TOKEN` is an operator step.** Both tag-pushing workflows
-  fail at the push if the secret is missing — the failure message says so.
-  This is intentional: the token is a credential whose pushes trigger CI,
-  which `GITHUB_TOKEN` never can. Scope it to this one repository with an
-  expiry, and rotate before it lapses or if it ever leaks (a leaked token
-  should be revoked and regenerated, then the secret updated).
+- **`RELEASE_PUSH_TOKEN` and `GIT_SIGNING_KEY` are operator steps.** Both
+  tag-pushing workflows fail with a message naming the missing secret — at the
+  push step for the token, at the signing step for the key. This is
+  intentional: the token is a credential whose pushes trigger CI (which
+  `GITHUB_TOKEN` never can — scope it to this one repository and rotate before
+  it lapses), and the key is what lets CI-created tags satisfy the signed-tag
+  ruleset (register its public half on your GitHub account; rotate it on a
+  schedule or if it ever leaks).
 - The draft release is the intentional soft-launch gate from the auto-updater
   plan; nothing reaches users until the human promotion in step 5. The
   per-target smoke gate is the quality gate in front of it — a smoke failure

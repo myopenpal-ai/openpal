@@ -2,8 +2,10 @@
 # Make Release workflow: the deliberate, human-only entry point to the stable
 # pipeline. Nothing on `main` auto-creates a `v*` tag — a maintainer runs this
 # workflow after the PR-driven version bump + `finalize` land, and it creates
-# an annotated `vX.Y.Z` tag pushed over HTTPS with the RELEASE_PUSH_TOKEN
-# fine-grained PAT, which cascades into `portable.yml`'s `v*` trigger (full
+# a signed annotated `vX.Y.Z` tag — signed in the runner with the
+# GIT_SIGNING_KEY SSH key (the `v*`/`b*` tag ruleset requires signed tags) —
+# pushed over HTTPS with the RELEASE_PUSH_TOKEN fine-grained PAT, which
+# cascades into `portable.yml`'s `v*` trigger (full
 # five-target matrix → signed draft release → per-target smoke gate → human
 # promote). A tag push made by GITHUB_TOKEN cannot spawn further workflow
 # runs, so the dedicated push credential is required.
@@ -137,6 +139,29 @@ jobs:
           echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
           echo "version=v${VERSION}" >> "$GITHUB_OUTPUT"
 
+      # The v*/b* tag ruleset requires *signed* tags, so the tag is signed in
+      # the runner with the dedicated GIT_SIGNING_KEY (public half registered
+      # as an SSH signing key on the operator's GitHub account — docs/
+      # RELEASING.md). Only needed for a real run: a dry run never touches a
+      # secret and fails on nothing, as it should.
+      - name: Import the release signing key
+        if: ${{ inputs.dry_run != 'true' }}
+        env:
+          GIT_SIGNING_KEY: ${{ secrets.GIT_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${GIT_SIGNING_KEY:-}" ]]; then
+            echo "::error::GIT_SIGNING_KEY secret is not set — register the dedicated release signing key (docs/RELEASING.md)"
+            exit 1
+          fi
+          mkdir -p ~/.ssh
+          umask 077
+          printf '%s\n' "$GIT_SIGNING_KEY" > ~/.ssh/id_ed25519_releases
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config gpg.format ssh
+          git config user.signingkey ~/.ssh/id_ed25519_releases
+
       - name: Create and push the vX.Y.Z tag
         if: ${{ inputs.dry_run != 'true' }}
         env:
@@ -149,8 +174,6 @@ jobs:
             echo "::error::RELEASE_PUSH_TOKEN secret is not set — create the fine-grained PAT and add it as a repository secret (docs/RELEASING.md)"
             exit 1
           fi
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
           # Drop the checkout action's stored credentials so the push below
           # authenticates with the PAT and nothing else: a GITHUB_TOKEN push
           # would succeed but would silently never cascade into portable.yml.
@@ -165,9 +188,11 @@ jobs:
             echo "::error::tag ${VERSION} already exists on origin — refusing to re-cut. Delete the tag (and its release, if any) before re-cutting, or choose another commit."
             exit 1
           fi
-          git tag -a "${VERSION}" -m "Release ${VERSION} (cut from ${SHA})"
+          # Sign the tag with the imported GIT_SIGNING_KEY (the tag ruleset
+          # rejects unsigned v*/b* tags).
+          git tag -s "${VERSION}" -m "Release ${VERSION} (cut from ${SHA})"
           git push token-origin "${VERSION}"
-          echo "Created and pushed annotated tag ${VERSION}"
+          echo "Created and pushed signed annotated tag ${VERSION}"
 
       - name: Summary
         env:
@@ -185,16 +210,16 @@ jobs:
           - pre-release checks: $( [[ "$SKIP" == "true" ]] && echo "skipped (skip_checks)" || echo "passed" )
 
           Re-run this workflow with **dry_run = false** to create and push the
-          annotated \`$VERSION\` tag via the release push token. Nothing was
-          created in this run.
+          signed annotated \`$VERSION\` tag via the release push token. Nothing
+          was created in this run.
           EOF
           else
             cat >> "$GITHUB_STEP_SUMMARY" <<EOF
           ## $VERSION tagged — stable cut is in progress
 
-          Annotated tag **$VERSION** pushed on \`$SHA\` with the release push
-          token. The \`portable\` workflow is now building the full five-target
-          matrix and assembling a signed **draft** release.
+          Annotated tag **$VERSION** signed and pushed on \`$SHA\` with the
+          release push token. The \`portable\` workflow is now building the
+          full five-target matrix and assembling a signed **draft** release.
 
           After it finishes, check the per-target smoke gate. **Only when the
           run summary says "✓ Smoke passed — promote"** (every bundle verified

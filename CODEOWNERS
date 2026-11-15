@@ -1,0 +1,5 @@
+# Code owners. At the current 0-approval policy this is a no-op that matters
+# the day a second maintainer with write access joins: flipping
+# `require_code_owner_review` in the ruleset then activates owner-review for
+# every PR (see docs/SECURITY_POSTURE.md).
+* @myopenpal-ai/openpal-maintainers

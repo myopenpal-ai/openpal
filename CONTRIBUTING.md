@@ -52,6 +52,25 @@ Example: `feature/47-resume-interrupted-model-download`.
   say so in the PR and a maintainer will help.
 - Don't run a blanket `cargo update`; bump only the dependency you mean to.
 
+## Commit signing (required)
+
+`main` enforces **signed, verified commits** (ruleset `required_signatures`);
+unsigned commits on a PR head block its merge. Configure SSH commit signing
+once, using the SSH key registered on your GitHub account under
+Settings → SSH and GPG keys → **SSH signing keys**:
+
+```bash
+git config --global user.signingkey ~/.ssh/id_ed25519.pub   # the registered key
+git config --global gpg.format ssh
+git config --global commit.gpgsign true
+```
+
+To sign commits already pushed to a branch:
+
+```bash
+git rebase --exec 'git commit --amend --no-edit -S' && git push --force-with-lease
+```
+
 ## Before opening a pull request
 
 Run the same checks CI runs:

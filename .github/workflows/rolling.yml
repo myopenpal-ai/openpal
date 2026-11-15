@@ -1,9 +1,11 @@
 # Rolling nightly track (docs/RELEASING.md). Mirrors ggml-org/llama.cpp's
 # rolling model: every user-facing merge to `main` auto-creates a monotonic
-# `b{N}` build-number tag — `N = git rev-list --count HEAD` — and pushes it
-# over HTTPS with the RELEASE_PUSH_TOKEN fine-grained PAT, which cascades into
-# `portable.yml`'s `b*` trigger (a tag push made by GITHUB_TOKEN cannot spawn
-# further workflow runs, so a dedicated push credential is required).
+# `b{N}` build-number tag — `N = git rev-list --count HEAD` — signed in the
+# runner with the GIT_SIGNING_KEY SSH key (the `v*`/`b*` tag ruleset requires
+# signed tags) and pushed over HTTPS with the RELEASE_PUSH_TOKEN fine-grained
+# PAT, which cascades into `portable.yml`'s `b*` trigger (a tag push made by
+# GITHUB_TOKEN cannot spawn further workflow runs, so a dedicated push
+# credential is required).
 # `portable.yml` then builds the slim canary subset and publishes a
 # **pre-release**.
 #
@@ -80,6 +82,28 @@ jobs:
         with:
           fetch-depth: 0
 
+      # The v*/b* tag ruleset requires *signed* tags, so the tag is signed in
+      # the runner with the dedicated GIT_SIGNING_KEY (public half registered
+      # as an SSH signing key on the operator's GitHub account — docs/
+      # RELEASING.md). Fail fast, before any tag work, if it is missing.
+      - name: Import the release signing key
+        if: steps.check.outputs.should_run == 'true'
+        env:
+          GIT_SIGNING_KEY: ${{ secrets.GIT_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${GIT_SIGNING_KEY:-}" ]]; then
+            echo "::error::GIT_SIGNING_KEY secret is not set — register the dedicated release signing key (docs/RELEASING.md)"
+            exit 1
+          fi
+          mkdir -p ~/.ssh
+          umask 077
+          printf '%s\n' "$GIT_SIGNING_KEY" > ~/.ssh/id_ed25519_releases
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config gpg.format ssh
+          git config user.signingkey ~/.ssh/id_ed25519_releases
+
       - name: Create and push the nightly tag
         if: steps.check.outputs.should_run == 'true'
         id: tag
@@ -105,8 +129,6 @@ jobs:
             echo "tag=$tag" >> "$GITHUB_OUTPUT"
             echo "created=false" >> "$GITHUB_OUTPUT"
           else
-            git config user.name "github-actions[bot]"
-            git config user.email "github-actions[bot]@users.noreply.github.com"
             # Drop the checkout action's stored credentials so the push below
             # authenticates with the PAT and nothing else: a GITHUB_TOKEN
             # push would succeed but would silently never cascade into
@@ -117,7 +139,10 @@ jobs:
             # PAT. The token lives in the runner's .git/config for this job
             # only and is masked in logs by GitHub Actions.
             git remote add token-origin "https://x-access-token:${RELEASE_PUSH_TOKEN}@github.com/myopenpal-ai/openpal.git"
-            git tag "${tag}"
+            # Sign the tag with the imported GIT_SIGNING_KEY (the tag ruleset
+            # rejects unsigned v*/b* tags). -s implies an annotated tag object
+            # — that is what carries the signature GitHub verifies.
+            git tag -s -m "Nightly build ${tag}" "${tag}"
             if ! git push token-origin "${tag}"; then
               # Lost a race to the wire: the remote already has the tag even
               # though our local refs hadn't seen it yet. That's the same
