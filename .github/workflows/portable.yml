@@ -9,14 +9,18 @@
 #   matrix from the tag kind: a `b*` nightly builds a slim canary subset
 #   (default `ubuntu-vulkan-x64` + `win-vulkan-x64` — the targets with a
 #   runner in this org today; overridable via the `NIGHTLY_CANARY_TARGETS`
-#   repo variable), while `v*` and `workflow_dispatch` keep the full
-#   five-target matrix.
+#   repo variable), while `v*` and `workflow_dispatch` build the stable set
+#   (default: the stable targets with a runner in this org today; overridable
+#   via the `STABLE_TARGETS` repo variable).
 # - Runner reality: `macos-x64` builds on the org's self-hosted
 #   `macos-15-intel` runner; `macos-arm64` needs an Apple Silicon runner
-#   registered with the `macos-14` label, which this org does not have yet —
-#   that leg is cancelled until one is added (the `prepare` job emits a
-#   warning naming it). Stable cuts stay failing until every target's runner
-#   exists, by design.
+#   registered with the `macos-14` label, which this org does not have yet.
+#   An unregistered leg is cancelled by GitHub — and a cancelled build leg
+#   skips `publish` (it has `needs: build` and no `if: always()`), so the
+#   draft release would never be assembled. `macos-arm64` is therefore left
+#   out of the default stable matrix until a runner exists; register one (or
+#   set `STABLE_TARGETS`) to include it, and `prepare` warns whenever the
+#   stable set omits it, so the omission is never silent.
 # - the UI is compiled once per run (`ui` job → shared `ui-dist` artifact);
 #   matrix jobs restore it and `tauri.portable.conf.json` disables the
 #   per-target `beforeBuildCommand`.
@@ -105,6 +109,7 @@ jobs:
           REF_NAME: ${{ github.ref_name }}
           EVENT_NAME: ${{ github.event_name }}
           NIGHTLY_CANARY: ${{ vars.NIGHTLY_CANARY_TARGETS }}
+          STABLE_TARGETS: ${{ vars.STABLE_TARGETS }}
         run: |
           set -euo pipefail
 
@@ -141,7 +146,14 @@ jobs:
 
           if is_stable; then
             kind="stable"
-            targets="macos-arm64,macos-x64,win-vulkan-x64,ubuntu-vulkan-x64,ubuntu-vulkan-arm64"
+            # Default: the stable targets with a runner in this org today.
+            # macos-arm64 needs an Apple Silicon runner with the `macos-14`
+            # label (not registered yet) — an unregistered leg is cancelled
+            # by GitHub, and a cancelled build leg skips `publish` (a `needs`
+            # job without `if: always()`), so the draft release would never
+            # be assembled. Register the runner, or set the STABLE_TARGETS
+            # repo variable, to include it again.
+            targets="${STABLE_TARGETS:-macos-x64,win-vulkan-x64,ubuntu-vulkan-x64,ubuntu-vulkan-arm64}"
           else
             # Canary default = the targets with a runner today; add
             # macos-arm64 back once a `macos-14` (Apple Silicon) runner exists.
@@ -157,7 +169,7 @@ jobs:
             t="${t//[[:space:]]/}"
             [ -n "$t" ] || continue
             os="$(os_for "$t")" || {
-              echo "::error::unknown target \"$t\" (from NIGHTLY_CANARY_TARGETS) — known targets: macos-arm64, macos-x64, win-vulkan-x64, ubuntu-vulkan-x64, ubuntu-vulkan-arm64"
+              echo "::error::unknown target \"$t\" (from NIGHTLY_CANARY_TARGETS or STABLE_TARGETS) — known targets: macos-arm64, macos-x64, win-vulkan-x64, ubuntu-vulkan-x64, ubuntu-vulkan-arm64"
               exit 1
             }
             warn_if_unregistered "$t" "$os"
@@ -172,8 +184,15 @@ jobs:
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
           echo "matrix [$kind]: $matrix"
 
+          # Fail safe, not fail silent: a stable cut that omits the arm64
+          # bundle is a deliberate maintenance decision — name it in the run
+          # rather than letting the omission pass without a trace.
+          if [[ "$kind" == "stable" && "$targets" != *macos-arm64* ]]; then
+            echo "::warning::stable matrix has no macos-arm64 — this release ships no Apple Silicon bundle (no macos-14 runner registered; register one or set STABLE_TARGETS to include it)"
+          fi
+
   # The UI is byte-identical for every target — build it once per run and
-  # hand `ui/dist` to every matrix job instead of compiling it five times.
+  # hand `ui/dist` to every matrix job instead of compiling it per target.
   ui:
     name: build shared UI
     runs-on: ubuntu-latest

@@ -9,9 +9,10 @@ philosophy:
   This is machinery, not releases: nightlies are smoke-check targets for the
   full matrix between stable cuts, never something users auto-update to.
 - **Stable** — a deliberately cut `vX.Y.Z`, created only by a human running
-  the manual **Make Release** workflow, which builds the full five-target
-  matrix, assembles a signed **draft** release and a per-target **smoke** gate,
-  and stays inert until a human promotes the draft.
+  the manual **Make Release** workflow, which builds the stable matrix (the
+  four targets with a runner today; `macos-arm64` returns once an Apple
+  Silicon runner is registered), assembles a signed **draft** release and a
+  per-target **smoke** gate, and stays inert until a human promotes the draft.
 
 The version rule and PR-driven bumping are unchanged (below); what changed is
 who creates the tags: `b*` tags are pushed by CI automatically, `v*` tags are
@@ -24,7 +25,7 @@ user-facing PR merged to main ──► rolling-nightly ──► b{N} tag ─�
                                                                          └─► pre-release (X.Y.Z+b{N})
                                                                             invisible to auto-update
 
-maintainer: bump (PRs) → finalize (PR) → Make Release ──► vX.Y.Z tag ──► portable (full 5-target)
+maintainer: bump (PRs) → finalize (PR) → Make Release ──► vX.Y.Z tag ──► portable (stable matrix)
   (dry-run first)                                                       ├─► signed draft release
                                                                         ├─► per-target smoke gate
                                                                         └─► human promote (draft=false)
@@ -260,8 +261,10 @@ mistakes.
 Watch Actions → **portable**. The tag-triggered run:
 
 1. `prepare` resolves the llama.cpp engine tag once and computes the target
-   matrix (canary subset for `b*`, full five for `v*`); a single `ui` job
-   compiles the frontend once for every target.
+   matrix (canary subset for `b*`, the stable set for `v*` — `macos-arm64`
+   included once an Apple Silicon runner is registered, or via the
+   `STABLE_TARGETS` repo variable); a single `ui` job compiles the frontend
+   once for every target.
 2. The matrix `build` jobs assemble each bundle (restoring the shared UI and
    the per-target engine cache keyed on the resolved tag).
 3. `publish` (this track is `v*`, so `--kind stable`) signs every artifact and
