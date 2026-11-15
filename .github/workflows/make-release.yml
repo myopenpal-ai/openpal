@@ -2,9 +2,11 @@
 # Make Release workflow: the deliberate, human-only entry point to the stable
 # pipeline. Nothing on `main` auto-creates a `v*` tag — a maintainer runs this
 # workflow after the PR-driven version bump + `finalize` land, and it creates
-# an annotated `vX.Y.Z` tag pushed through the DEPLOY_KEY_RELEASE SSH deploy
-# key, which cascades into `portable.yml`'s `v*` trigger (full five-target
-# matrix → signed draft release → per-target smoke gate → human promote).
+# an annotated `vX.Y.Z` tag pushed over HTTPS with the RELEASE_PUSH_TOKEN
+# fine-grained PAT, which cascades into `portable.yml`'s `v*` trigger (full
+# five-target matrix → signed draft release → per-target smoke gate → human
+# promote). A tag push made by GITHUB_TOKEN cannot spawn further workflow
+# runs, so the dedicated push credential is required.
 #
 # Dry-run by default: it validates the chosen commit and prints exactly what
 # a real run would do, without creating anything. The full stable-cut runbook
@@ -51,16 +53,14 @@ jobs:
     name: Make Release
     runs-on: ubuntu-latest
     steps:
-      # `ssh-key` makes actions/checkout set the origin to the SSH URL and run
-      # every git operation through the deploy key, so the `git push origin
-      # vX.Y.Z` below authenticates as the deploy key — the only way the tag
-      # push cascades into `portable.yml` (GITHUB_TOKEN push events are
-      # intentionally not re-triggerable by GitHub).
-      - name: Checkout chosen commit with release deploy key
+      # Checkout with the job's default credentials (persisted) so read-only
+      # git calls (fetch/validation) still work; the push step below drops
+      # those credentials before pushing so the tag is pushed with the PAT,
+      # never GITHUB_TOKEN.
+      - name: Checkout chosen commit with full history
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          ssh-key: ${{ secrets.DEPLOY_KEY_RELEASE }}
           ref: ${{ inputs.commit != '' && inputs.commit || github.ref_name }}
 
       # A specific commit SHA ref may not have brought `origin/main` or the
@@ -142,16 +142,31 @@ jobs:
         env:
           VERSION: ${{ steps.checks.outputs.version }}
           SHA: ${{ steps.checks.outputs.sha }}
+          RELEASE_PUSH_TOKEN: ${{ secrets.RELEASE_PUSH_TOKEN }}
         run: |
           set -euo pipefail
-          if git ls-remote --tags origin "refs/tags/${VERSION}" | grep -q "refs/tags/${VERSION}"; then
-            echo "::error::tag ${VERSION} already exists on origin — refusing to re-cut. Delete the tag (and its release, if any) before re-cutting, or choose another commit."
+          if [[ -z "${RELEASE_PUSH_TOKEN:-}" ]]; then
+            echo "::error::RELEASE_PUSH_TOKEN secret is not set — create the fine-grained PAT and add it as a repository secret (docs/RELEASING.md)"
             exit 1
           fi
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          # Drop the checkout action's stored credentials so the push below
+          # authenticates with the PAT and nothing else: a GITHUB_TOKEN push
+          # would succeed but would silently never cascade into portable.yml.
+          # Only GITHUB_TOKEN pushes are exempt from re-triggering workflows —
+          # this push fires them.
+          git config --unset-all http.https://github.com/.extraheader || true
+          # x-access-token is the placeholder username GitHub accepts for a
+          # PAT. The token lives in the runner's .git/config for this job only
+          # and is masked in logs by GitHub Actions.
+          git remote add token-origin "https://x-access-token:${RELEASE_PUSH_TOKEN}@github.com/myopenpal-ai/openpal.git"
+          if git ls-remote --tags token-origin "refs/tags/${VERSION}" | grep -q "refs/tags/${VERSION}"; then
+            echo "::error::tag ${VERSION} already exists on origin — refusing to re-cut. Delete the tag (and its release, if any) before re-cutting, or choose another commit."
+            exit 1
+          fi
           git tag -a "${VERSION}" -m "Release ${VERSION} (cut from ${SHA})"
-          git push origin "${VERSION}"
+          git push token-origin "${VERSION}"
           echo "Created and pushed annotated tag ${VERSION}"
 
       - name: Summary
@@ -170,15 +185,15 @@ jobs:
           - pre-release checks: $( [[ "$SKIP" == "true" ]] && echo "skipped (skip_checks)" || echo "passed" )
 
           Re-run this workflow with **dry_run = false** to create and push the
-          annotated \`$VERSION\` tag via the release deploy key. Nothing was
+          annotated \`$VERSION\` tag via the release push token. Nothing was
           created in this run.
           EOF
           else
             cat >> "$GITHUB_STEP_SUMMARY" <<EOF
           ## $VERSION tagged — stable cut is in progress
 
-          Annotated tag **$VERSION** pushed on \`$SHA\` via the release deploy
-          key. The \`portable\` workflow is now building the full five-target
+          Annotated tag **$VERSION** pushed on \`$SHA\` with the release push
+          token. The \`portable\` workflow is now building the full five-target
           matrix and assembling a signed **draft** release.
 
           After it finishes, check the per-target smoke gate. **Only when the

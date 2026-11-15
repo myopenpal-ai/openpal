@@ -114,10 +114,10 @@ non-exempt path (same set as the version-bump gate). It:
    `[no release]`,
 2. counts `N = git rev-list --count HEAD` — monotonic because `main` is
    squash-only and linear,
-3. creates a lightweight `b{N}` tag and pushes it **via the `DEPLOY_KEY_RELEASE`
-   SSH deploy key**, so the push cascades into `portable.yml` (a tag push made
-   by `GITHUB_TOKEN` would not spawn further workflows — see the prerequisite
-   below),
+3. creates a lightweight `b{N}` tag and pushes it **over HTTPS with the
+   `RELEASE_PUSH_TOKEN` fine-grained PAT**, so the push cascades into
+   `portable.yml` (a tag push made by `GITHUB_TOKEN` would not spawn further
+   workflows — see the prerequisite below),
 4. a tag-exists guard plus workflow concurrency make batched queue merges safe:
    a rerun or a race that resolves the same count skips (never fails), and a
    `workflow_dispatch` on the workflow forces a nightly for current `main`.
@@ -144,16 +144,19 @@ Everything below is the whole job; there are no unrecorded steps.
 ### 0. Prerequisites
 
 - `git` on PATH, `gh` installed and authenticated.
-- The **`DEPLOY_KEY_RELEASE` SSH deploy keypair** — an operator step, not
-  code. Because tags pushed by `GITHUB_TOKEN` cannot spawn further workflow
-  runs, both tag-pushing workflows (`rolling.yml` and `make-release.yml`)
-  authenticate with this key:
-  - private key → the `DEPLOY_KEY_RELEASE` **Actions secret** (PEM, exactly as
-    generated — no newlines mangled);
-  - public key → a **write-enabled deploy key** on the repository (Settings →
-    Deploy keys → *Allow write access*).
-  Without it, the `b*`/`v*` tag cascade into `portable.yml` never fires and the
-  workflows fail at the push step.
+- The **`RELEASE_PUSH_TOKEN` fine-grained Personal Access Token** — an
+  operator step, not code. Because tags pushed by `GITHUB_TOKEN` cannot spawn
+  further workflow runs, both tag-pushing workflows (`rolling.yml` and
+  `make-release.yml`) push the tag over HTTPS authenticated with this token:
+  - create it at GitHub → Settings → Developer settings → Personal access
+    tokens → **Fine-grained tokens**, owner `myopenpal-ai`, repository access
+    **Only select repositories** → `openpal`, repository permission
+    **Contents: Read and write**, and an expiry (rotate before it lapses);
+  - store it as the `RELEASE_PUSH_TOKEN` **Actions secret** on this repo
+    (Settings → Secrets and variables → Actions; it is shown only once at
+    creation, so set it immediately).
+  Without it, the `b*`/`v*` tag cascade into `portable.yml` never fires and
+  the workflows fail at the push step.
 - The updater signing keypair's Actions secrets configured on the repo (they
   gate the release pipeline — see below):
   - `TAURI_SIGNING_PRIVATE_KEY` + `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` — the
@@ -219,7 +222,7 @@ Run workflow**:
    command (`node scripts/bump-version.mjs --bump …`), because version bumps
    are PR-driven and must land before the cut.
 2. **Re-run with `dry_run: false`**: the workflow creates an **annotated
-   `vX.Y.Z` tag** and pushes it via `DEPLOY_KEY_RELEASE`, which cascades into
+   `vX.Y.Z` tag** and pushes it with `RELEASE_PUSH_TOKEN`, which cascades into
    `portable.yml`. Its summary then carries the promote instructions (gated on
    the per-target smoke check).
 
@@ -287,10 +290,12 @@ Done: users' in-app update check now finds `vX.Y.Z`.
 - The `release: patch|minor|major` and `no-release` labels are created by
   `scripts/ensure-labels.sh` (owner-level, before the labeler and gate go
   live); the labeler keeps the `release:` one in sync with the title.
-- **`DEPLOY_KEY_RELEASE` is an operator step.** Both tag-pushing workflows
-  fail at the push if the secret or the write-enabled deploy key is missing —
-  the failure message says so. This is intentional: the key is the thing that
-  lets CI-created tags trigger CI, which `GITHUB_TOKEN` never can.
+- **`RELEASE_PUSH_TOKEN` is an operator step.** Both tag-pushing workflows
+  fail at the push if the secret is missing — the failure message says so.
+  This is intentional: the token is a credential whose pushes trigger CI,
+  which `GITHUB_TOKEN` never can. Scope it to this one repository with an
+  expiry, and rotate before it lapses or if it ever leaks (a leaked token
+  should be revoked and regenerated, then the secret updated).
 - The draft release is the intentional soft-launch gate from the auto-updater
   plan; nothing reaches users until the human promotion in step 5. The
   per-target smoke gate is the quality gate in front of it — a smoke failure

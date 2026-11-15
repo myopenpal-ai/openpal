@@ -517,8 +517,9 @@ GitHub Flow (no release branches at all) and full GitFlow (a permanent
   — only fixes land here after the cut, no new features. Same required
   checks as `main`; also protected.
 - **Tags** (`b{N}` nightlies, `vX.Y.Z` stables) are pushed by workflows — not
-  by hand — via the `DEPLOY_KEY_RELEASE` deploy key (a tag push made by
-  `GITHUB_TOKEN` cannot spawn further workflows), and trigger `portable.yml`:
+  by hand — over HTTPS with a **`RELEASE_PUSH_TOKEN` fine-grained PAT** (a tag
+  push made by `GITHUB_TOKEN` cannot spawn further workflows), and trigger
+  `portable.yml`:
   `b*` builds a canary subset and publishes a **pre-release** (invisible to
   the auto-updater), `v*` builds the full matrix and a signed **draft**
   release. Nightlies are automatic on every user-facing merge to `main`
