@@ -32,6 +32,7 @@ which platform you built it on.
 ## Ticket checklist
 
 - [ ] The `Closes #N` line above names the issue this PR implements — or the `no-ticket` label is set and the reason is above.
+- [ ] If user-facing code changed (outside `docs/`, `*.md`, `.github/`, `scripts/`), this PR bumps the version and adds its changelog line (`node scripts/bump-version.mjs --bump … --notes "…"`) — or carries `[no release]` in its title. The `version-bump` check enforces this.
 - [ ] Every `Done when` line on the linked issue is satisfied, or the ones that are not are called out above.
 - [ ] Nothing in `Not in scope` was touched.
 - [ ] New or changed user-facing strings have both `en` and `fr` keys (`ui/src/i18n/keys.test.ts` passes).
