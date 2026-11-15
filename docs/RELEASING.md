@@ -71,7 +71,8 @@ node scripts/bump-version.mjs --bump <patch|minor|major> --notes "One curated li
   - `Cargo.toml` — `[workspace.package] version`, the single source all five
     crates read via `version.workspace = true`;
   - `Cargo.lock` — the five workspace crates' resolved versions;
-  - the five built-in plugin manifests `plugins/*/plugin.json`;
+  - the built-in plugin manifests `plugins/*/plugin.json` (enumerated
+    automatically, so a new plugin can never be forgotten);
   - `CHANGELOG.md` — appends your `--notes` line(s) under `## [Unreleased]`.
 - `--notes` is a curated line (or a ready-formatted block: `### Added` /
   `### Fixed` headings, `- ` bullets); a bare phrase becomes a bullet. Each PR

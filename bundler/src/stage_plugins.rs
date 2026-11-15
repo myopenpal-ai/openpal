@@ -222,8 +222,8 @@ mod tests {
             );
         }
         assert!(
-            checked >= 5,
-            "expected the five built-in plugin manifests under plugins/, found {checked}"
+            checked >= 6,
+            "expected the six built-in plugin manifests under plugins/, found {checked}"
         );
     }
 }
