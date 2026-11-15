@@ -1,9 +1,28 @@
 # Build the no-install Portable distribution on native runners, one per
-# OS/arch (see docs/design/PORTABLE.md). Each job runs the bundler's `portable`
-# subcommand — which fetches the matching llama.cpp engine, builds the app via
-# the Tauri CLI, assembles the bundle and archives it — then uploads the result.
+# OS/arch (see docs/design/PORTABLE.md). Each matrix job runs the bundler's
+# `portable` subcommand — which fetches the matching llama.cpp engine, builds
+# the app via the Tauri CLI, assembles the bundle and archives it — then
+# uploads the result.
 #
-# Triggers: manual (with optional pre-staged model) and on a `v*` tag.
+# Per-merge cost controls (see the llama.cpp release-philosophy epic):
+# - `prepare` resolves the llama.cpp engine tag once and computes the target
+#   matrix from the tag kind: a `b*` nightly builds a slim canary subset
+#   (default `macos-arm64` + `ubuntu-vulkan-x64`, overridable via the
+#   `NIGHTLY_CANARY_TARGETS` repo variable), while `v*` and `workflow_dispatch`
+#   keep the full five-target matrix.
+# - the UI is compiled once per run (`ui` job → shared `ui-dist` artifact);
+#   matrix jobs restore it and `tauri.portable.conf.json` disables the
+#   per-target `beforeBuildCommand`.
+# - the per-target engine download is cached keyed on target + the *resolved*
+#   engine tag (from `prepare`), so repeat runs for the same tag hit the cache.
+# - full verification concentrates at the stable cut: after `publish` signs
+#   the artifacts and assembles the draft, a per-target `smoke` matrix boots
+#   each bundle's metadata/engine and verifies the updater signature; a green
+#   smoke makes `promote` issue the human promote instructions, a red smoke
+#   makes `discard` delete the draft so nothing stale lingers.
+#
+# Triggers: manual (with optional pre-staged model), a `v*` stable tag, or a
+# `b*` nightly tag.
 name: portable
 
 on:
@@ -20,31 +39,136 @@ on:
   push:
     tags:
       - "v*"
+      - "b*"
 
 concurrency:
   group: portable-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  # Compute what this run builds. One cheap job decides the matrix from the
+  # tag kind (canary subset for `b*` nightlies, full five for `v*` and
+  # workflow_dispatch) and resolves the llama.cpp engine tag once, so every
+  # matrix job keys its engine cache on the same resolved tag.
+  prepare:
+    name: prepare matrix + engine tag
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+      engine_tag: ${{ steps.engine.outputs.tag }}
+      kind: ${{ steps.matrix.outputs.kind }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: portable-prepare
+
+      # Resolve "latest" → concrete build tag once, following llama.cpp's
+      # nightly pointer release. The resolved tag (never the literal "latest")
+      # is the cache key the matrix jobs below hit, so it must be resolved
+      # exactly once, up front — resolving per-job would let the key drift.
+      - name: Resolve llama.cpp engine tag
+        id: engine
+        run: |
+          set -euo pipefail
+          tag="$(cargo run -p openpal-bundler -- resolve-engine-tag)"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "Resolved engine tag: $tag"
+
+      - name: Compute target matrix
+        id: matrix
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          EVENT_NAME: ${{ github.event_name }}
+          NIGHTLY_CANARY: ${{ vars.NIGHTLY_CANARY_TARGETS }}
+        run: |
+          set -euo pipefail
+
+          is_stable() {
+            [ "$EVENT_NAME" = "workflow_dispatch" ] || [[ "$REF_NAME" == v* ]]
+          }
+
+          # target → runner OS (with the fixed matrix entries from before the
+          # prepare job split).
+          os_for() {
+            case "$1" in
+              macos-arm64) echo "macos-14" ;;
+              macos-x64) echo "macos-13" ;;
+              win-vulkan-x64) echo "windows-latest" ;;
+              ubuntu-vulkan-x64) echo "ubuntu-22.04" ;;
+              ubuntu-vulkan-arm64) echo "ubuntu-24.04-arm" ;;
+              *) return 1 ;;
+            esac
+          }
+
+          if is_stable; then
+            kind="stable"
+            targets="macos-arm64,macos-x64,win-vulkan-x64,ubuntu-vulkan-x64,ubuntu-vulkan-arm64"
+          else
+            kind="canary"
+            targets="${NIGHTLY_CANARY:-macos-arm64,ubuntu-vulkan-x64}"
+          fi
+
+          entries=""
+          IFS=,
+          for t in $targets; do
+            # Tolerate spaces/hanging commas in NIGHTLY_CANARY_TARGETS
+            # (e.g. "macos-arm64, ubuntu-vulkan-x64").
+            t="${t//[[:space:]]/}"
+            [ -n "$t" ] || continue
+            os="$(os_for "$t")" || {
+              echo "::error::unknown target \"$t\" (from NIGHTLY_CANARY_TARGETS) — known targets: macos-arm64, macos-x64, win-vulkan-x64, ubuntu-vulkan-x64, ubuntu-vulkan-arm64"
+              exit 1
+            }
+            crt=""
+            [ "$t" = "win-vulkan-x64" ] && crt=',"crt_static":true'
+            entries="${entries}{\"name\":\"$t\",\"os\":\"$os\",\"target\":\"$t\"$crt},"
+          done
+          unset IFS
+
+          matrix="[${entries%,}]"
+          echo "kind=$kind" >> "$GITHUB_OUTPUT"
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+          echo "matrix [$kind]: $matrix"
+
+  # The UI is byte-identical for every target — build it once per run and
+  # hand `ui/dist` to every matrix job instead of compiling it five times.
+  ui:
+    name: build shared UI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Install UI dependencies
+        run: npm --prefix ui ci
+
+      - name: Build the UI once
+        run: npm --prefix ui run build
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ui-dist
+          path: ui/dist
+          if-no-files-found: error
+          retention-days: 1
+
   build:
     name: ${{ matrix.name }}
+    needs: [prepare, ui]
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - { name: macos-arm64, os: macos-14, target: macos-arm64 }
-          - { name: macos-x64, os: macos-13, target: macos-x64 }
-          - { name: win-x64, os: windows-latest, target: win-vulkan-x64, crt_static: true }
-          - { name: linux-x64, os: ubuntu-22.04, target: ubuntu-vulkan-x64 }
-          # Engine arm64 prebuilt has a higher glibc floor (~2.39) → build on 24.04-arm.
-          # NOTE: hosted arm64 Linux runners are free only for PUBLIC repos; on a
-          # PRIVATE repo this leg needs a Team/Enterprise plan or a self-hosted
-          # arm64 runner, else the job queues with no runner. fail-fast:false keeps
-          # the other targets building. Drop this entry if arm64 isn't entitled.
-          - { name: linux-arm64, os: ubuntu-24.04-arm, target: ubuntu-vulkan-arm64 }
-          # Windows on ARM is CPU-only and needs an aarch64-pc-windows-msvc cross
-          # toolchain + arm64 WebView2; left out of CI until a cross path is set up.
+        include: ${{ fromJson(needs.prepare.outputs.matrix) }}
 
     steps:
       - uses: actions/checkout@v4
@@ -101,27 +225,58 @@ jobs:
           if [ -z "$exe" ]; then echo "msedgewebview2.exe not found in cab"; exit 1; fi
           echo "WEBVIEW2_DIR=$(dirname "$exe")" >> "$GITHUB_ENV"
 
-      - name: Install npm dependencies (root + ui)
+      # Engine cache: keyed on the target plus the tag `prepare` resolved. A hit
+      # hands this job a fully-staged engine (its engine-version.json matches the
+      # target), so the bundler's own "already staged for this target" fast path
+      # skips the GB-scale download; an engine bump is a deliberate one-time miss.
+      - name: Restore engine cache (per target + resolved tag)
+        uses: actions/cache@v4
+        with:
+          path: crates/app/resources/llama
+          key: portable-engine-${{ matrix.target }}-${{ needs.prepare.outputs.engine_tag }}
+
+      # The UI was built once in the `ui` job; drop its `dist/` in place so the
+      # Tauri build finds it and skips its own beforeBuildCommand entirely.
+      - name: Restore shared UI build
+        uses: actions/download-artifact@v4
+        with:
+          name: ui-dist
+          path: target/ui-dist
+
+      - name: Place ui/dist
+        shell: bash
         run: |
-          npm ci
-          npm --prefix ui ci
+          set -euo pipefail
+          if [ -d target/ui-dist/dist ]; then
+            mv target/ui-dist/dist ui/dist
+          else
+            mkdir -p ui/dist
+            mv target/ui-dist/* ui/dist/
+          fi
+
+      - name: Install npm dependencies (root — for the Tauri CLI)
+        run: npm ci
 
       # Inputs are passed through the environment (not interpolated into the
       # script body) so a crafted dispatch input can't inject shell commands.
+      # The engine tag comes from `prepare` (never re-resolved here), so the
+      # bundle matches the engine cache key exactly.
       - name: Build Portable distribution
         shell: bash
         env:
           MODEL: ${{ inputs.model }}
           ACCEPT_LICENSE: ${{ inputs.accept_license }}
           TARGET: ${{ matrix.target }}
+          ENGINE_TAG: ${{ needs.prepare.outputs.engine_tag }}
         run: |
           set -euo pipefail
           FLAGS=""
           if [ -n "${MODEL:-}" ]; then FLAGS="$FLAGS --model $MODEL"; fi
           if [ "${ACCEPT_LICENSE:-}" = "true" ]; then FLAGS="$FLAGS --accept-license"; fi
           if [ -n "${WEBVIEW2_DIR:-}" ]; then FLAGS="$FLAGS --webview2 $WEBVIEW2_DIR"; fi
-          echo "Running: portable --target $TARGET $FLAGS"
-          cargo run -p openpal-bundler -- portable --target "$TARGET" $FLAGS
+          echo "Running: portable --target $TARGET --engine-tag $ENGINE_TAG $FLAGS"
+          # shellcheck disable=SC2086 # $FLAGS is an intentional word-splitting list of optional flags
+          cargo run -p openpal-bundler -- portable --target "$TARGET" --engine-tag "$ENGINE_TAG" $FLAGS
 
       # Sanity-check the AppImage is well-formed (extractable). The engine itself
       # is smoke-tested inside the bundler's fetch step when the host can run it.
@@ -130,7 +285,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          img=$(ls target/portable/*.AppImage 2>/dev/null | head -1) || true
+          img="$(find target/portable -maxdepth 1 -name '*.AppImage' 2>/dev/null | head -1)" || true
           if [ -n "${img:-}" ]; then
             "$img" --appimage-extract >/dev/null && echo "AppImage OK: $img"
             rm -rf squashfs-root
@@ -150,13 +305,14 @@ jobs:
 
   # Only on a real `v*` tag push (never workflow_dispatch, which may build a
   # one-off with a pre-staged model that shouldn't become "the" release for
-  # that tag) — signs every Portable artifact the matrix produced, merges
-  # them into the tag's `latest.json` (see bundler/src/manifest.rs), and
-  # publishes/updates the GitHub Release. A release created here is a draft:
-  # OpenPal's updater endpoint reads `/releases/latest`, which never
-  # resolves to a draft, so this stays inert until a human promotes it
-  # (`gh release edit <tag> --draft=false`) — the deliberate soft-launch
-  # gate from the auto-updater plan.
+  # that tag; nightlies keep their own pre-release path) — signs every Portable
+  # artifact the matrix produced, merges them into the tag's `latest.json` (see
+  # bundler/src/manifest.rs), and publishes/updates the GitHub Release. A
+  # release created here is a draft: OpenPal's updater endpoint reads
+  # `/releases/latest`, which never resolves to a draft, so this stays inert
+  # until a human promotes it — the deliberate soft-launch gate. The promote
+  # instructions themselves are issued by the `promote` job only after the
+  # per-target smoke gate passes.
   publish:
     name: publish
     needs: build
@@ -187,7 +343,7 @@ jobs:
           path: target/portable-artifacts
           merge-multiple: true
 
-      - name: Publish signed manifest + release
+      - name: Publish signed manifest + release (draft)
         env:
           GH_TOKEN: ${{ github.token }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -196,3 +352,126 @@ jobs:
           cargo run -p openpal-bundler -- manifest \
             --tag "${{ github.ref_name }}" \
             --portable-dir target/portable-artifacts
+
+      - name: Draft assembled summary
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<'EOF'
+          ## Draft release ${{ github.ref_name }} assembled
+
+          Artifacts signed with the updater key and uploaded; `latest.json`
+          merged. Inert until a human promotes — the per-target smoke gate
+          runs next and decides whether this draft survives.
+          EOF
+
+  # After the draft is signed and assembled, boot each bundle and verify it:
+  # the artifact's SHA-256 and updater signature (against latest.json from the
+  # draft), the version it reports, and that the packaged engine executes. One
+  # matrix leg per target, on the target's own OS. Runs only on the stable cut
+  # (a nightly's canary set deliberately skips full verification).
+  smoke:
+    name: smoke (${{ matrix.name }})
+    needs: [prepare, publish]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.prepare.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: portable-smoke-${{ matrix.target }}
+
+      # Download the shipped bytes from the draft release (not the workflow
+      # artifacts) so this verifies exactly what a user would download, plus
+      # the manifest that carries the per-target signature and SHA-256.
+      - name: Download bundle + manifest from the draft release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p target/smoke
+          gh release download "${{ github.ref_name }}" --repo myopenpal-ai/openpal \
+            -p "OpenPal-portable-${{ matrix.target }}.*" \
+            -p latest.json \
+            -D target/smoke
+
+      - name: Smoke-test the bundle
+        shell: bash
+        env:
+          TAURI_SIGNING_PUBLIC_KEY: ${{ secrets.TAURI_SIGNING_PUBLIC_KEY }}
+        run: |
+          set -euo pipefail
+          artifact="$(find target/smoke -maxdepth 1 -name 'OpenPal-portable-${{ matrix.target }}.*' 2>/dev/null | head -1)"
+          if [ -z "$artifact" ]; then
+            echo "no bundle artifact found in target/smoke for ${{ matrix.target }}"; exit 1
+          fi
+          cargo run -p openpal-bundler -- smoke \
+            --target "${{ matrix.target }}" \
+            --artifact "$artifact" \
+            --manifest target/smoke/latest.json \
+            --tag "${{ github.ref_name }}"
+
+  # Only when every smoke leg passed: tell the human to promote. This is the
+  # only place the promote instruction is emitted — the soft-launch gate stays
+  # a human, deliberate action (`/releases/latest` never resolves to a draft).
+  promote:
+    name: promote (summary)
+    needs: [publish, smoke]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && needs.smoke.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Promote instructions
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<'EOF'
+          ## ✓ Smoke passed — promote ${{ github.ref_name }}
+
+          Every target in the stable matrix passed the per-target smoke gate:
+          each bundle reports **${{ github.ref_name }}** (semver core), the
+          packaged engine executes, and each artifact's updater signature
+          verified against the configured public key.
+
+          To promote (make it visible to `/releases/latest`, and therefore to
+          users' in-app updater):
+
+          `gh release edit ${{ github.ref_name }} --draft=false --repo myopenpal-ai/openpal`
+          EOF
+
+  # A failing smoke must not leave a half-verified draft around, and must not
+  # emit promote instructions: delete the draft and say why. (A guard in the
+  # if makes this a no-op unless the release itself never existed.)
+  discard:
+    name: discard draft (smoke failed)
+    needs: [publish, smoke]
+    if: ${{ always() && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && (needs.smoke.result == 'failure' || needs.smoke.result == 'cancelled') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Delete the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh release view "${{ github.ref_name }}" --repo myopenpal-ai/openpal >/dev/null 2>&1; then
+            gh release delete "${{ github.ref_name }}" --repo myopenpal-ai/openpal --yes
+          else
+            echo "No release exists for ${{ github.ref_name }} — nothing to delete."
+          fi
+
+      - name: Note the failure
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<'EOF'
+          ## ❌ Smoke failed — draft ${{ github.ref_name }} discarded
+
+          One or more per-target smoke legs failed (see the `smoke` matrix job
+          above), so the draft release was deleted and **no promote
+          instructions were issued**. Fix the build and re-cut the release.
+          EOF

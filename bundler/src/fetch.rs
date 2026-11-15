@@ -89,99 +89,12 @@ pub fn run(tag: &str, target: &str, force: bool, dest: Option<&Path>) -> anyhow:
         return Ok(());
     }
 
-    // 1. Resolve the release.
-    if tag == "latest" {
-        println!("Resolving latest llama.cpp release…");
-    } else {
-        println!("Resolving llama.cpp release {tag}…");
-    }
-    let url = if tag == "latest" {
-        format!("{RELEASES_API}/latest")
-    } else {
-        format!("{RELEASES_API}/tags/{tag}")
-    };
-    let body = github_api(&url)?;
-    let mut release: serde_json::Value =
-        serde_json::from_str(&body).context("failed to parse the GitHub API response as JSON")?;
-    let mut resolved_tag = release["tag_name"]
-        .as_str()
-        .ok_or_else(|| {
-            anyhow!("GitHub API response has no tag_name — does release \"{tag}\" exist?")
-        })?
-        .to_string();
-    println!("Resolved release: {resolved_tag}");
+    // Resolve the release ("latest" or an explicit tag), following the
+    // pointer-release indirection to a concrete build tag. The resolved tag
+    // keys the "already staged" fast path below — and, in CI, the per-target
+    // engine cache — so two runs resolving to the same tag never re-download.
+    let (resolved_tag, release) = resolve_tag(tag, Some(target), false)?;
 
-    if !force && already_staged(&engine_dir, &resolved_tag, target) {
-        println!(
-            "Engine {resolved_tag} ({target}) already staged in {} — nothing to do (use --force to re-fetch).",
-            engine_dir.display()
-        );
-        return Ok(());
-    }
-
-    // 2. Follow a "pointer" release (its only relevant asset is
-    //    nightly-tag.txt) to the real, asset-bearing release named inside
-    //    that file.
-    {
-        let assets = release["assets"]
-            .as_array()
-            .ok_or_else(|| anyhow!("release {resolved_tag} has no assets array"))?;
-        if find_target_asset(assets, target).is_none() {
-            if let Some(pointer) = find_nightly_pointer(assets) {
-                println!("Release {resolved_tag} points to a nightly build; following…");
-                let pointer_url = pointer["browser_download_url"].as_str().ok_or_else(|| {
-                    anyhow!(
-                        "nightly-tag.txt asset in release {resolved_tag} has no browser_download_url"
-                    )
-                })?;
-                let nightly_tag = github_api(pointer_url)?.trim().to_string();
-                if nightly_tag.is_empty() {
-                    bail!(
-                        "nightly-tag.txt in release {resolved_tag} was empty — can't resolve the real release"
-                    );
-                }
-
-                let nightly_body = github_api(&format!("{RELEASES_API}/tags/{nightly_tag}"))
-                    .with_context(|| {
-                        format!(
-                            "nightly-tag.txt in release {resolved_tag} pointed to tag \"{nightly_tag}\""
-                        )
-                    })?;
-                let nightly_release: serde_json::Value = serde_json::from_str(&nightly_body)
-                    .context("failed to parse the GitHub API response as JSON")?;
-                let nightly_resolved_tag = nightly_release["tag_name"]
-                    .as_str()
-                    .ok_or_else(|| {
-                        anyhow!(
-                            "GitHub API response has no tag_name — does release \"{nightly_tag}\" exist?"
-                        )
-                    })?
-                    .to_string();
-                let nightly_assets = nightly_release["assets"]
-                    .as_array()
-                    .ok_or_else(|| anyhow!("release {nightly_resolved_tag} has no assets array"))?;
-                if find_target_asset(nightly_assets, target).is_none()
-                    && find_nightly_pointer(nightly_assets).is_some()
-                {
-                    bail!(
-                        "release {nightly_resolved_tag} (resolved from nightly-tag.txt in {resolved_tag}) is itself a pointer release; refusing to follow more than one level of indirection"
-                    );
-                }
-                println!("Resolved nightly release: {nightly_resolved_tag}");
-
-                release = nightly_release;
-                resolved_tag = nightly_resolved_tag;
-            }
-        }
-    }
-
-    // Pointer-following above may have changed resolved_tag from the
-    // pointer release's own tag (e.g. "v0.3.0") to the real build tag it
-    // pointed to (e.g. "b10621") — re-check "already staged" against that
-    // final tag too. Without this, `--tag latest` (whose resolved release
-    // is now always a pointer, per the step above) would never hit the fast
-    // path above and would re-download+re-extract on every single
-    // invocation even when the currently staged engine is already current.
     if !force && already_staged(&engine_dir, &resolved_tag, target) {
         println!(
             "Engine {resolved_tag} ({target}) already staged in {} — nothing to do (use --force to re-fetch).",
@@ -315,6 +228,125 @@ pub fn run(tag: &str, target: &str, force: bool, dest: Option<&Path>) -> anyhow:
     Ok(())
 }
 
+/// Resolve a llama.cpp release reference ("latest" or an explicit tag) to the
+/// concrete, asset-bearing build tag, following the lightweight "pointer"
+/// release indirection (a release whose assets don't cover `target` but which
+/// carries only `nightly-tag.txt`, naming the real build release) when needed.
+///
+/// Returns the resolved tag *and* the fully-resolved release object, whose
+/// `assets` array `run()` then stages from. This is the single source of
+/// "which llama.cpp build are we on" — [`fetch::run`] uses it to decide the
+/// "already staged" fast path, and the `resolve-engine-tag` CLI uses it to
+/// print the tag the `portable.yml` `prepare` job keys the per-target engine
+/// cache on. `target == None` (the CLI) treats "no `-bin-<target>` asset" as
+/// "this is a pointer" when the release ships no binaries for *any* target at
+/// all — right for llama.cpp's bare-"latest" pointer releases, and it never
+/// misfires on a real build release (which always has bin assets).
+///
+/// Prints resolution progress unless `quiet` — the CLI wants only the tag on
+/// stdout so the workflow can capture it. One level of pointer indirection
+/// only: a re-resolved release that is *also* a pointer is an error.
+pub fn resolve_tag(
+    tag: &str,
+    target: Option<&str>,
+    quiet: bool,
+) -> anyhow::Result<(String, serde_json::Value)> {
+    // 1. Resolve the release.
+    if !quiet {
+        println!(
+            "Resolving {} llama.cpp release…",
+            if tag == "latest" { "latest" } else { tag }
+        );
+    }
+    let url = if tag == "latest" {
+        format!("{RELEASES_API}/latest")
+    } else {
+        format!("{RELEASES_API}/tags/{tag}")
+    };
+    let body = github_api(&url)?;
+    let mut release: serde_json::Value =
+        serde_json::from_str(&body).context("failed to parse the GitHub API response as JSON")?;
+    let mut resolved_tag = release["tag_name"]
+        .as_str()
+        .ok_or_else(|| {
+            anyhow!("GitHub API response has no tag_name — does release \"{tag}\" exist?")
+        })?
+        .to_string();
+    if !quiet {
+        println!("Resolved release: {resolved_tag}");
+    }
+
+    // 2. Follow a "pointer" release (its only relevant asset is
+    //    nightly-tag.txt) to the real, asset-bearing release named inside
+    //    that file.
+    let is_pointer_eligible = |assets: &[serde_json::Value]| match target {
+        Some(t) => find_target_asset(assets, t).is_none(),
+        None => !assets.iter().any(|a| {
+            a["name"].as_str().is_some_and(|n| {
+                n.contains("-bin-") && (n.ends_with(".tar.gz") || n.ends_with(".zip"))
+            })
+        }),
+    };
+    {
+        let assets = release["assets"]
+            .as_array()
+            .ok_or_else(|| anyhow!("release {resolved_tag} has no assets array"))?;
+        if is_pointer_eligible(assets) {
+            if let Some(pointer) = find_nightly_pointer(assets) {
+                if !quiet {
+                    println!("Release {resolved_tag} points to a nightly build; following…");
+                }
+                let pointer_url = pointer["browser_download_url"].as_str().ok_or_else(|| {
+                    anyhow!(
+                        "nightly-tag.txt asset in release {resolved_tag} has no browser_download_url"
+                    )
+                })?;
+                let nightly_tag = github_api(pointer_url)?.trim().to_string();
+                if nightly_tag.is_empty() {
+                    bail!(
+                        "nightly-tag.txt in release {resolved_tag} was empty — can't resolve the real release"
+                    );
+                }
+
+                let nightly_body = github_api(&format!("{RELEASES_API}/tags/{nightly_tag}"))
+                    .with_context(|| {
+                        format!(
+                            "nightly-tag.txt in release {resolved_tag} pointed to tag \"{nightly_tag}\""
+                        )
+                    })?;
+                let nightly_release: serde_json::Value = serde_json::from_str(&nightly_body)
+                    .context("failed to parse the GitHub API response as JSON")?;
+                let nightly_resolved_tag = nightly_release["tag_name"]
+                    .as_str()
+                    .ok_or_else(|| {
+                        anyhow!(
+                            "GitHub API response has no tag_name — does release \"{nightly_tag}\" exist?"
+                        )
+                    })?
+                    .to_string();
+                let nightly_assets = nightly_release["assets"]
+                    .as_array()
+                    .ok_or_else(|| anyhow!("release {nightly_resolved_tag} has no assets array"))?;
+                if is_pointer_eligible(nightly_assets)
+                    && find_nightly_pointer(nightly_assets).is_some()
+                {
+                    bail!(
+                        "release {nightly_resolved_tag} (resolved from nightly-tag.txt in {resolved_tag}) is itself a pointer release; refusing to follow more than one level of indirection"
+                    );
+                }
+                if !quiet {
+                    println!("Resolved nightly release: {nightly_resolved_tag}");
+                }
+
+                release = nightly_release;
+                resolved_tag = nightly_resolved_tag;
+            }
+        }
+    }
+
+    Ok((resolved_tag, release))
+}
+
 /// Find the asset in `assets` that matches `target`: for "macos-arm64" that's
 /// a name like `llama-<tag>-bin-macos-arm64.tar.gz` (or `.zip`). Pure and
 /// unit-testable — reused both to detect a "pointer" release (no match, see
@@ -345,8 +377,8 @@ fn find_nightly_pointer(assets: &[serde_json::Value]) -> Option<&serde_json::Val
 /// Extract a `.zip` or `.tar.gz` engine archive into `dest`. Zips use `unzip`,
 /// falling back to `tar -xf` (Windows' built-in bsdtar reads zips) when `unzip`
 /// isn't installed — GitHub's Windows runners don't ship it. `.tar.gz` uses
-/// `tar` directly.
-fn extract_archive(archive: &Path, dest: &Path) -> anyhow::Result<()> {
+/// `tar` directly. Also reused by `smoke` to unpack bundle zips.
+pub(crate) fn extract_archive(archive: &Path, dest: &Path) -> anyhow::Result<()> {
     let is_zip = archive
         .file_name()
         .and_then(|n| n.to_str())
@@ -466,8 +498,9 @@ fn find_dir_containing(dir: &Path, file_name: &str) -> Option<PathBuf> {
 
 /// Server binary name and shared-library extension for an engine `target`
 /// (e.g. "macos-arm64", "win-vulkan-x64", "ubuntu-vulkan-x64"). Both follow the
-/// target's OS family, which is what the release archive ships.
-fn artifact_names(target: &str) -> (&'static str, &'static str) {
+/// target's OS family, which is what the release archive ships. Also used by
+/// `smoke` to locate the engine inside a packaged bundle.
+pub(crate) fn artifact_names(target: &str) -> (&'static str, &'static str) {
     if target.contains("win") {
         ("llama-server.exe", "dll")
     } else if target.contains("macos") {
@@ -509,7 +542,7 @@ pub fn default_target() -> &'static str {
 }
 
 /// Can this host execute binaries built for `target`?
-fn host_can_run(target: &str) -> bool {
+pub(crate) fn host_can_run(target: &str) -> bool {
     let (host_os, host_arch) = (std::env::consts::OS, std::env::consts::ARCH);
     let os_ok = (target.contains("macos") && host_os == "macos")
         || (target.contains("win") && host_os == "windows")
@@ -519,7 +552,10 @@ fn host_can_run(target: &str) -> bool {
     os_ok && arch_ok
 }
 
-fn smoke_test(binary: &Path) -> anyhow::Result<()> {
+/// Run `<binary> --version` (falling back to `--help`) and fail loudly when it
+/// doesn't execute — catches dylib/rpath problems early. Also reused by `smoke`
+/// to re-assert the engine packaged inside a Portable bundle.
+pub(crate) fn smoke_test(binary: &Path) -> anyhow::Result<()> {
     let mut last_error = String::new();
     for flag in ["--version", "--help"] {
         match Command::new(binary).arg(flag).output() {

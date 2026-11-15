@@ -7,11 +7,15 @@ description = "OpenPal bundling & deployment module: stages the llama.cpp engine
 
 [dependencies]
 anyhow = "1"
+base64 = { workspace = true }
 clap = { version = "4", features = ["derive"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 image = "0.25"
 sha2 = "0.10"
+# Verifies Portable artifact signatures in `smoke` with the exact same crate
+# (and strictness) as openpal-core's own update verification.
+minisign-verify = "0.2"
 
 [dev-dependencies]
 tempfile = "3"

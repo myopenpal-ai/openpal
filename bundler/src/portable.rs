@@ -29,6 +29,7 @@ const MARKER: &str = "openpal-portable";
 
 pub fn run(
     target: &str,
+    engine_tag: &str,
     debug: bool,
     webview2: Option<&Path>,
     model_id: Option<&str>,
@@ -51,13 +52,16 @@ pub fn run(
     // 1. Engine for this target (staged into crates/app/resources/llama). Reuse
     //    only an engine staged for THIS target — the engine dir is shared, so a
     //    leftover same-OS different-arch/backend engine must not be packaged.
+    //    `engine_tag` is "latest" for local dev, but in CI it is the tag the
+    //    workflow's `prepare` job resolved (via `resolve-engine-tag`), so the
+    //    per-target engine cache (keyed on it) is hit exactly when it should be.
     if fetch::is_staged_for(target) {
         println!(
             "Engine for {target} already staged in {} — reusing it.",
             paths::engine_dir().display()
         );
     } else {
-        fetch::run("latest", target, false, None)?;
+        fetch::run(engine_tag, target, false, None)?;
     }
 
     // 2. Build + assemble for this OS family.

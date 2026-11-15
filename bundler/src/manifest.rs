@@ -25,7 +25,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use anyhow::{bail, Context};
+use anyhow::{anyhow, bail, Context};
 use serde_json::{Map, Value};
 
 use crate::paths;
@@ -158,9 +158,12 @@ fn find_artifact(dir: &Path, target: &str) -> Option<PathBuf> {
 /// `npx tauri signer sign <file>` (key/password picked up from the
 /// `TAURI_SIGNING_PRIVATE_KEY(_PASSWORD)` env vars the CLI itself reads —
 /// never passed as arguments, which would leak them to `ps`) — writes
-/// `<file>.sig` next to the artifact and returns its contents: the same
-/// minisign format `openpal_core::update_portable::verify_signature` (and
-/// Tauri's own updater plugin, for the Full SKU) expects.
+/// `<file>.sig` next to the artifact and returns its contents as a minisign
+/// signature string, decoded the way the consumers expect: Tauri writes the
+/// `.sig` file as one BASE64 line *wrapping* the 4-line minisign text, so the
+/// raw file is not the form `minisign_verify::Signature::decode` (used by
+/// `openpal_core::update_portable::verify_signature`, and mirrored in
+/// `smoke`) accepts — the decoded text is.
 pub(crate) fn sign(artifact: &Path) -> anyhow::Result<String> {
     let mut cmd = crate::node::node_cli("npx");
     cmd.args(["--no-install", "tauri", "signer", "sign"])
@@ -173,8 +176,30 @@ pub(crate) fn sign(artifact: &Path) -> anyhow::Result<String> {
         bail!("tauri signer sign failed for {}", artifact.display());
     }
     let sig_path = PathBuf::from(format!("{}.sig", artifact.display()));
-    fs::read_to_string(&sig_path)
-        .with_context(|| format!("expected a signature file at {}", sig_path.display()))
+    let blob = fs::read_to_string(&sig_path)
+        .with_context(|| format!("expected a signature file at {}", sig_path.display()))?;
+    decode_sig_blob(&blob).with_context(|| format!("…from {}", sig_path.display()))
+}
+
+/// BASE64-decode a `tauri signer sign` `.sig` file back into the 4-line
+/// minisign text it wraps. Pure + unit-tested so `sign` stays a thin
+/// shell-out on top of it.
+fn decode_sig_blob(blob: &str) -> anyhow::Result<String> {
+    use base64::Engine as _;
+    let trimmed = blob.trim();
+    if trimmed.is_empty() {
+        bail!("the .sig file is empty (Tauri writes it as one BASE64 line)");
+    }
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(trimmed)
+        .map_err(|e| {
+            anyhow!(
+                "{} is not valid BASE64 (Tauri writes .sig as one BASE64 line): {e}",
+                trimmed
+            )
+        })?;
+    String::from_utf8(bytes)
+        .map_err(|_| anyhow!("the .sig BASE64 does not decode to UTF-8 — not a minisign signature"))
 }
 
 pub(crate) fn sha256_hex(path: &Path) -> anyhow::Result<String> {
@@ -298,6 +323,7 @@ fn now_utc_rfc3339() -> anyhow::Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::Engine as _;
 
     #[test]
     fn sha256_hex_matches_the_well_known_digest() {
@@ -315,6 +341,29 @@ mod tests {
     fn sha256_hex_errors_on_a_missing_file() {
         let tmp = tempfile::tempdir().unwrap();
         assert!(sha256_hex(&tmp.path().join("nope")).is_err());
+    }
+
+    #[test]
+    fn decode_sig_blob_unwraps_tauris_base64_sig() {
+        // `tauri signer sign` writes the .sig as one BASE64 line wrapping the
+        // 4-line minisign text. decode_sig_blob must hand back exactly that
+        // text — the form `minisign_verify::Signature::decode` accepts — and
+        // reject non-BASE64 input.
+        const SIG_TEXT: &str = "untrusted comment: signature from tauri secret key\n\
+RUQeXjZl0LQ1Cy/o/W+I+NAhtmBqhoYbxs4jcrghWYDusqdI6pyShw+hXxKNaxxybtWIJT/EBQPGzXgujvrK65CFFcvbMSv4Pws=\n\
+trusted comment: timestamp:1794749128\tfile:OpenPal-portable-macos-arm64.zip\n\
+pPvxUtM3ZOFeC8+YwSui29fEN9fceotapUFSFxZZ8jr/HFUdcB4T+00LnuWy/JmYOd+ghXtLpP+a1eurCgwFCQ==\n";
+        let blob = base64::engine::general_purpose::STANDARD.encode(SIG_TEXT.as_bytes());
+        let decoded = decode_sig_blob(&blob).unwrap();
+        assert_eq!(decoded, SIG_TEXT);
+
+        // The decoded text is exactly the form the app's verifier (and the
+        // smoke gate, which mirrors it) parses — and the raw blob is not.
+        assert!(minisign_verify::Signature::decode(&decoded).is_ok());
+        assert!(minisign_verify::Signature::decode(&blob).is_err());
+
+        assert!(decode_sig_blob("not base64!!").is_err());
+        assert!(decode_sig_blob("").is_err());
     }
 
     #[test]
