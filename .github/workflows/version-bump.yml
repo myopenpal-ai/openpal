@@ -1,0 +1,98 @@
+# PR-driven release gate (docs/RELEASING.md): every PR that changes
+# user-facing code must bump the workspace version in the same PR
+# (`node scripts/bump-version.mjs --bump patch|minor|major --notes "…"`), and
+# CI enforces it here. The only thing this check does is compare the workspace
+# version on the PR head against the merge-base — the author already decided
+# the bucket, so there is no git-log Conventional-Commits guessing.
+#
+# It passes when only release-exempt paths changed (docs/, *.md, .github/,
+# scripts/), or the PR opts out (`[no release]` in the title / `no-release`
+# label), or the workspace version increased since the merge-base — with the
+# `release: patch|minor|major` labels (applied by labeler.yml) the increase
+# must match the declared bucket. A failing run prints the exact bump command.
+#
+# This is a REQUIRED check on main and deliberately has NO workflow-level
+# `paths` filter (a required check whose workflow is skipped stays "Expected"
+# and blocks the merge queue) — the exempt-path logic lives in the job. It must
+# also fire on `merge_group` or the queue stalls waiting for a check that never
+# runs (AGENTS.md).
+name: version-bump
+
+on:
+  pull_request:
+  merge_group:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: version-bump-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: version-bump (release gate)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # On pull_request the PR's title/labels/base come straight from the
+      # event. On merge_group they are not in the payload: the queue runs on a
+      # throwaway gh-readonly-queue/{base}/pr-{number}-{sha} ref, so the PR
+      # number is parsed out of the ref and title/labels are looked up with gh
+      # (falling back to the squashed commit message when the ref has no PR
+      # number). The check itself never needs the title except for the
+      # `[no release]` opt-out and the suggested bucket.
+      - name: Resolve PR context and merge-base
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
+            pr_number=$(jq -r '.pull_request.number' "$GITHUB_EVENT_PATH")
+            pr_title=$(jq -r '.pull_request.title' "$GITHUB_EVENT_PATH")
+            base_ref=$(jq -r '.pull_request.base.ref' "$GITHUB_EVENT_PATH")
+          else
+            ref="$GITHUB_REF"
+            base_ref=${ref#refs/heads/gh-readonly-queue/}
+            base_ref=${base_ref%%/*}
+            pr_number=$(printf '%s' "$ref" | sed -nE 's#.*/pr-([0-9]+)-.*#\1#p')
+            if [[ -n "$pr_number" ]]; then
+              # A transient gh failure must not fail the gate — the commit
+              # message carries the same title.
+              pr_title=$(gh pr view "$pr_number" --json title --jq '.title' 2>/dev/null || git log -1 --pretty=%s)
+            else
+              # The queue's squashed commit message carries the PR title.
+              pr_title=$(git log -1 --pretty=%s)
+            fi
+          fi
+
+          # The `release:` labels feed the declared-bucket check, so they are
+          # needed on pull_request and merge_group alike (gh pr view is
+          # read-only and works for fork PRs). A lookup hiccup just falls back
+          # to "no labels" — the version-delta half of the gate still runs.
+          if [[ -n "${pr_number:-}" ]]; then
+            pr_labels=$(gh pr view "$pr_number" --json labels --jq '.labels | map(.name) | join(" ")' 2>/dev/null || true)
+          fi
+
+          git fetch origin "$base_ref"
+          base_sha=$(git merge-base "origin/$base_ref" HEAD)
+          head_sha="$GITHUB_SHA"
+
+          {
+            echo "BASE_SHA=$base_sha"
+            echo "HEAD_SHA=$head_sha"
+            echo "PR_TITLE<<EOF"
+            printf '%s\n' "${pr_title:-}"
+            echo "EOF"
+            echo "PR_LABELS<<EOF"
+            printf '%s\n' "${pr_labels:-}"
+            echo "EOF"
+          } >> "$GITHUB_ENV"
+
+      - name: Check the version bump
+        run: node scripts/check-version-bump.mjs --base "$BASE_SHA" --head "$HEAD_SHA" --title "$PR_TITLE" --labels "$PR_LABELS"

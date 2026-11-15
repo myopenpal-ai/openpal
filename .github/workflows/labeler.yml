@@ -1,0 +1,63 @@
+# Auto-apply the release: label from the PR title's Conventional-Commits type
+# (docs/RELEASING.md). The version-bump gate reads these labels: when
+# `release: patch|minor|major` is present, the actual version increase in the
+# PR must match the declared bucket, so keeping the label honest matters.
+#
+#   feat! / breaking change  → release: major
+#   feat:                     → release: minor
+#   fix:                      → release: patch
+#   anything else             → shed the release label (docs/chore/… are
+#                               [no release] work; the gate still passes on
+#                               release-exempt paths or `[no release]`)
+#
+# Uses pull_request_target deliberately: the workflow runs in the BASE repo
+# context (write access to labels) and never checks out or executes PR code —
+# it only reads the title/body strings from the event payload.
+name: labeler
+
+on:
+  pull_request_target:
+    types: [opened, edited, reopened, synchronize]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  release-label:
+    name: "Apply release: label from the PR title"
+    runs-on: ubuntu-latest
+    steps:
+      - name: "Apply the release: label"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          TITLE: ${{ github.event.pull_request.title }}
+          BODY: ${{ github.event.pull_request.body }}
+        run: |
+          set -euo pipefail
+
+          # A title with `[no release]` opts out of a release (docs/RELEASING.md)
+          # — never claim a bucket for it at the same time.
+          if grep -qi '\[no release\]' <<<"$TITLE"; then
+            label=""
+          elif grep -qE '^[a-z][a-z-]*(\([^)]*\))?!:' <<<"$TITLE"; then
+            # Breaking: a `type!:` or `type(scope)!:` subject.
+            label="release: major"
+          elif grep -qE '^BREAKING[ -]CHANGE:' <<<"$BODY"; then
+            label="release: major"
+          elif grep -qE '^feat(\([^)]*\))?:' <<<"$TITLE"; then
+            label="release: minor"
+          elif grep -qE '^fix(\([^)]*\))?:' <<<"$TITLE"; then
+            label="release: patch"
+          else
+            label=""
+          fi
+
+          existing=$(gh pr view "$PR" --json labels --jq '[.labels[].name] | map(select(startswith("release:"))) | join(",")')
+          if [[ -n "$existing" ]]; then
+            gh pr edit "$PR" --remove-label "$existing"
+          fi
+          if [[ -n "$label" ]]; then
+            gh pr edit "$PR" --add-label "$label"
+          fi
