@@ -74,6 +74,10 @@ Then open the PR with `Closes #<issue>` at the top of the description (the
 template has the slot) and fill in how you verified it. Say plainly if a check
 was skipped or couldn't run.
 
+If your PR changes user-facing code, the `version-bump` check requires the
+version bump in this same PR (`node scripts/bump-version.mjs --bump …` — see
+[Releasing](#releasing)); purely doc/infra PRs are exempt automatically.
+
 Merging is **squash-only** through the **merge queue**: every PR lands on
 `main` as exactly one commit carrying its Conventional-Commits title, and the
 head branch is deleted automatically. `main` is protected (ruleset
@@ -91,14 +95,31 @@ conflict. To merge, click **Merge when ready** once checks pass, or enable
 
 ## Releasing
 
-OpenPal releases on the semver rule in [docs/RELEASING.md](docs/RELEASING.md):
-`fix` → patch, `feat` → minor, breaking change → major, decided by the
-Conventional-Commits merged since the last tag. Cutting a release is one
-reviewable step — `node scripts/bump-version.mjs` bumps the workspace version
-in `Cargo.toml` (the single source), the five `plugins/*/plugin.json`
-manifests, `Cargo.lock` and `CHANGELOG.md` together — then push a `vX.Y.Z`
-tag so the `portable` workflow builds the signed draft release, and promote
-the draft by hand. A release bump commits as `chore(release): vX.Y.Z`.
+Releases are PR-driven: version bumps are decided by the PR author, not
+computed from git history at cut time. The semver rule in
+[docs/RELEASING.md](docs/RELEASING.md) applies to each PR: `fix` → patch,
+`feat` → minor, breaking change → major. If your PR changes user-facing code
+(anything outside `docs/`, `*.md`, `.github/` and `scripts/`), bump in the
+**same PR** and add your changelog line:
+
+```bash
+node scripts/bump-version.mjs --bump patch|minor|major --notes "Short line for [Unreleased]"
+```
+
+That edits exactly the five touch-points — the workspace version in
+`Cargo.toml` (the single source), the five workspace entries in `Cargo.lock`,
+the five `plugins/*/plugin.json` manifests — plus `CHANGELOG.md`, and verifies
+the result. Purely doc/infra work (`docs/`, `*.md`, `.github/`, `scripts/`)
+needs no bump, and a user-facing PR that deliberately ships no release can
+carry `[no release]` in its title (or the `no-release` label). The
+`version-bump` CI check — required on `main`, run on `pull_request` and
+`merge_group` — enforces all of this on every PR and names the bump command
+when it fails.
+
+At cut time a maintainer runs `node scripts/bump-version.mjs finalize` (turns
+the accumulated `[Unreleased]` into a dated `[X.Y.Z]` section and opens a
+fresh one), then pushes a `vX.Y.Z` tag so the `portable` workflow builds the
+signed draft release, and promotes the draft by hand.
 
 ## Where things are
 

@@ -27,6 +27,8 @@ Rust core, a Python-sidecar plugin system, and no server to deploy.
 | `.github/workflows/engine-e2e.yml` | PR/push touching `crates/core/src/engine/**`, `download.rs`, `sse.rs`, `writing_tools.rs`, `prompt_enhancer.rs`, or any file under `crates/core/tests/` | yes, scoped | the real llama-server engine tests (stages the engine via the bundler, downloads the ~140MB SmolLM2 test model, runs a real chat round-trip for plain chat, Writing Tools Translate/Correct, and the Message improver) |
 | `.github/workflows/injection-e2e.yml` | PR/push touching `crates/core/src/injection/**`, `crates/core/tests/prompt_injection_corpus.rs`, `crates/core/tests/fixtures/prompt_injection/**` or `Cargo.lock` | scoped | the real prompt-injection classifier (downloads the pinned ~300MB model, cached by its sha256) over the documented benign/injection sample sets, one known payload per route, a buried payload's most suspicious window, and a review card's excerpt holding a payload at the end of a window longer than the card shows |
 | `.github/workflows/notify-platforms.yml` | PR/push touching `crates/app/src/notify/**`, `crates/app/src/lib.rs`, `crates/app/Cargo.toml` or `Cargo.lock` | yes, scoped | `cargo clippy -p openpal-app --all-targets -- -D warnings` and `cargo test -p openpal-app notify` on macOS and Windows runners, and `cargo clippy -p openpal-app` for `aarch64-linux-android` with the runner's NDK — the platform-gated notification backends `ci.yml`'s Linux job never compiles. Not the Kotlin half (no Gradle build), and nothing that shows a notification |
+| `.github/workflows/version-bump.yml` | every PR (`pull_request` **and** `merge_group`) | **yes** (required) | the PR-driven release gate (`scripts/check-version-bump.mjs`): passes when only release-exempt paths changed (`docs/`, `*.md`, `.github/`, `scripts/`), when the PR carries `[no release]` in its title or the `no-release` label, or when the workspace version increased since the merge-base — when `release:` labels are present the increase must match the declared patch/minor/major bucket, unlabeled PRs pass on any increase. Failing runs name the bump command to run |
+| `.github/workflows/labeler.yml` | PR created/edited (`pull_request_target`) | no (label housekeeping, not a check) | applies `release: patch\|minor\|major` from the PR title's Conventional-Commits type — breaking (`type!:` / `BREAKING CHANGE:`) → major, `feat:` → minor, `fix:` → patch, anything else sheds the `release:` label |
 | `.github/workflows/portable.yml` (pre-existing, unchanged) | manual dispatch, `v*` tags | no (release pipeline, not a test gate) | cross-platform Portable builds + signed draft release |
 
 Path-filtered workflows (`plugin-tests.yml`, `engine-e2e.yml`,
@@ -498,6 +500,9 @@ GitHub Flow (no release branches at all) and full GitFlow (a permanent
     `rust-test (openpal-core)`, `rust-test (openpal-app)`,
     `rust-test (openpal-bundler)`,
     `frontend (typecheck, unit, mocked e2e)`.
+  - `version-bump.yml` (always run): `version-bump (release gate)` — the
+    PR-driven release check, which every PR pays a few seconds for
+    (docs/RELEASING.md).
   - Path-filtered in effect (auto-satisfied when their paths don't change,
     so safe to mark required): `plugin-tests.yml` → `speech`; `engine-e2e.yml`
     → `engine-e2e`; `notify-platforms.yml` → `notify on macos (clippy, tests)`,
@@ -515,9 +520,9 @@ GitHub Flow (no release branches at all) and full GitFlow (a permanent
   patch release with no separate stabilization period) and trigger
   `portable.yml`'s existing build + signed **draft** release. A human
   promotes the draft after checking it (and, once native e2e exists, after a
-  green run against it). The whole runbook — version rule, the single
-  `scripts/bump-version.mjs` bump commit, tag, promotion — is
-  [docs/RELEASING.md](docs/RELEASING.md).
+  green run against it). The whole runbook — the PR-driven bump rule (each
+  user-facing PR bumps its own version), the `finalize` step at cut time,
+  tag, promotion — is [docs/RELEASING.md](docs/RELEASING.md).
 - **Hotfixes** branch from the tag/release branch, PR back into that release
   branch, and get cherry-picked forward into `main` (or vice versa) so a
   patch never silently regresses on the next release.
