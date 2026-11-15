@@ -49,7 +49,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "",
+      "pubkey": "RWQIz5dTTFV5d+qB5/dbMJ13Xh7uQZlHHb6HYavwWlVoJVCQ0CMtHLRi",
       "endpoints": [
         "https://github.com/myopenpal-ai/openpal/releases/latest/download/latest.json"
       ]
