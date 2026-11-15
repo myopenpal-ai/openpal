@@ -99,10 +99,14 @@ jobs:
           mkdir -p ~/.ssh
           umask 077
           printf '%s\n' "$GIT_SIGNING_KEY" > ~/.ssh/id_ed25519_releases
+          # git's SSH signing treats user.signingkey as the *public* key path
+          # (and finds the private key as its non-.pub sibling), so derive the
+          # .pub half from the private key's embedded public part.
+          ssh-keygen -y -f ~/.ssh/id_ed25519_releases > ~/.ssh/id_ed25519_releases.pub
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git config gpg.format ssh
-          git config user.signingkey ~/.ssh/id_ed25519_releases
+          git config user.signingkey ~/.ssh/id_ed25519_releases.pub
 
       - name: Create and push the nightly tag
         if: steps.check.outputs.should_run == 'true'
