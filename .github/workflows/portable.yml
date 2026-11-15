@@ -251,6 +251,16 @@ jobs:
           set -euo pipefail
           choco install --yes --no-progress strawberryperl
           choco install --yes --no-progress nasm
+          # choco writes Strawberry to the machine PATH, which the already
+          # running runner process never re-reads — and the bash build step
+          # prepends Git's /usr/bin, so the broken MSYS2 perl would win anyway.
+          # Prepending Strawberry's bin via GITHUB_PATH fixes every bare `perl`
+          # call (openssl's build scripts use plain `perl`, not the full path),
+          # and the explicit PERL var is what openssl-src itself consults
+          # (OPENSSL_SRC_PERL → PERL), so the vendored build uses it no matter
+          # what PATH says.
+          printf '%s\n' 'C:\Strawberry\perl\bin' >> "$GITHUB_PATH"
+          printf '%s\n' 'PERL=C:\Strawberry\perl\bin\perl.exe' >> "$GITHUB_ENV"
 
       # Fixed-version WebView2 runtime so the Windows build launches with no
       # system install. The cab URL is volatile (version + arch specific), so it
