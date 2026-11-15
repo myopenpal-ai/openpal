@@ -215,13 +215,15 @@ documented limits, not parity targets.
   subset (`ubuntu-vulkan-x64` + `win-vulkan-x64` today, overridable via the
   `NIGHTLY_CANARY_TARGETS` variable) on `b*` nightly tags (auto-created by
   rolling.yml and published as `--kind nightly` **pre-releases** — `X.Y.Z+b{N}`
-  manifest version, invisible to the auto-updater), keeping the full
-  five for `v*`; the UI is compiled once per run; the GB-scale engine download
-  is cached per-target keyed on the resolved tag. `macos-arm64` is in the
-  stable matrix but needs an Apple Silicon runner registered with the
-  `macos-14` label (not yet available — the `prepare` job warns when a leg has
-  no runner, and stable cuts stay failing until every target's runner exists,
-  by design). At the stable cut, `publish` signs the artifacts and assembles
+  manifest version, invisible to the auto-updater), keeping the stable set
+  for `v*` (default: the stable targets with a runner today — `macos-arm64`
+  is left out until an Apple Silicon runner with the `macos-14` label is
+  registered, because an unregistered leg is cancelled and takes `publish`
+  down with it; re-add it by registering the runner or setting the
+  `STABLE_TARGETS` repo variable, and `prepare` warns whenever the stable set
+  omits it); the UI is compiled once per run; the GB-scale engine download
+  is cached per-target keyed on the resolved tag. At the stable cut,
+  `publish` signs the artifacts and assembles
   the draft release, then a per-target `smoke` matrix verifies each shipped
   bundle (version, SHA-256, updater signature, packaged engine) before
   `promote` issues the promote instructions — or `discard` deletes the draft
