@@ -6,23 +6,43 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    # Dependency PRs roll out at the next release (they can't run the version
+    # bump script), so they carry the `no-release` opt-out the version-bump
+    # gate recognizes from day one. `dependencies` is the triage label.
+    labels:
+      - dependencies
+      - no-release
+    open-pull-requests-limit: 5
 
   - package-ecosystem: npm
     directory: /ui
     schedule:
       interval: weekly
+    labels:
+      - dependencies
+      - no-release
+    open-pull-requests-limit: 5
 
   - package-ecosystem: pip
     directory: /plugins/speech
     schedule:
       interval: weekly
+    labels:
+      - dependencies
+      - no-release
+    open-pull-requests-limit: 5
 
   # GitHub Actions: bundled into one PR per week so the SHA pins in the
-  # workflows stay bumpable in lockstep (docs/SECURITY_POSTURE.md).
+  # workflows stay bumpable in lockstep (docs/SECURITY_POSTURE.md). Action
+  # updates only touch .github/ (already release-exempt), labels kept for
+  # consistency in triage.
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    labels:
+      - dependencies
+      - no-release
     groups:
       actions:
         patterns:
