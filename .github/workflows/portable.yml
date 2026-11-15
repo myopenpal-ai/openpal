@@ -52,6 +52,13 @@ concurrency:
   group: portable-${{ github.ref }}
   cancel-in-progress: true
 
+# Every job gets the Actions token as GH_TOKEN so the bundler's GitHub API
+# calls (llama.cpp release lookups in `prepare`, the build jobs' engine fetch,
+# `gh` in publish/smoke) authenticate instead of hitting the anonymous rate
+# limit shared runner IPs exhaust (HTTP 403).
+env:
+  GH_TOKEN: ${{ github.token }}
+
 jobs:
   # Compute what this run builds. One cheap job decides the matrix from the
   # tag kind (canary subset for `b*` nightlies, full five for `v*` and
