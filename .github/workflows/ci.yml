@@ -9,6 +9,12 @@
 # macOS, Windows and Android, which this Linux-only workflow never compiles).
 name: ci
 
+# Least privilege: most of this workflow only reads the repo. The frontend
+# job re-opens `actions: write` for the artifact upload (playwright-report on
+# failure only). See docs/SECURITY_POSTURE.md.
+permissions:
+  contents: read
+
 on:
   pull_request:
   merge_group:
@@ -50,15 +56,15 @@ jobs:
           sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /opt/hostedtoolcache/CodeQL
           df -h /
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
         with:
           components: rustfmt, clippy
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
-          key: ci-clippy
+          key: ${{ github.event_name == 'pull_request' && github.head_ref || 'base' }}-ci-clippy
 
       # crates/app links against Tauri/WebKitGTK and cpal (ALSA) even to
       # compile — mirrors portable.yml's Linux dependency list.
@@ -107,13 +113,13 @@ jobs:
           sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /opt/hostedtoolcache/CodeQL
           df -h /
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
-          key: ${{ matrix.cache-key }}
+          key: ${{ github.event_name == 'pull_request' && github.head_ref || 'base' }}-${{ matrix.cache-key }}
 
       # Same system deps as ever — the crates build in one workspace and can
       # pull GUI/audio dependencies transitively even when compiling tests.
@@ -136,10 +142,15 @@ jobs:
   frontend:
     name: frontend (typecheck, unit, mocked e2e)
     runs-on: ubuntu-latest
+    # Job-scoped override: upload-artifact@v4 needs `actions: write` for the
+    # failure-only playwright-report upload.
+    permissions:
+      contents: read
+      actions: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
           cache: npm
@@ -170,7 +181,7 @@ jobs:
       # it; `playwright install` still verifies and installs system deps (and
       # a newer browser once one is released).
       - name: Cache Playwright browsers
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ~/.cache/ms-playwright
           key: ms-playwright-chromium-${{ runner.os }}
@@ -182,9 +193,33 @@ jobs:
         working-directory: ui
         run: npm run test:e2e
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: failure()
         with:
           name: playwright-report
           path: ui/playwright-report/
           retention-days: 7
+
+  # Every third-party action must be pinned to a full commit SHA — a mutable
+  # `@tag` ref means a hijacked upstream repo or a force-moved tag runs
+  # arbitrary code in every build (including merge_queue and tag runs where
+  # release secrets are in scope). This always-run gate fails a PR if a
+  # floating ref ever sneaks back in (docs/SECURITY_POSTURE.md).
+  action-pins:
+    name: action pins (SHA)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+      - name: Reject unpinned action refs
+        shell: bash
+        run: |
+          set -euo pipefail
+          unpinned=$(grep -rhoE 'uses: [A-Za-z0-9._/-]+@[A-Za-z0-9._-]+' .github/workflows \
+            | sed 's/^uses: //' \
+            | awk -F@ 'length($2) != 40 || $2 !~ /^[0-9a-f]{40}$/ { print }' || true)
+          if [ -n "$unpinned" ]; then
+            echo "::error::Every third-party action must be pinned to a full 40-char commit SHA (see docs/SECURITY_POSTURE.md):"
+            printf '%s\n' "$unpinned"
+            exit 1
+          fi
+          echo "All action refs are pinned to full commit SHAs."

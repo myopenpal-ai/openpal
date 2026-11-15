@@ -9,6 +9,10 @@
 # and taps stay manual checks (docs/TESTING.md).
 name: notify-platforms
 
+# Least privilege — read-only (docs/SECURITY_POSTURE.md).
+permissions:
+  contents: read
+
 # The pull_request trigger deliberately has NO workflow-level `paths`
 # filter: a required check whose workflow is skipped by path filtering stays
 # "Expected"/Pending and blocks merging (GitHub docs: "Avoid requiring
@@ -38,8 +42,8 @@ jobs:
     outputs:
       notify: ${{ steps.filter.outputs.notify }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: dorny/paths-filter@v3
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+      - uses: dorny/paths-filter@0e4a8c6effa4802afeda77dc8d303f8176d7dfad # v3
         id: filter
         with:
           filters: |
@@ -65,17 +69,17 @@ jobs:
     runs-on: macos-15-intel
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
         with:
           components: clippy
 
       # Saved on failure too: a cold build that keeps nothing makes the next
       # push pay it again.
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
-          key: notify-macos
+          key: ${{ github.event_name == 'pull_request' && github.head_ref || 'base' }}-notify-macos
           cache-on-failure: true
 
       # The whole app crate, not just notify/: a backend's dead-code allowances
@@ -97,17 +101,17 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
         with:
           components: clippy
 
       # Saved on failure too: a cold Windows build is ~18 min, and a red run
       # that keeps nothing makes the next push pay it again.
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
-          key: notify-windows
+          key: ${{ github.event_name == 'pull_request' && github.head_ref || 'base' }}-notify-windows
           cache-on-failure: true
 
       # SQLCipher's vendored OpenSSL (crates/core/Cargo.toml) is a ~13 min
@@ -152,16 +156,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
         with:
           components: clippy
           targets: aarch64-linux-android
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
-          key: notify-android
+          key: ${{ github.event_name == 'pull_request' && github.head_ref || 'base' }}-notify-android
           cache-on-failure: true
 
       # The C parts of dependencies are compiled for the device, with the

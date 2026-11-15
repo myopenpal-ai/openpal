@@ -8,6 +8,10 @@
 # rather than gating every PR.
 name: engine-e2e
 
+# Least privilege — read-only (docs/SECURITY_POSTURE.md).
+permissions:
+  contents: read
+
 # The pull_request trigger deliberately has NO workflow-level `paths`
 # filter: a required check whose workflow is skipped by path filtering stays
 # "Expected"/Pending and blocks merging (GitHub docs: "Avoid requiring
@@ -39,8 +43,8 @@ jobs:
     outputs:
       engine: ${{ steps.filter.outputs.engine }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: dorny/paths-filter@v3
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+      - uses: dorny/paths-filter@0e4a8c6effa4802afeda77dc8d303f8176d7dfad # v3
         id: filter
         with:
           filters: |
@@ -63,13 +67,14 @@ jobs:
     # cache was being saved.
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
-          key: engine-e2e
+          # Scoped so a PR branch can't poison the cache main's builds restore.
+          key: ${{ github.event_name == 'pull_request' && github.head_ref || 'base' }}-engine-e2e
           # Like notify-platforms.yml: a red run that keeps nothing makes the
           # next push re-pay the ~12m cold-harness compile on this path.
           cache-on-failure: true
@@ -90,7 +95,7 @@ jobs:
       # Cache the ~140MB test model by its known sha256 so re-runs (and other
       # PRs hitting this same path filter) don't re-download it from HF.
       - name: Cache the test model
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: /tmp/openpal-test-models
           key: engine-e2e-model-40f7094960b6ede8

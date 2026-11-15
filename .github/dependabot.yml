@@ -1,0 +1,29 @@
+# Dependency update automation (P0 security hardening — see docs/SECURITY_POSTURE.md).
+# Keep the `time` pin philosophy from AGENTS.md: bump only the dependency you mean to.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: npm
+    directory: /ui
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: pip
+    directory: /plugins/speech
+    schedule:
+      interval: weekly
+
+  # GitHub Actions: bundled into one PR per week so the SHA pins in the
+  # workflows stay bumpable in lockstep (docs/SECURITY_POSTURE.md).
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns:
+          - "*"

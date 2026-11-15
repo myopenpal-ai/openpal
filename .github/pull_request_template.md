@@ -31,6 +31,9 @@ which platform you built it on.
 
 ## Ticket checklist
 
+- [ ] A **self-review** comment is posted on the PR (what changed + how it was
+  verified), per docs/SECURITY_POSTURE.md — the project's documented review
+  ritual while it is a solo-maintainer repo.
 - [ ] The `Closes #N` line above names the issue this PR implements — or the `no-ticket` label is set and the reason is above.
 - [ ] If user-facing code changed (outside `docs/`, `*.md`, `.github/`, `scripts/`), this PR bumps the version and adds its changelog line (`node scripts/bump-version.mjs --bump … --notes "…"`) — or carries `[no release]` in its title. The `version-bump` check enforces this.
 - [ ] Every `Done when` line on the linked issue is satisfied, or the ones that are not are called out above.

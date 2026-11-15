@@ -108,6 +108,11 @@ Everything below is the whole job; there are no unrecorded steps.
 - For a patch release with no stabilization period, tag from `main` directly;
   for a release that needs a stabilization window, cut `release/vX.Y` from
   `main` first, land only fixes there, and tag from it.
+- **A signing key configured for git** (Settings → SSH and GPG keys → SSH
+  signing keys, plus `git config gpg.format ssh` + `commit.gpgsign`): release
+  tags are **signed tags** (the `v*`/`b*` tag ruleset requires them), and the
+  `publish` job refuses to sign any tag whose commit isn't an ancestor of
+  `main`.
 
 ### 1. Finalize (one reviewable step)
 
@@ -146,7 +151,8 @@ Tag the **merged** commit (not the local one), pushing the tag triggers the
 
 ```bash
 git fetch origin
-git push origin vX.Y.Z            # tag created from the merged main/release branch
+git tag -s vX.Y.Z            # signed tag (required) from the merged main/release branch
+git push origin vX.Y.Z       # tag push triggers the portable workflow
 ```
 
 Nightly/canary tags (`b*`) use the same pipeline in a **slim form**: only the
