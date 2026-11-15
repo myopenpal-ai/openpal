@@ -31,6 +31,10 @@ jobs:
       - name: "Apply the release: label"
         env:
           GH_TOKEN: ${{ github.token }}
+          # pull_request_target runs with an empty workspace (no checkout), so
+          # `gh` cannot resolve the repository from git — point it at the repo
+          # explicitly or every `gh pr …` call fails with "not a git repository".
+          GH_REPO: ${{ github.repository }}
           PR: ${{ github.event.pull_request.number }}
           TITLE: ${{ github.event.pull_request.title }}
           BODY: ${{ github.event.pull_request.body }}
