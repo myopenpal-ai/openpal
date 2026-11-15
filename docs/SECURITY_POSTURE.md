@@ -21,6 +21,7 @@ normal PR.
 | 11 required status checks + merge queue on `main` | same ruleset (`required_status_checks`, `merge_queue`) | 2026-11-12 |
 | Every commit merged to `main` is **signed and verified** | same ruleset, `required_signatures` rule | 2026-11-15 |
 | Release/nightly tags are **signed**, can't be moved or deleted | tag ruleset `v*`/`b*`: `required_signatures`, `non_fast_forward`, `deletion` | 2026-11-15 |
+| Tags pushed from CI are **signed in the runner** with a dedicated key, never a personal one | `rolling.yml` / `make-release.yml` import `GIT_SIGNING_KEY` and `git tag -s`; public half registered as an SSH signing key on the operator account | 2026-11-15 |
 | All third-party actions pinned to a full 40-char commit SHA | CI gate `action-pins` in `ci.yml` (fails any floating `@tag` ref) | 2026-11-15 |
 | Least-privilege `GITHUB_TOKEN`: `contents: read` default, `actions: write` only on the `frontend` job, `contents: write` + `deployments: write` only on `portable`'s `publish`/`discard` | `permissions:` in every workflow | 2026-11-15 |
 | Release signing keys scoped away from every non-release job | `TAURI_SIGNING_*` live on the `production-release` environment; `publish` targets `environment: production-release` | 2026-11-15 |

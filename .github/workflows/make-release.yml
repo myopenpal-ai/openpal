@@ -1,0 +1,235 @@
+# Stable release track (docs/RELEASING.md). Mirrors ggml-org/llama.cpp's
+# Make Release workflow: the deliberate, human-only entry point to the stable
+# pipeline. Nothing on `main` auto-creates a `v*` tag — a maintainer runs this
+# workflow after the PR-driven version bump + `finalize` land, and it creates
+# a signed annotated `vX.Y.Z` tag — signed in the runner with the
+# GIT_SIGNING_KEY SSH key (the `v*`/`b*` tag ruleset requires signed tags) —
+# pushed over HTTPS with the RELEASE_PUSH_TOKEN fine-grained PAT, which
+# cascades into `portable.yml`'s `v*` trigger (full
+# five-target matrix → signed draft release → per-target smoke gate → human
+# promote). A tag push made by GITHUB_TOKEN cannot spawn further workflow
+# runs, so the dedicated push credential is required.
+#
+# Dry-run by default: it validates the chosen commit and prints exactly what
+# a real run would do, without creating anything. The full stable-cut runbook
+# (bump → finalize → Make Release → smoke → promote) is docs/RELEASING.md.
+#
+# Pre-release validation (skippable with `skip_checks`):
+# 1. The chosen commit belongs to `main` and is not stale vs HEAD (it must be
+#    the current tip of `main` — cut from an older commit only by deliberately
+#    passing `skip_checks`).
+# 2. The workspace version on that commit is strictly newer than the last `v*`
+#    tag — otherwise the run fails naming the bump command:
+#    `node scripts/bump-version.mjs --bump …` (version bumps are PR-driven and
+#    must land before the cut).
+# 3. In non-dry-run, the tag is refused if it already exists on origin.
+name: Make Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: "Commit SHA to release (empty = current main HEAD)"
+        required: false
+        default: ""
+        type: string
+      dry_run:
+        description: "Dry run — validate and report, do not create or push the tag"
+        required: true
+        type: boolean
+        default: true
+      skip_checks:
+        description: "Skip the belongs-to-main / not-stale / version-newer pre-checks (deliberate only)"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+env:
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  make-release:
+    name: Make Release
+    runs-on: ubuntu-latest
+    steps:
+      # Checkout with the job's default credentials (persisted) so read-only
+      # git calls (fetch/validation) still work; the push step below drops
+      # those credentials before pushing so the tag is pushed with the PAT,
+      # never GITHUB_TOKEN.
+      - name: Checkout chosen commit with full history
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.commit != '' && inputs.commit || github.ref_name }}
+
+      # A specific commit SHA ref may not have brought `origin/main` or the
+      # latest tags; Make Release validates against the current tip of `main`,
+      # so fetch them explicitly (on a SHA ref, fetch-depth: 0 only pulls that
+      # commit's own history).
+      - name: Fetch current main and all tags
+        run: |
+          git fetch origin main --force
+          git fetch origin --tags --force
+
+      - name: Validate and resolve the release version
+        id: checks
+        env:
+          SKIP: ${{ inputs.skip_checks }}
+        run: |
+          set -euo pipefail
+
+          newer_semver() { # $1, $2 bare semver — exit 0 iff $1 > $2
+            local a b
+            a="$(printf '%s\n' "$1" | tr '.' ' ')"
+            b="$(printf '%s\n' "$2" | tr '.' ' ')"
+            read -r a1 a2 a3 <<<"$a"
+            read -r b1 b2 b3 <<<"$b"
+            if ((a1 > b1)); then return 0; fi
+            if ((a1 < b1)); then return 1; fi
+            if ((a2 > b2)); then return 0; fi
+            if ((a2 < b2)); then return 1; fi
+            ((a3 > b3))
+          }
+
+          SHA="$(git rev-parse HEAD)"
+          MAIN_TIP="$(git rev-parse origin/main)"
+          echo "chosen commit : ${SHA}"
+          echo "main is at    : ${MAIN_TIP}"
+
+          if [[ "$SKIP" != "true" ]]; then
+            if ! git merge-base --is-ancestor "$SHA" "$MAIN_TIP"; then
+              echo "::error::commit ${SHA} is not part of main — Make Release cuts from main only"
+              exit 1
+            fi
+            if [[ "$SHA" != "$MAIN_TIP" ]]; then
+              echo "::error::commit ${SHA} is stale — main is at ${MAIN_TIP}. Release the current tip of main, or pass skip_checks to deliberately cut an older commit."
+              exit 1
+            fi
+            echo "commit belongs to main and is not stale vs HEAD — OK"
+          else
+            echo "pre-checks skipped (skip_checks)"
+          fi
+
+          # The version is read from the chosen commit itself, so an arbitrary
+          # input SHA can never make the run tag the wrong version.
+          VERSION="$(git show "$SHA":Cargo.toml | sed -nE '/^\[workspace\.package\]/,/^\[[a-z]/p' | sed -nE 's/^version = "([^"]+)".*/\1/p' | head -n1)"
+          if [[ -z "$VERSION" || ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::could not read a bare semver from [workspace.package] version at ${SHA} (got \"${VERSION}\")"
+            exit 1
+          fi
+
+          if [[ "$SKIP" != "true" ]]; then
+            LAST_TAG="$(git describe --tags --abbrev=0 --match 'v*' "$SHA" 2>/dev/null || true)"
+            if [[ -n "$LAST_TAG" ]]; then
+              if ! newer_semver "$VERSION" "${LAST_TAG#v}"; then
+                echo "::error::workspace version v${VERSION} is not strictly newer than the last release ${LAST_TAG} — bump first:"
+                echo "::error::  node scripts/bump-version.mjs --bump patch|minor|major --notes \"One curated line for [Unreleased]\""
+                echo "::error::(version bumps are PR-driven and must land on main before the cut — docs/RELEASING.md)"
+                exit 1
+              fi
+              echo "workspace version v${VERSION} is strictly newer than ${LAST_TAG} — OK"
+            else
+              echo "no previous v* tag — first release, version v${VERSION} accepted"
+            fi
+          fi
+
+          echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
+          echo "version=v${VERSION}" >> "$GITHUB_OUTPUT"
+
+      # The v*/b* tag ruleset requires *signed* tags, so the tag is signed in
+      # the runner with the dedicated GIT_SIGNING_KEY (public half registered
+      # as an SSH signing key on the operator's GitHub account — docs/
+      # RELEASING.md). Only needed for a real run: a dry run never touches a
+      # secret and fails on nothing, as it should.
+      - name: Import the release signing key
+        if: ${{ inputs.dry_run != 'true' }}
+        env:
+          GIT_SIGNING_KEY: ${{ secrets.GIT_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${GIT_SIGNING_KEY:-}" ]]; then
+            echo "::error::GIT_SIGNING_KEY secret is not set — register the dedicated release signing key (docs/RELEASING.md)"
+            exit 1
+          fi
+          mkdir -p ~/.ssh
+          umask 077
+          printf '%s\n' "$GIT_SIGNING_KEY" > ~/.ssh/id_ed25519_releases
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config gpg.format ssh
+          git config user.signingkey ~/.ssh/id_ed25519_releases
+
+      - name: Create and push the vX.Y.Z tag
+        if: ${{ inputs.dry_run != 'true' }}
+        env:
+          VERSION: ${{ steps.checks.outputs.version }}
+          SHA: ${{ steps.checks.outputs.sha }}
+          RELEASE_PUSH_TOKEN: ${{ secrets.RELEASE_PUSH_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${RELEASE_PUSH_TOKEN:-}" ]]; then
+            echo "::error::RELEASE_PUSH_TOKEN secret is not set — create the fine-grained PAT and add it as a repository secret (docs/RELEASING.md)"
+            exit 1
+          fi
+          # Drop the checkout action's stored credentials so the push below
+          # authenticates with the PAT and nothing else: a GITHUB_TOKEN push
+          # would succeed but would silently never cascade into portable.yml.
+          # Only GITHUB_TOKEN pushes are exempt from re-triggering workflows —
+          # this push fires them.
+          git config --unset-all http.https://github.com/.extraheader || true
+          # x-access-token is the placeholder username GitHub accepts for a
+          # PAT. The token lives in the runner's .git/config for this job only
+          # and is masked in logs by GitHub Actions.
+          git remote add token-origin "https://x-access-token:${RELEASE_PUSH_TOKEN}@github.com/myopenpal-ai/openpal.git"
+          if git ls-remote --tags token-origin "refs/tags/${VERSION}" | grep -q "refs/tags/${VERSION}"; then
+            echo "::error::tag ${VERSION} already exists on origin — refusing to re-cut. Delete the tag (and its release, if any) before re-cutting, or choose another commit."
+            exit 1
+          fi
+          # Sign the tag with the imported GIT_SIGNING_KEY (the tag ruleset
+          # rejects unsigned v*/b* tags).
+          git tag -s "${VERSION}" -m "Release ${VERSION} (cut from ${SHA})"
+          git push token-origin "${VERSION}"
+          echo "Created and pushed signed annotated tag ${VERSION}"
+
+      - name: Summary
+        env:
+          VERSION: ${{ steps.checks.outputs.version }}
+          SHA: ${{ steps.checks.outputs.sha }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          SKIP: ${{ inputs.skip_checks }}
+        run: |
+          if [[ "$DRY_RUN" == "true" ]]; then
+            cat >> "$GITHUB_STEP_SUMMARY" <<EOF
+          ## Make Release dry run — no tag created
+
+          - commit: \`$SHA\`
+          - version that would be tagged: **$VERSION**
+          - pre-release checks: $( [[ "$SKIP" == "true" ]] && echo "skipped (skip_checks)" || echo "passed" )
+
+          Re-run this workflow with **dry_run = false** to create and push the
+          signed annotated \`$VERSION\` tag via the release push token. Nothing
+          was created in this run.
+          EOF
+          else
+            cat >> "$GITHUB_STEP_SUMMARY" <<EOF
+          ## $VERSION tagged — stable cut is in progress
+
+          Annotated tag **$VERSION** signed and pushed on \`$SHA\` with the
+          release push token. The \`portable\` workflow is now building the
+          full five-target matrix and assembling a signed **draft** release.
+
+          After it finishes, check the per-target smoke gate. **Only when the
+          run summary says "✓ Smoke passed — promote"** (every bundle verified
+          end to end), promote so the in-app updater picks the release up:
+
+          \`\`\`
+          gh release edit $VERSION --draft=false --repo myopenpal-ai/openpal
+          \`\`\`
+
+          A smoke failure deletes the draft automatically — the run summary
+          will say "❌ Smoke failed" and no promote instructions are issued.
+          EOF
+          fi

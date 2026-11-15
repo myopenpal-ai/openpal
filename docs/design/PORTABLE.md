@@ -213,7 +213,9 @@ documented limits, not parity targets.
   arm64) and uploads each artifact. Per-run cost controls: a `prepare` job
   resolves the llama.cpp engine tag once and cuts the matrix to a canary
   subset (`ubuntu-vulkan-x64` + `win-vulkan-x64` today, overridable via the
-  `NIGHTLY_CANARY_TARGETS` variable) on `b*` nightly tags, keeping the full
+  `NIGHTLY_CANARY_TARGETS` variable) on `b*` nightly tags (auto-created by
+  rolling.yml and published as `--kind nightly` **pre-releases** — `X.Y.Z+b{N}`
+  manifest version, invisible to the auto-updater), keeping the full
   five for `v*`; the UI is compiled once per run; the GB-scale engine download
   is cached per-target keyed on the resolved tag. `macos-arm64` is in the
   stable matrix but needs an Apple Silicon runner registered with the
