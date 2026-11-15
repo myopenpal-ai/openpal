@@ -98,11 +98,20 @@ jobs:
           fi
           mkdir -p ~/.ssh
           umask 077
-          printf '%s\n' "$GIT_SIGNING_KEY" > ~/.ssh/id_ed25519_releases
+          # Paste/secret-UI forms can smuggle in CRLF line endings and stray
+          # whitespace, which break OpenSSH's parser ("error in libcrypto" /
+          # "invalid format"). Normalize: CRLF→LF, trim both ends, ensure a
+          # trailing newline.
+          printf '%s' "$GIT_SIGNING_KEY" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' > ~/.ssh/id_ed25519_releases
+          printf '\n' >> ~/.ssh/id_ed25519_releases
+          if ! ssh-keygen -y -f ~/.ssh/id_ed25519_releases > ~/.ssh/id_ed25519_releases.pub 2>/dev/null; then
+            echo "::error::GIT_SIGNING_KEY is not a valid OpenSSH private key — re-set the secret from the exact key file content (no CRLF, no stray whitespace)."
+            echo "::error::Expected fingerprint: 256 SHA256:xsh0NLM23Uj6mY/txQ6hor9ZEGej62IQCACAEdeSdsU openpal-actions-release-tag-signing"
+            exit 1
+          fi
+          echo "release signing key: $(ssh-keygen -lf ~/.ssh/id_ed25519_releases.pub -E sha256 | cut -d' ' -f2)"
           # git's SSH signing treats user.signingkey as the *public* key path
-          # (and finds the private key as its non-.pub sibling), so derive the
-          # .pub half from the private key's embedded public part.
-          ssh-keygen -y -f ~/.ssh/id_ed25519_releases > ~/.ssh/id_ed25519_releases.pub
+          # (and finds the private key as its non-.pub sibling).
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git config gpg.format ssh
