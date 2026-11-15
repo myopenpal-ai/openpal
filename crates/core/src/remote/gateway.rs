@@ -71,6 +71,15 @@ fn build_router(shared: Arc<Shared>) -> Router {
         .route("/remote/v1/status", get(status_handler))
         .route("/remote/v1/pair", post(pair_handler))
         .route("/v1/chat/completions", post(chat_completions_handler))
+        // Request triage / risk classification from a paired client: the
+        // single-shot, non-streaming, grammar-constrained body
+        // `EngineManager::build_classify_body`/`build_risk_classify_body`
+        // produce, proxied to the local engine exactly like a chat
+        // completion (it *is* one — classify just never streams, so the
+        // SSE pass-through is trivially a plain JSON response here). The
+        // one route serves both triage and risk: the system prompt in the
+        // body is what tells the engine which classifier to run.
+        .route("/remote/v1/classify", post(classify_handler))
         .with_state(shared)
 }
 
@@ -294,7 +303,30 @@ async fn chat_completions_handler(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    if let Err(resp) = authenticate(&shared, &headers) {
+    proxy_to_engine(&shared, &headers, body).await
+}
+
+/// Request triage / risk classification (see `build_router`). Same raw-bytes
+/// proxy as chat completions — a classify body is a perfectly ordinary,
+/// non-streaming chat-completion request, and the gateway stays blind to
+/// what the model does with it (the same "nothing to translate" reasoning
+/// that keeps `chat_stream`/`ChatEvent` out of this module).
+async fn classify_handler(
+    State(shared): State<Arc<Shared>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    proxy_to_engine(&shared, &headers, body).await
+}
+
+/// The shared meal of every proxied route: authenticate the bearer token,
+/// then forward the raw request bytes to the local engine's
+/// `/chat/completions` endpoint and stream the response straight back —
+/// deliberately bypassing `chat_stream`/`ChatEvent` (see this module's doc
+/// comment). `classify_handler` and `chat_completions_handler` differ only
+/// in route, never in behavior.
+async fn proxy_to_engine(shared: &Shared, headers: &HeaderMap, body: Bytes) -> Response {
+    if let Err(resp) = authenticate(shared, headers) {
         return resp.into_response();
     }
     let Some(endpoint) = shared.engine.endpoint().await else {
@@ -473,6 +505,52 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn classify_requires_auth() {
+        let shared = test_shared();
+        let app = build_router(shared);
+        let response = app
+            .oneshot(
+                axum::http::Request::post("/remote/v1/classify")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    /// Same shape as the chat proxy: a valid bearer token and a stopped
+    /// local engine must report "not running" clearly rather than hanging or
+    /// erroring opaquely — a paired phone's triage/risk call finds a
+    /// desktop with no model loaded every time it's paired but idle.
+    #[tokio::test]
+    async fn classify_with_valid_token_and_stopped_engine_is_service_unavailable() {
+        let shared = test_shared();
+        let token = "a-valid-token";
+        let salt = store::new_salt();
+        let hash = store::hash_token(token, &salt);
+        {
+            let conn = shared.app_db.lock().unwrap();
+            store::insert_paired_device(&conn, "dev-1", "Test Device", &hash, &salt, now_ms())
+                .unwrap();
+        }
+        let app = build_router(shared);
+        let response = app
+            .oneshot(
+                axum::http::Request::post("/remote/v1/classify")
+                    .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert!(body_string(response).await.contains("isn't running"));
     }
 
     #[tokio::test]

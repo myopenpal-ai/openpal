@@ -20,7 +20,9 @@ use openpal_core::cloud::CloudModelInfo;
 use openpal_core::engine::{self, EngineEndpoint, STARTUP_TIMEOUT};
 use openpal_core::injection::{self, Source, TurnGuard};
 use openpal_core::plugin::{PluginEvent, PluginInfo, PluginManager};
-use openpal_core::remote::client::{Browser, DiscoveredHost, RemotePairingRecord};
+use openpal_core::remote::client::{
+    Browser, DiscoveredHost, RemoteInferenceStatus, RemotePairingRecord,
+};
 use openpal_core::remote::{PairedDeviceInfo, PairingEvent, RemoteAccessStatusInfo, WolStatus};
 use openpal_core::types::{
     AppLockPinCheckResult, AppLockState, AppLockStatusView, Artifact, Attachment, AttachmentKind,
@@ -1698,6 +1700,15 @@ pub async fn start_engine(
     model_id: String,
     context_length: u32,
 ) -> Result<(), String> {
+    // While the remote-inference add-on is connected, the app's one engine
+    // is the other device's — loading a local model would have to displace
+    // it, so say so plainly instead of silently layering a second engine
+    // (mono-model: one engine, wherever it runs).
+    if state.engine.remote_active() {
+        return Err("You're chatting through another device's model right now. \
+             Disconnect from Remote inference in Settings to use a model on this computer."
+            .to_string());
+    }
     let spec = resolve_spec(&state, &model_id).await?;
 
     let binary = state.paths.engine_binary().ok_or_else(|| {
@@ -3477,7 +3488,17 @@ pub async fn set_plugin_enabled(
         .set_enabled(&id, enabled, |event| {
             let _ = on_event.send(event);
         })
-        .await
+        .await?;
+    // Turning the remote-inference add-on off (or otherwise disabling it)
+    // while its engine routing is active must return the app to the local
+    // engine and drop the pairing — "disconnecting or uninstalling the
+    // plugin returns the app to the local engine, with no hidden state
+    // leaking between the two".
+    if !enabled && id == "remote-inference" {
+        state.engine.deactivate_remote().await;
+        state.remote_backend.forget().await;
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -5852,6 +5873,96 @@ pub async fn remote_client_status(
 pub async fn remote_forget(state: State<'_, AppState>) -> Result<(), String> {
     state.remote_backend.forget().await;
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Remote inference — route this device's chat, triage, and risk checks
+// through another OpenPal device's engine (the `remote-inference` add-on;
+// see plugins/remote-inference/). The remote *client* commands above pair
+// and manage the connection; these are what make the engine itself use it —
+// and only while the add-on is on and the user chose Connect.
+// ---------------------------------------------------------------------------
+
+/// A friendly name for this device to present when pairing with the remote —
+/// what its Settings → Devices list will show. Deliberately static: a
+/// per-machine hostname adds little and a beginner pairing two devices of
+/// their own will rename it on the remote side if they want to.
+const REMOTE_INFERENCE_DEVICE_NAME: &str = "OpenPal device";
+
+/// The remote-inference plugin's "Connect": pair with another OpenPal
+/// device (presenting `addr`/`port`/`code` when no pairing exists yet — a
+/// saved pairing from a previous session is reused as-is), then route the
+/// whole engine surface over to that device's engine. From here until
+/// Disconnect, chat streams from the remote device, `get_engine_status`
+/// reflects the remote engine, and request triage / the safety check run
+/// against it — one engine at a time, exactly like Android's permanent
+/// `RemoteBackend` arrangement. Nothing listens or connects unless this
+/// command runs.
+#[tauri::command]
+pub async fn remote_inference_connect(
+    state: State<'_, AppState>,
+    addr: Option<String>,
+    port: Option<u16>,
+    code: Option<String>,
+) -> Result<RemoteInferenceStatus, String> {
+    if !state.plugins.capability_enabled("remote-inference").await {
+        return Err("Turn on the Remote inference add-on in Plugins first.".to_string());
+    }
+
+    if state.remote_backend.paired_record().await.is_none() {
+        let (Some(addr), Some(port), Some(code)) = (addr, port, code) else {
+            return Err(
+                "Enter the other device's address, port, and pairing code to connect.".to_string(),
+            );
+        };
+        if addr.trim().is_empty() || code.trim().is_empty() {
+            return Err(
+                "Enter the other device's address, port, and pairing code to connect.".to_string(),
+            );
+        }
+        state
+            .remote_backend
+            .pair(addr.trim(), port, code.trim(), REMOTE_INFERENCE_DEVICE_NAME)
+            .await
+            .map_err(|e| e.message())?;
+    }
+
+    state
+        .engine
+        .activate_remote(Box::new(state.remote_backend.clone()))
+        .await
+        .map_err(friendly)?;
+    Ok(remote_inference_status_view(&state).await)
+}
+
+/// The remote-inference plugin's "Disconnect": take the engine surface back
+/// to the local engine and forget the pairing's record and token cleanly —
+/// nothing about the connection outlives this (see the plugin's README).
+/// Idempotent.
+#[tauri::command]
+pub async fn remote_inference_disconnect(state: State<'_, AppState>) -> Result<(), String> {
+    state.engine.deactivate_remote().await;
+    state.remote_backend.forget().await;
+    Ok(())
+}
+
+/// The full picture for the remote-inference Settings section in one round
+/// trip: whether the engine surface is routed to the remote device, who it's
+/// paired with (if anyone), and what the active engine reports — the remote
+/// engine while connected, the local engine otherwise.
+#[tauri::command]
+pub async fn remote_inference_status(
+    state: State<'_, AppState>,
+) -> Result<RemoteInferenceStatus, String> {
+    Ok(remote_inference_status_view(&state).await)
+}
+
+async fn remote_inference_status_view(state: &AppState) -> RemoteInferenceStatus {
+    RemoteInferenceStatus {
+        active: state.engine.remote_active(),
+        pairing: state.remote_backend.paired_record().await,
+        engine: state.engine.status().await,
+    }
 }
 
 #[cfg(test)]

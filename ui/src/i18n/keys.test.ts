@@ -7,6 +7,8 @@ import enRemoteAccess from "./locales/en.remoteAccess.json";
 import frRemoteAccess from "./locales/fr.remoteAccess.json";
 import enRemoteClient from "./locales/en.remoteClient.json";
 import frRemoteClient from "./locales/fr.remoteClient.json";
+import enRemoteInference from "./locales/en.remoteInference.json";
+import frRemoteInference from "./locales/fr.remoteInference.json";
 import enInjection from "./locales/en.injection.json";
 import frInjection from "./locales/fr.injection.json";
 
@@ -34,6 +36,7 @@ describe.each([
   { label: "recovery", en: enRecovery, fr: frRecovery },
   { label: "remoteAccess", en: enRemoteAccess, fr: frRemoteAccess },
   { label: "remoteClient", en: enRemoteClient, fr: frRemoteClient },
+  { label: "remoteInference", en: enRemoteInference, fr: frRemoteInference },
   { label: "injection", en: enInjection, fr: frInjection },
 ])("locale key parity ($label)", ({ en, fr }) => {
   it("en and fr declare exactly the same set of keys", () => {

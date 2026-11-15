@@ -204,7 +204,7 @@ mobile is a labeled gap, not a default-path regression — but it should be
 | Speech (STT/TTS) | `faster-whisper` + Piper, Python sidecar | Dropped entirely (real in-process replacements — `whisper.cpp`, `sherpa-onnx` — exist but are their own project; revisit later behind Settings → Advanced) |
 | Agent shell/code-exec tools | Rust-native, OS-sandboxed | Omitted from the mobile tool registry |
 | Engine auto-update | `engine_update.rs`, independent of app releases | None — engine is compiled in; updates ship through normal app-store review |
-| Request-triage autopilot, safety-banner risk detection | `EngineManager::classify`/`classify_risk` via the local engine's `raw_classify` | Silently unavailable on `RemoteBackend` (Android) — the gateway's route table has no classify-style proxy route, so `raw_classify` always returns `Ok(None)`, which both features already treat as "nothing to suggest/nothing to flag this time". No UI label needed since there's no user-visible failure state, but a real, disclosed gap: a phone chatting through a paired desktop gets neither feature, ever. |
+| Request-triage autopilot, safety-banner risk detection | `EngineManager::classify`/`classify_risk` via the local engine's `raw_classify` | Works through the pairing: the gateway serves `/remote/v1/classify`, and `RemoteBackend::raw_classify` proxies the exact same body to it with the pinned-TLS bearer client, so a paired phone's triage and risk check run on the desktop's engine like its chat does. `Ok(None)` (both features' "nothing to suggest" answer) is still what an unpaired/stopped/errored round trip maps to. |
 
 Keep a small doc/README table like the one above as the single place every
 accepted mobile/desktop difference is listed, so it can be audited at a glance
@@ -456,9 +456,10 @@ added.
     multicast behavior are still unconfirmed), and pairing against a desktop
     with an actual model loaded (only the gateway's own `503`
     "engine isn't running" fallback path was exercised, since the test
-    harness had no model loaded). `raw_classify`/agent-mode/web-search stay
-    unwired on this backend — see the cut-features table above and
-    `docs/REMOTE_INFERENCE.md`'s own scope notes.
+    harness had no model loaded). `raw_classify` is wired but unexercised on a
+    real device too; agent-mode/web-search stay unwired on this backend — see
+    the cut-features table above and `docs/REMOTE_INFERENCE.md`'s own scope
+    notes.
 
 **Phase 2 — the engine port** (highest-risk/highest-value piece, isolated;
 now the *second* mobile-engine move, after RemoteBackend above):

@@ -23,13 +23,14 @@ import type {
   PairingPayload,
   ParentalSettingsView,
   RemoteAccessStatusInfo,
+  RemoteInferenceStatus,
   RemotePairingRecord,
   Settings,
   ToolGrant,
   VoiceInfo,
   WolStatus,
 } from "../lib/types";
-import { experimentalFeaturesOn, useStore, type SettingsSection } from "../state/store";
+import { experimentalFeaturesOn, remoteInferenceAvailable, useStore, type SettingsSection } from "../state/store";
 
 /** The settings drafted locally and saved later — see `SettingsSheet`.
  * `userName` is drafted as the field's raw text (never null) and only turned
@@ -492,9 +493,11 @@ function PrivacySettings() {
  */
 function DevicesSettings() {
   const isAndroid = useStore((s) => s.appInfo?.isAndroid ?? false);
+  const plugins = useStore((s) => s.plugins);
   return (
     <>
       {isAndroid && <RemoteClientSection />}
+      {!isAndroid && remoteInferenceAvailable(plugins) && <RemoteInferenceSection />}
       <SyncSection />
       <RemoteAccessSection />
     </>
@@ -1966,6 +1969,220 @@ function RemoteClientSection() {
             </p>
           )}
         </>
+      )}
+    </SettingsGroup>
+  );
+}
+
+/**
+ * Remote inference (the `remote-inference` add-on): run this computer's chat,
+ * request triage, and safety check on a model that lives on another OpenPal
+ * device — the ticket's "run a bigger model on another device". Desktop-only,
+ * and only shown while the add-on is enabled (`remoteInferenceAvailable`
+ * gates the call site in `DevicesSettings`; plugins are turned on in
+ * Settings → Plugins, so the section needs no on/off of its own).
+ *
+ * Three shapes, driven entirely by the one `remote_inference_status` round
+ * trip (whose `active`/`pairing`/`engine` are all we read):
+ *   - not paired — the manual address/port/code form; Connect pairs then
+ *     routes (Rust's `remote_inference_connect` needs the code only here).
+ *   - paired but not routed (a pairing survived from a previous Connect, or
+ *     the local engine was put back) — the same device line plus Connect,
+ *     which reuses the saved pairing (the fields are ignored then).
+ *   - routed — the device line plus what the *remote* engine reports right
+ *     now (the model it's running or loading, or a reachability problem), and
+ *     Disconnect. While there, the section polls every 2s the same way
+ *     App.tsx refreshes the engine pill, so "which model" and reachability
+ *     stay honest even though the remote engine's lifecycle is out of this
+ *     device's hands.
+ */
+export function RemoteInferenceSection() {
+  const { t } = useTranslation("remoteInference");
+  // The last `remote_inference_status` answer; null while it has never
+  // returned one (first load, or a failed load). Its `active` flag is the
+  // single source of truth for the connected branch.
+  const [status, setStatus] = useState<RemoteInferenceStatus | null>(null);
+  const [busy, setBusy] = useState<"connecting" | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [addr, setAddr] = useState("");
+  const [port, setPort] = useState("");
+  const [code, setCode] = useState("");
+  const addrId = useId();
+  const portId = useId();
+  const codeId = useId();
+
+  useEffect(() => {
+    api
+      .remoteInferenceStatus()
+      .then(setStatus)
+      .catch(() => {
+        // Leave `status` null: the manual form shows, and the first Connect
+        // attempt surfaces whatever the real problem is.
+      });
+  }, []);
+
+  // While routed to the remote device, keep the which-model / reachability
+  // lines fresh — same cadence App.tsx uses for the engine pill.
+  useEffect(() => {
+    if (!status?.active) return;
+    const id = window.setInterval(() => {
+      void api.remoteInferenceStatus().then(setStatus).catch(() => {});
+    }, 2000);
+    return () => window.clearInterval(id);
+  }, [status?.active]);
+
+  const connect = async () => {
+    const portNum = Number(port);
+    // The typed fields only matter when there's no saved pairing to reuse —
+    // Rust's command ignores them otherwise.
+    if (status?.pairing == null) {
+      if (!addr.trim() || !Number.isInteger(portNum) || portNum <= 0 || code.trim().length === 0) {
+        return;
+      }
+    }
+    setBusy("connecting");
+    setError(null);
+    try {
+      const next = await api.remoteInferenceConnect(addr.trim(), portNum, code.trim());
+      setAddr("");
+      setPort("");
+      setCode("");
+      setStatus(next);
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const disconnect = async () => {
+    setError(null);
+    await api.remoteInferenceDisconnect();
+    // Disconnect also forgets the pairing (see the Rust command), so the
+    // section lands back on the manual form.
+    setStatus(null);
+  };
+
+  const pairing = status?.pairing ?? null;
+  const connected = status?.active === true;
+
+  // What the *remote* engine reports, as one hint line — the loaded/loading
+  // model's name, or a reachability failure, so "connected" never reads as
+  // "chat is live right now".
+  let engineNote: string | null = null;
+  const engine = status?.engine;
+  if (engine?.type === "running") {
+    engineNote = t("engine.running", { model: engine.data.modelId });
+  } else if (engine?.type === "starting") {
+    engineNote = t("engine.starting", { model: engine.data.modelId });
+  } else if (engine?.type === "stopped") {
+    engineNote = t("engine.stopped");
+  } else if (engine?.type === "failed") {
+    engineNote = t("engine.failed");
+  } else if (engine?.type === "remoteUnreachable") {
+    engineNote = t("engine.unreachable", { name: engine.data.hostName });
+  } else if (engine?.type === "remoteUnpaired") {
+    engineNote = t("engine.unpaired");
+  }
+
+  const busyConnecting = busy === "connecting";
+
+  return (
+    <SettingsGroup title={t("pluginName")}>
+      <div className="settings-field">
+        <span className="settings-label">{t("summary")}</span>
+        <span className="settings-hint">{t("hint")}</span>
+      </div>
+
+      {pairing && connected ? (
+        <div className="settings-field">
+          <span className="settings-label">{t("connectedLabel")}</span>
+          <span className="settings-hint">
+            {t("connectedTo", {
+              name: pairing.deviceName,
+              addr: pairing.hostAddr,
+              port: pairing.port,
+            })}
+            {engineNote && <> {engineNote}</>}
+          </span>
+          <button className="btn-ghost" onClick={() => void disconnect()}>
+            {t("disconnect")}
+          </button>
+        </div>
+      ) : pairing ? (
+        // A saved pairing that isn't routed yet (e.g. after a restart —
+        // routing isn't persisted, the pairing is). The device line stands in
+        // for the label; Connect reuses the saved pairing (the fields are
+        // ignored by Rust when one exists).
+        <div className="settings-field">
+          <span className="settings-label">
+            {t("connectedTo", {
+              name: pairing.deviceName,
+              addr: pairing.hostAddr,
+              port: pairing.port,
+            })}
+          </span>
+          <button
+            className="btn-ghost"
+            onClick={() => void connect()}
+            disabled={busyConnecting}
+          >
+            {busyConnecting ? t("connecting") : t("connect")}
+          </button>
+        </div>
+      ) : (
+        <div className="settings-field">
+          <label htmlFor={addrId} className="settings-label">
+            {t("manual.address")}
+          </label>
+          <span className="settings-hint">{t("manual.hint")}</span>
+          <input
+            id={addrId}
+            className="settings-text"
+            type="text"
+            placeholder={t("manual.addrPlaceholder")}
+            value={addr}
+            onChange={(e) => setAddr(e.target.value)}
+            disabled={busyConnecting}
+            autoCapitalize="none"
+            autoCorrect="off"
+            spellCheck={false}
+          />
+          <label htmlFor={portId} className="settings-label">
+            {t("manual.port")}
+          </label>
+          <input
+            id={portId}
+            className="settings-text"
+            type="text"
+            inputMode="numeric"
+            placeholder={t("manual.portPlaceholder")}
+            value={port}
+            onChange={(e) => setPort(e.target.value.replace(/[^0-9]/g, ""))}
+            disabled={busyConnecting}
+          />
+          <label htmlFor={codeId} className="settings-label">
+            {t("manual.code")}
+          </label>
+          <input
+            id={codeId}
+            className="settings-text"
+            type="text"
+            placeholder={t("manual.codePlaceholder")}
+            value={code}
+            onChange={(e) => setCode(e.target.value)}
+            disabled={busyConnecting}
+          />
+          <button className="btn-ghost" onClick={() => void connect()} disabled={busyConnecting}>
+            {busyConnecting ? t("connecting") : t("connect")}
+          </button>
+        </div>
+      )}
+
+      {error && (
+        <p className="model-error" role="alert">
+          {error}
+        </p>
       )}
     </SettingsGroup>
   );

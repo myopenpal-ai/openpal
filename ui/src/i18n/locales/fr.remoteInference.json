@@ -1,0 +1,27 @@
+{
+  "pluginName": "Inférence à distance",
+  "summary": "Discutez via le modèle d'IA d'un autre appareil",
+  "hint": "Faites fonctionner le chat, le tri des requêtes et le contrôle de sécurité de cet ordinateur sur un modèle exécuté sur un autre appareil OpenPal — pratique pour un modèle trop gros pour cet ordinateur. Un moteur à la fois : tant que vous êtes connecté, le modèle de cet ordinateur n'est pas utilisé.",
+  "connectedLabel": "Connecté",
+  "connectedTo": "Acheminé vers {{name}} ({{addr}}:{{port}}).",
+  "connect": "Se connecter",
+  "disconnect": "Se déconnecter",
+  "connecting": "Connexion…",
+  "manual": {
+    "hint": "Sur l'autre appareil, activez Réglages → Appareils → Accès à distance, puis appuyez sur « Ajouter un appareil » pour obtenir son adresse, son port et son code.",
+    "address": "Adresse",
+    "addrPlaceholder": "ex. 192.168.1.20",
+    "port": "Port",
+    "portPlaceholder": "ex. 7443",
+    "code": "Code de jumelage",
+    "codePlaceholder": "ex. 1234"
+  },
+  "engine": {
+    "running": "Le chat s'exécute sur {{model}}.",
+    "starting": "Chargement de {{model}} sur l'autre appareil…",
+    "stopped": "Aucun modèle n'est chargé sur l'autre appareil.",
+    "failed": "Le moteur de l'autre appareil nécessite de l'attention.",
+    "unreachable": "Impossible de joindre {{name}} — le chat reprendra à son retour.",
+    "unpaired": "L'autre appareil a mis fin à cette connexion."
+  }
+}

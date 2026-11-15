@@ -114,9 +114,11 @@ function revealSetting(page: HTMLElement, texts: string[]): boolean {
  * lands back exactly where the user was (see `moreDialogPage`).
  */
 export default function MoreDialog({ page }: { page: MoreDialogPage }) {
-  // The two Remote sections' titles live in their own namespaces, and the
-  // search reads them too.
-  const { t } = useTranslation(["translation", "remoteAccess", "remoteClient"]);
+  // The Remote sections' titles live in their own namespaces, and the
+  // search reads them too. Each namespaced section must be listed here or
+  // `t` (whose key union comes from exactly these namespaces) won't
+  // type-check its search-labelled keys.
+  const { t } = useTranslation(["translation", "remoteAccess", "remoteClient", "remoteInference"]);
   const setPage = useStore((s) => s.setMoreDialogPage);
   const plugins = useStore((s) => s.plugins);
   const appInfo = useStore((s) => s.appInfo);

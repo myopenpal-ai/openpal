@@ -133,6 +133,10 @@ GET /remote/v1/status
 
 POST /v1/chat/completions
 <a standard OpenAI-compatible chat-completions body, streaming or not>
+
+POST /remote/v1/classify
+<a request-triage / risk-check body, the exact tagged shape the desktop's
+ `EngineManager::classify`/`classify_risk` build>
 ```
 
 `/v1/chat/completions` is a raw byte proxy straight to the local engine's own
@@ -142,7 +146,14 @@ OpenPal's internal desktop-UI event shape, so there's nothing to translate;
 this also means any OpenAI-compatible client library works against it
 unmodified.
 
-**If the engine isn't running**, the proxy returns `503 Service Unavailable`
+`/remote/v1/classify` is the same raw proxy for the engine's own
+`/chat/completions` with a request-triage or risk-check body — it's what
+`RemoteBackend::raw_classify` calls, so the request-triage autopilot and the
+safety check run on the paired engine exactly as they do on a local one
+(`choices[0].message.content` comes back unchanged; the caller already treats
+"nothing to suggest" as a normal answer).
+
+**If the engine isn't running**, either proxy returns `503 Service Unavailable`
 with an actionable message, rather than trying to start it. See "What this
 doesn't do" below for why.
 
@@ -266,8 +277,9 @@ tool-calling loop and the web-search sidecar construct a plain
 self-signed cert; wiring `endpoint()` up before that path is tested would
 leave a route nobody's verified working. Agent-mode/web-search over a remote
 backend is still genuinely valuable future scope, still explicitly **not
-v1** — v1 is chat completions only, and `chat_stream` is the only path
-wired to the gateway's real HTTP surface.
+v1** — v1 wires the chat and request-classification surfaces
+(`chat_stream`/`/v1/chat/completions` and `raw_classify`/`/remote/v1/classify`)
+and nothing else.
 
 Practically, what shipped and what didn't:
 
@@ -290,10 +302,11 @@ Practically, what shipped and what didn't:
   and tears down the browser; nothing runs in the background.
 - **Explicitly not built**: camera QR scanning (no scanning capability
   exists anywhere in this codebase yet — see the trust-model note above),
-  agent-mode/web-search over `RemoteBackend`, `raw_classify` (no
-  `/remote/v1/classify`-style route exists on the gateway — the request-
-  triage and safety-banner features are silently unavailable on this
-  backend, see `docs/design/MOBILE.md`'s cut-features table), and iOS (this work
+  agent-mode/web-search over `RemoteBackend` (the request-triage and
+  safety-banner *classify* paths *are* wired — `/remote/v1/classify` on the
+  gateway, `RemoteBackend::raw_classify` on the client — so a paired phone
+  gets those like a local engine; see the table in `docs/design/MOBILE.md`),
+  and iOS (this work
   is Android-only throughout; iOS still needs the
   `NSLocalNetworkUsageDescription`/`NSBonjourServices` `Info.plist` entries
   this doc already called out, and is blocked on Xcode access regardless).

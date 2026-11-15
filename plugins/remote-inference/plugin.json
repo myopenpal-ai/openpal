@@ -1,0 +1,9 @@
+{
+  "id": "remote-inference",
+  "name": "Remote Inference",
+  "description": "Chat using a model that runs on another OpenPal device, for models too big for this computer. Connect to a paired OpenPal device and your chat, request triage, and the safety check all run on that device's engine instead of this one.",
+  "version": "0.1.0",
+  "author": "OpenPal",
+  "capabilities": ["remote-inference"],
+  "experimental": true
+}

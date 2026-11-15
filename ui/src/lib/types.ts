@@ -1445,6 +1445,17 @@ export interface DiscoveredHost {
   port: number;
 }
 
+/** The full picture the remote-inference Settings section shows
+ * (`remote_inference_status`): whether the app's engine surface is routed to
+ * the paired device, who it's paired with (if anyone), and what the active
+ * engine reports — the remote engine while connected, the local one
+ * otherwise. */
+export interface RemoteInferenceStatus {
+  active: boolean;
+  pairing: RemotePairingRecord | null;
+  engine: EngineStatus;
+}
+
 /* ------------------------------ PIN entry --------------------------------- */
 
 /** Outcome of one PIN-entry attempt (`verifyParentalPin`, `setParentalControls`).

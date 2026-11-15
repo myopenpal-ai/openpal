@@ -1404,6 +1404,38 @@ mod tests {
         assert!(!provides(&p, "smart-model-router"));
     }
 
+    /// The shipped remote-inference manifest is also python-less (see
+    /// PLUGINS.md §8): a pure UI+Rust capability flag with no setup/service/
+    /// chat of its own. Its capability gates a backend decision through
+    /// `capability_enabled` — not just a UI reveal — like
+    /// smart-model-router's: the remote-inference Settings section is
+    /// revealed by the UI-side check, while `crates/app`'s
+    /// `remote_inference_*` commands route `state.engine` to the paired
+    /// device's engine. No network activity at all while the plugin is off.
+    #[test]
+    fn parses_the_remote_inference_manifest() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../plugins/remote-inference/plugin.json"
+        );
+        let raw = std::fs::read_to_string(path).expect("remote-inference plugin.json present");
+        let m: PluginManifest = serde_json::from_str(&raw).expect("manifest parses");
+        assert_eq!(m.id, "remote-inference");
+        assert!(m.capabilities.iter().any(|c| c == "remote-inference"));
+        assert!(
+            m.python.is_none(),
+            "remote-inference is python-less — pure Rust + UI"
+        );
+
+        let p = DiscoveredPlugin {
+            manifest: m,
+            dir: PathBuf::from("/tmp/x"),
+        };
+        assert!(!has_chat(&p));
+        assert!(!has_service(&p));
+        assert!(!provides(&p, "remote-inference"));
+    }
+
     /// The shipped writing-tools manifest is also python-less (see
     /// PLUGINS.md §8): a pure UI-capability flag with no setup/service/chat
     /// of its own, same shape as smart-model-router. Unlike smart-model-router, though,
@@ -1471,9 +1503,10 @@ mod tests {
     /// real `PluginManager` at the repo's actual `plugins/` directory (the
     /// exact dev-mode fallback `resolve_plugin_dirs` uses,
     /// crates/app/src/state.rs:307) with no `plugins.json` yet, and confirm
-    /// `list_plugins()` would show all five built-ins (hf-browser,
-    /// smart-model-router, and writing-tools disabled-but-ready by default;
-    /// speech and web-search disabled and not set up). Exercising
+    /// `list_plugins()` would show all six built-ins (hf-browser,
+    /// smart-model-router, remote-inference, and writing-tools
+    /// disabled-but-ready by default; speech and web-search disabled and not
+    /// set up). Exercising
     /// this in-process stands in for a GUI check of the Plugins screen, as
     /// it looks once experimental features are on (every add-on shipped today
     /// is experimental, so the list is empty otherwise).
@@ -1494,6 +1527,7 @@ mod tests {
             ids,
             [
                 "hf-browser",
+                "remote-inference",
                 "smart-model-router",
                 "speech",
                 "web-search",

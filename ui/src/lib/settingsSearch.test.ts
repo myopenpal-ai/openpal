@@ -82,6 +82,28 @@ describe("searchSettings", () => {
     expect(labels("remote pairing")).toEqual([]);
     const android = { portable: false, isAndroid: true } as AppInfo;
     expect(labels("remote pairing", { ...desktop, appInfo: android })).toEqual(["Remote pairing"]);
+
+    // The Remote inference section is desktop-only and add-on-gated. (The
+    // bare query also surfaces "Remote access", whose hint mentions an
+    // "inference source" — the assertion is about this section's own label.)
+    expect(labels("remote inference")).not.toContain("Remote inference");
+    const remoteInference = {
+      id: "remote-inference",
+      capabilities: ["remote-inference"],
+      enabled: true,
+    } as PluginInfo;
+    expect(labels("remote inference", { ...desktop, plugins: [remoteInference] })).toEqual([
+      "Remote inference",
+      "Remote access",
+    ]);
+    // Hidden on Android, where the phone's own engine is remote already.
+    expect(
+      labels("remote inference", {
+        ...desktop,
+        appInfo: android,
+        plugins: [remoteInference],
+      }),
+    ).not.toContain("Remote inference");
   });
 
   it("searches in the app's language", async () => {
