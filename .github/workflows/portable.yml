@@ -7,9 +7,16 @@
 # Per-merge cost controls (see the llama.cpp release-philosophy epic):
 # - `prepare` resolves the llama.cpp engine tag once and computes the target
 #   matrix from the tag kind: a `b*` nightly builds a slim canary subset
-#   (default `macos-arm64` + `ubuntu-vulkan-x64`, overridable via the
-#   `NIGHTLY_CANARY_TARGETS` repo variable), while `v*` and `workflow_dispatch`
-#   keep the full five-target matrix.
+#   (default `ubuntu-vulkan-x64` + `win-vulkan-x64` — the targets with a
+#   runner in this org today; overridable via the `NIGHTLY_CANARY_TARGETS`
+#   repo variable), while `v*` and `workflow_dispatch` keep the full
+#   five-target matrix.
+# - Runner reality: `macos-x64` builds on the org's self-hosted
+#   `macos-15-intel` runner; `macos-arm64` needs an Apple Silicon runner
+#   registered with the `macos-14` label, which this org does not have yet —
+#   that leg is cancelled until one is added (the `prepare` job emits a
+#   warning naming it). Stable cuts stay failing until every target's runner
+#   exists, by design.
 # - the UI is compiled once per run (`ui` job → shared `ui-dist` artifact);
 #   matrix jobs restore it and `tauri.portable.conf.json` disables the
 #   per-target `beforeBuildCommand`.
@@ -91,12 +98,13 @@ jobs:
             [ "$EVENT_NAME" = "workflow_dispatch" ] || [[ "$REF_NAME" == v* ]]
           }
 
-          # target → runner OS (with the fixed matrix entries from before the
-          # prepare job split).
+          # target → runner label, kept honest against what this org has
+          # registered (macos-x64 builds on the self-hosted macos-15-intel
+          # runner; macos-arm64 is waiting on an Apple Silicon box).
           os_for() {
             case "$1" in
               macos-arm64) echo "macos-14" ;;
-              macos-x64) echo "macos-13" ;;
+              macos-x64) echo "macos-15-intel" ;;
               win-vulkan-x64) echo "windows-latest" ;;
               ubuntu-vulkan-x64) echo "ubuntu-22.04" ;;
               ubuntu-vulkan-arm64) echo "ubuntu-24.04-arm" ;;
@@ -104,25 +112,41 @@ jobs:
             esac
           }
 
+          # Runner inventory this workflow depends on: a leg whose label has
+          # no runner registered in the org is cancelled by GitHub with a
+          # cryptic "configuration … not supported", so `warn_if_unregistered`
+          # turns that into an explicit annotation. Keep in sync when runners
+          # are added/removed (mainly: register an Apple Silicon runner with
+          # the `macos-14` label to unblock macos-arm64). Every label not
+          # listed here is assumed registered.
+          warn_if_unregistered() { # $1 = target, $2 = runner label
+            case "$2" in
+              macos-14) echo "::warning::target \"$1\" maps to runner \"$2\", which has no registered runner in this org — this leg will be cancelled (register a self-hosted runner with that label)" ;;
+            esac
+          }
+
           if is_stable; then
             kind="stable"
             targets="macos-arm64,macos-x64,win-vulkan-x64,ubuntu-vulkan-x64,ubuntu-vulkan-arm64"
           else
+            # Canary default = the targets with a runner today; add
+            # macos-arm64 back once a `macos-14` (Apple Silicon) runner exists.
             kind="canary"
-            targets="${NIGHTLY_CANARY:-macos-arm64,ubuntu-vulkan-x64}"
+            targets="${NIGHTLY_CANARY:-ubuntu-vulkan-x64,win-vulkan-x64}"
           fi
 
           entries=""
           IFS=,
           for t in $targets; do
             # Tolerate spaces/hanging commas in NIGHTLY_CANARY_TARGETS
-            # (e.g. "macos-arm64, ubuntu-vulkan-x64").
+            # (e.g. "ubuntu-vulkan-x64, win-vulkan-x64").
             t="${t//[[:space:]]/}"
             [ -n "$t" ] || continue
             os="$(os_for "$t")" || {
               echo "::error::unknown target \"$t\" (from NIGHTLY_CANARY_TARGETS) — known targets: macos-arm64, macos-x64, win-vulkan-x64, ubuntu-vulkan-x64, ubuntu-vulkan-arm64"
               exit 1
             }
+            warn_if_unregistered "$t" "$os"
             crt=""
             [ "$t" = "win-vulkan-x64" ] && crt=',"crt_static":true'
             entries="${entries}{\"name\":\"$t\",\"os\":\"$os\",\"target\":\"$t\"$crt},"
