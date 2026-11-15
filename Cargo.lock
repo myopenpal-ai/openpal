@@ -4350,7 +4350,7 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
 name = "openpal-app"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "block2",
  "cpal",
@@ -4388,7 +4388,7 @@ dependencies = [
 
 [[package]]
 name = "openpal-bundler"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -4404,7 +4404,7 @@ dependencies = [
 
 [[package]]
 name = "openpal-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "argon2",
  "async-trait",
@@ -4450,7 +4450,7 @@ dependencies = [
 
 [[package]]
 name = "openpal-relay"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -4467,7 +4467,7 @@ dependencies = [
 
 [[package]]
 name = "openpal-sync-protocol"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "serde",
  "serde_json",

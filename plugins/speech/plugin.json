@@ -2,7 +2,7 @@
   "id": "speech",
   "name": "Voice",
   "description": "Read messages aloud and type by talking. Speech stays on your Mac. Downloads a small local voice and speech-recognition model for you automatically; no internet needed once it's set up.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": "OpenPal",
   "capabilities": ["tts", "stt"],
   "experimental": true,
