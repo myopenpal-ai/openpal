@@ -82,7 +82,7 @@ rfd = { version = "0.16", default-features = false, features = ["common-controls
 # native-toolchain surface for a feature mobile doesn't ship yet. See
 # audio_mobile.rs (the mobile stand-in, wired up in lib.rs).
 cpal = "0.15"
-rodio = { version = "0.17", default-features = false, features = ["wav", "mp3"] }
+rodio = { version = "0.23", default-features = false, features = ["wav", "mp3"] }
 hound = "3.5"
 
 # OS-native notifications on Linux (src/notify/freedesktop.rs, D-Bus through
