@@ -239,6 +239,19 @@ jobs:
         shell: bash
         run: echo "RUSTFLAGS=-C target-feature=+crt-static" >> "$GITHUB_ENV"
 
+      # The Windows build vendors OpenSSL from source (rusqlite →
+      # bundled-sqlcipher-vendored-openssl on non-Apple targets), which needs a
+      # full perl + nasm; the windows-latest Git-Bash perl lacks the required
+      # modules (IPC::Cmd / Params::Check) and OpenSSL's Configure dies.
+      # Strawberry Perl provides a complete toolchain for openssl-src.
+      - name: Install OpenSSL build dependencies (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          choco install --yes --no-progress strawberryperl
+          choco install --yes --no-progress nasm
+
       # Fixed-version WebView2 runtime so the Windows build launches with no
       # system install. The cab URL is volatile (version + arch specific), so it
       # lives in a repo variable a maintainer pins for releases; without it the
