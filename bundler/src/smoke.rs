@@ -32,14 +32,6 @@ use minisign_verify::{PublicKey, Signature};
 use crate::{fetch, manifest};
 
 pub fn run(target: &str, artifact: &Path, manifest_path: &Path, tag: &str) -> anyhow::Result<()> {
-    // Resolve to an absolute path up front: the AppImage unpack runs
-    // `{artifact} --appimage-extract` with `current_dir(work)`, and a spawn
-    // resolves its program path against the *new* cwd (fork → chdir → execvp).
-    // A relative `target/smoke/…` would therefore fail with ENOENT even though
-    // it exists relative to the process cwd — which is exactly how the first
-    // Linux smoke legs failed after every other check had passed.
-    let artifact = fs::canonicalize(artifact)
-        .with_context(|| format!("failed to resolve {}", artifact.display()))?;
     if !fetch::host_can_run(target) {
         bail!(
             "{target} can't be smoke-tested on this host ({}/{}) — each smoke leg must run on a matching native runner",
@@ -94,7 +86,7 @@ pub fn run(target: &str, artifact: &Path, manifest_path: &Path, tag: &str) -> an
         .ok_or_else(|| anyhow!("the {target} entry has no signature"))?;
 
     // 2. SHA-256 of the artifact vs the manifest.
-    let actual_sha = manifest::sha256_hex(&artifact)?;
+    let actual_sha = manifest::sha256_hex(artifact)?;
     if actual_sha != expected_sha {
         bail!(
             "sha256 mismatch for {target}: manifest says {expected_sha}, the artifact is {actual_sha}"
@@ -103,14 +95,14 @@ pub fn run(target: &str, artifact: &Path, manifest_path: &Path, tag: &str) -> an
     println!("✓ sha256 matches {}", manifest_path.display());
 
     // 3. Updater signature over the artifact.
-    verify_signature(&artifact, signature, &pubkey)?;
+    verify_signature(artifact, signature, &pubkey)?;
     println!("✓ updater signature verifies");
 
     // 4. Unpack the bundle and check it reports the cut's version.
     let work = std::env::temp_dir().join(format!("openpal-smoke-{target}-{}", std::process::id()));
     let _ = fs::remove_dir_all(&work);
     fs::create_dir_all(&work).with_context(|| format!("failed to create {}", work.display()))?;
-    unpack(&artifact, &work)?;
+    unpack(artifact, &work)?;
     let reported = verify_bundle_version(target, &work, expected)?;
     println!("✓ bundle reports version {reported}");
 
@@ -151,11 +143,22 @@ fn unpack(artifact: &Path, work: &Path) -> anyhow::Result<()> {
             use std::os::unix::fs::PermissionsExt;
             let _ = fs::set_permissions(artifact, fs::Permissions::from_mode(0o755));
         }
-        let status = Command::new(artifact)
-            .arg("--appimage-extract")
-            .current_dir(work)
-            .status()
-            .with_context(|| format!("failed to run {}", artifact.display()))?;
+        // Spawn with cwd = work and an ABSOLUTE program path: a spawn resolves
+        // its program against the new cwd (fork → chdir → execvp), so a
+        // relative `target/smoke/…` would fail with ENOENT even though it
+        // exists relative to the process cwd. Use std::path::absolute, not
+        // canonicalize: the artifact path also feeds `unzip` on the Windows
+        // zip leg, and canonicalize's `\\?\` verbatim prefix breaks msys
+        // unzip (exit 9). The AppImage branch only ever runs on Linux, but
+        // keep the artifact path untouched for the zip leg above.
+        let status = Command::new(
+            std::path::absolute(artifact)
+                .with_context(|| format!("failed to resolve {}", artifact.display()))?,
+        )
+        .arg("--appimage-extract")
+        .current_dir(work)
+        .status()
+        .with_context(|| format!("failed to run {}", artifact.display()))?;
         if !status.success() {
             bail!(
                 "`{} --appimage-extract` failed — the AppImage may be malformed",
