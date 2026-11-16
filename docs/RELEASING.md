@@ -247,11 +247,26 @@ git signing setup is needed:
    to `main`, is not stale vs HEAD, and that the workspace version on it is
    strictly newer than the last `v*` tag — otherwise it fails naming the bump
    command (`node scripts/bump-version.mjs --bump …`), because version bumps
-   are PR-driven and must land before the cut.
+   are PR-driven and must land before the cut. Two carve-outs keep a dry run
+   honest without ever punishing a correct state:
+   - a dry run on a version whose `vX.Y.Z` tag **already exists** (an earlier
+     real cut already shipped it) exits **green as an "already cut" no-op** —
+     that version is released, nothing to validate, nothing to create;
+   - the `vX.Y.Z` tag merely existing in the repo therefore never makes a dry
+     run red; the "not strictly newer" failure is reserved for genuine
+     "you never bumped" states (the version's tag does not exist yet).
 2. **Re-run with `dry_run: false`**: the workflow creates a **signed annotated
    `vX.Y.Z` tag** (`git tag -s` with `GIT_SIGNING_KEY`) and pushes it with
    `RELEASE_PUSH_TOKEN`, which cascades into `portable.yml`. Its summary then
    carries the promote instructions (gated on the per-target smoke check).
+
+Every run is self-labelled in the Actions run list as **`Make Release — dry
+run`** or **`Make Release — real cut`**, and overlapping dispatches (say a dry
+run and a real cut fired seconds apart on the same commit) are **queued by a
+`concurrency` guard** instead of raced. So the order above is safe in either
+direction: whichever run lands first, no run is left red by the sibling run —
+a real cut followed by a dry run on the same version simply gets the green
+"already cut" no-op from the bullet above.
 
 `skip_checks` exists for deliberate exceptions (cutting an older commit, a
 release-line tag); use it only when you know why — the checks catch real
