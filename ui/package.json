@@ -57,6 +57,9 @@
   },
   "overrides": {
     "@emnapi/core": "^1.7.1",
-    "@emnapi/runtime": "^1.7.1"
+    "@emnapi/runtime": "^1.7.1",
+    "eslint-plugin-jsx-a11y": {
+      "eslint": "$eslint"
+    }
   }
 }
