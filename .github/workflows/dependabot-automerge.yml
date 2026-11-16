@@ -44,12 +44,16 @@ jobs:
       (github.event.pull_request.user.login == 'app/dependabot' ||
        github.event.pull_request.user.login == 'dependabot[bot]')
     steps:
-      # Base ref only — never the PR head. The policy script is the repo's own
-      # tracked code, not PR content.
+      # Base branch only — never the PR head. The policy script is the repo's
+      # own tracked code, not PR content. Check out the base ref NAME (latest),
+      # not the historical base.sha: a stale base.sha (e.g. a Dependabot PR
+      # opened before the policy landed) has no policy script in it, which
+      # hard-fails the job with 127 before any verdict is recorded. base.ref
+      # always resolves to the current policy.
       - name: Check out the base ref (never PR code)
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
         with:
-          ref: ${{ github.event.pull_request.base.sha || 'main' }}
+          ref: ${{ github.event.pull_request.base.ref || 'main' }}
 
       - name: Run the policy engine
         env:
