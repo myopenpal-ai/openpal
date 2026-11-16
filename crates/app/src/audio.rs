@@ -7,11 +7,11 @@
 //! boundary as bytes — recorded WAV up to `/transcribe`, synthesized WAV back
 //! from `/speak` — and the actual device I/O happens here.
 //!
-//! Both cpal's `Stream` and rodio's `OutputStream` are `!Send`, so neither may
-//! live in `AppState`. Recording runs to completion on a blocking task's own
-//! thread (the stream never escapes it). Playback is owned by one long-lived
-//! thread we talk to over a channel, so `AppState` holds only the `Sender`
-//! (which is `Send + Sync`).
+//! Both cpal's `Stream` and rodio's `MixerDeviceSink` (which owns a `cpal::Stream`)
+//! are `!Send`, so neither may live in `AppState`. Recording runs to completion on
+//! a blocking task's own thread (the stream never escapes it). Playback is owned by
+//! one long-lived thread we talk to over a channel, so `AppState` holds only the
+//! `Sender` (which is `Send + Sync`).
 
 use std::io::Cursor;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -44,9 +44,9 @@ pub fn record_wav(stop: Arc<AtomicBool>, max_secs: u64) -> Result<Vec<u8>, Strin
             .to_string()
     })?;
 
-    let sample_rate = supported.sample_rate().0;
+    let sample_rate = supported.sample_rate();
     let channels = supported.channels();
-    let cfg: cpal::StreamConfig = supported.clone().into();
+    let cfg: cpal::StreamConfig = supported.into();
     let samples: Arc<Mutex<Vec<i16>>> = Arc::new(Mutex::new(Vec::new()));
     let err_fn = |e| tracing::warn!("cpal input stream error: {e}");
 
@@ -54,7 +54,7 @@ pub fn record_wav(stop: Arc<AtomicBool>, max_secs: u64) -> Result<Vec<u8>, Strin
         let samples = samples.clone();
         match supported.sample_format() {
             SampleFormat::F32 => device.build_input_stream(
-                &cfg,
+                cfg,
                 move |data: &[f32], _: &_| {
                     let mut buf = samples.lock().unwrap();
                     buf.extend(data.iter().map(|&x| (x.clamp(-1.0, 1.0) * 32767.0) as i16));
@@ -63,13 +63,13 @@ pub fn record_wav(stop: Arc<AtomicBool>, max_secs: u64) -> Result<Vec<u8>, Strin
                 None,
             ),
             SampleFormat::I16 => device.build_input_stream(
-                &cfg,
+                cfg,
                 move |data: &[i16], _: &_| samples.lock().unwrap().extend_from_slice(data),
                 err_fn,
                 None,
             ),
             SampleFormat::U16 => device.build_input_stream(
-                &cfg,
+                cfg,
                 move |data: &[u16], _: &_| {
                     let mut buf = samples.lock().unwrap();
                     buf.extend(data.iter().map(|&x| (x as i32 - 32_768) as i16));
@@ -183,7 +183,11 @@ impl Default for AudioPlayer {
 }
 
 fn player_loop(rx: Receiver<PlayCmd>) {
-    let (_stream, handle) = match rodio::OutputStream::try_default() {
+    // rodio 0.20+ replaced `OutputStream`/`OutputStreamHandle` with a
+    // `MixerDeviceSink`: opening the default device is the one fallible step,
+    // and the sink must outlive everything playing through it (dropping it
+    // stops the audio).
+    let device_sink = match rodio::DeviceSinkBuilder::open_default_sink() {
         Ok(s) => s,
         Err(e) => {
             tracing::warn!("no audio output device: {e}");
@@ -197,26 +201,24 @@ fn player_loop(rx: Receiver<PlayCmd>) {
         }
     };
 
-    let mut current: Option<(rodio::Sink, Sender<()>)> = None;
+    // One fresh `Player` per clip, connected to the sink's mixer — the 0.23
+    // successor to `Sink::try_new(&handle)`. (`connect_new` is infallible;
+    // device failures surface at `open_default_sink` above.)
+    let mut current: Option<(rodio::Player, Sender<()>)> = None;
     loop {
         match rx.recv_timeout(Duration::from_millis(80)) {
             Ok(PlayCmd::Play(wav, done)) => {
-                if let Some((sink, prev_done)) = current.take() {
-                    sink.stop();
+                if let Some((player, prev_done)) = current.take() {
+                    player.stop();
                     let _ = prev_done.send(());
                 }
                 match rodio::Decoder::new(Cursor::new(wav)) {
-                    Ok(source) => match rodio::Sink::try_new(&handle) {
-                        Ok(sink) => {
-                            sink.append(source);
-                            tracing::debug!("audio: playback started");
-                            current = Some((sink, done));
-                        }
-                        Err(e) => {
-                            tracing::warn!("rodio sink: {e}");
-                            let _ = done.send(());
-                        }
-                    },
+                    Ok(source) => {
+                        let player = rodio::Player::connect_new(device_sink.mixer());
+                        player.append(source);
+                        tracing::debug!("audio: playback started");
+                        current = Some((player, done));
+                    }
                     Err(e) => {
                         tracing::warn!("decode audio: {e}");
                         let _ = done.send(());
@@ -224,14 +226,14 @@ fn player_loop(rx: Receiver<PlayCmd>) {
                 }
             }
             Ok(PlayCmd::Stop) => {
-                if let Some((sink, done)) = current.take() {
-                    sink.stop();
+                if let Some((player, done)) = current.take() {
+                    player.stop();
                     let _ = done.send(());
                 }
             }
             Err(RecvTimeoutError::Timeout) => {
                 // Has the current clip finished on its own?
-                if current.as_ref().is_some_and(|(sink, _)| sink.empty()) {
+                if current.as_ref().is_some_and(|(player, _)| player.empty()) {
                     if let Some((_, done)) = current.take() {
                         let _ = done.send(());
                     }

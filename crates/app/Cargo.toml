@@ -77,12 +77,16 @@ rfd = { version = "0.16", default-features = false, features = ["common-controls
 # playback, hound = WAV encode. rodio decodes WAV (Piper's output, used for
 # read-aloud) and MP3 (the remote voice-preview samples); rodio's `mp3` feature
 # is pure-Rust symphonia, so it adds no system libs to the signed bundle.
+# `playback` (default-features = false) gates the device-sink/player API rodio
+# 0.20+ moved behind (src/audio.rs uses DeviceSinkBuilder + Player).
 # Desktop-only: Voice is dropped from mobile v1 (docs/design/MOBILE.md), and cpal's
 # Android backend links Google's Oboe C++ library (oboe-sys) — real, extra
 # native-toolchain surface for a feature mobile doesn't ship yet. See
 # audio_mobile.rs (the mobile stand-in, wired up in lib.rs).
-cpal = "0.15"
-rodio = { version = "0.23", default-features = false, features = ["wav", "mp3"] }
+# cpal is pinned to 0.18 to match rodio 0.23's own cpal: two cpal versions both
+# link the same native ALSA lib on Linux, which Cargo rejects (`links` conflict).
+cpal = "0.18"
+rodio = { version = "0.23", default-features = false, features = ["playback", "wav", "mp3"] }
 hound = "3.5"
 
 # OS-native notifications on Linux (src/notify/freedesktop.rs, D-Bus through
