@@ -9,7 +9,7 @@ exactly as [docs/RELEASING.md](docs/RELEASING.md) defines it: `fix` → patch,
 
 ## [Unreleased]
 
-(No notable changes yet.)
+- Mandatory password encryption: Standard Notes-style per-conversation keys sealed under a password-derived root, a mandatory first-run password on every onboarding path (portable included), and an id-preserving, in-place migration for existing installs.
 
 ## [0.2.0] - 2026-11-16
 
