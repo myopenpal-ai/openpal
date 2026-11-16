@@ -18,7 +18,10 @@
 # two dispatches ~30 s apart on the same commit — one real cut, one dry run —
 # racing and leaving an unlabelled red dry run):
 # - `run-name` labels every run in the Actions run list as a `dry run` or a
-#   `real cut`, so one mode can never be mistaken for the other.
+#   `real cut`, so one mode can never be mistaken for the other (`dry_run` is
+#   matched in both its boolean and string forms: GitHub exposes an explicitly
+#   dispatched boolean input as a boolean, the default as the string
+#   "true"/"false" — every expression in this file accepts both).
 # - the `concurrency` block queues overlapping dispatches instead of racing
 #   them, mirroring rolling.yml's guard.
 # - a dry run on a version whose `vX.Y.Z` tag already exists (an earlier real
@@ -39,8 +42,11 @@ name: Make Release
 
 # Shown as the run title in the Actions run list. `inputs` (workflow_dispatch)
 # and the standard expression functions are available here, so a dry run can
-# never be mistaken for a real cut in the run list.
-run-name: Make Release — ${{ inputs.dry_run == 'true' && 'dry run' || 'real cut' }}
+# never be mistaken for a real cut in the run list. A boolean input surfaces
+# in the `inputs` context as a *boolean* when an explicit value is dispatched
+# but as the *string* "true"/"false" when the default (or a raw-API string)
+# is used — the two-case guard below accepts both.
+run-name: Make Release — ${{ (inputs.dry_run == true || inputs.dry_run == 'true') && 'dry run' || 'real cut' }}
 
 on:
   workflow_dispatch:
@@ -197,9 +203,10 @@ jobs:
       # the runner with the dedicated GIT_SIGNING_KEY (public half registered
       # as an SSH signing key on the operator's GitHub account — docs/
       # RELEASING.md). Only needed for a real run: a dry run never touches a
-      # secret and fails on nothing, as it should.
+      # secret and fails on nothing, as it should. The condition accepts both
+      # the boolean and the "true" string form of `dry_run` (see run-name).
       - name: Import the release signing key
-        if: ${{ inputs.dry_run != 'true' }}
+        if: ${{ inputs.dry_run != true && inputs.dry_run != 'true' }}
         env:
           GIT_SIGNING_KEY: ${{ secrets.GIT_SIGNING_KEY }}
         run: |
@@ -230,7 +237,7 @@ jobs:
           git config user.signingkey ~/.ssh/id_ed25519_releases.pub
 
       - name: Create and push the vX.Y.Z tag
-        if: ${{ inputs.dry_run != 'true' }}
+        if: ${{ inputs.dry_run != true && inputs.dry_run != 'true' }}
         env:
           VERSION: ${{ steps.checks.outputs.version }}
           SHA: ${{ steps.checks.outputs.sha }}
