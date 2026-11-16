@@ -57,6 +57,7 @@
   },
   "overrides": {
     "@emnapi/core": "^1.7.1",
-    "@emnapi/runtime": "^1.7.1"
+    "@emnapi/runtime": "^1.7.1",
+    "katex": "^0.18.2"
   }
 }
