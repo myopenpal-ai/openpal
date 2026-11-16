@@ -195,9 +195,12 @@ mod tests {
     /// `.keep()` is used here.
     fn test_conn() -> Connection {
         let dir = tempfile::tempdir().unwrap().keep();
-        crate::app_db::open(&dir.join("app.sqlite"), None)
-            .unwrap()
-            .0
+        crate::app_db::open(
+            &dir.join("app.sqlite"),
+            &crate::crypto::key::DataKey::from_bytes([0x42; 32]),
+        )
+        .unwrap()
+        .0
     }
 
     fn entry(device_id: &str, label: &str, gen_added: u32, is_self: bool) -> RosterEntry {

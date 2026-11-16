@@ -138,6 +138,7 @@ linux Vulkan ~88 MB (CPU-only ~38 MB).
 | **Voice plugin** | **Not shipped built-in** | Same Python problem. Native `cpal/rodio/hound` audio stays compiled; a power user with host Python can drop a plugin into `data/plugins/`. |
 | Plugin framework (`PluginManager`) | **Keep compiled, no built-ins** | Pure Rust, ~0 MB; ship no plugin folders and hide the Plugins tab. |
 | Logging + diagnostics viewer | **Keep** | *Most* valuable here — no installer, no console. |
+| **Encryption (mandatory password + recovery)** | **Keep — same as Full** | The password model (issue #66) runs identically in portable: password-derived root → items key → per-conversation envelopes. No OS keychain primary slot; first run creates the password, `RecoveryUnlock` is the forgotten-password fallback, and logs are encrypted. |
 | Embedded model | **Lite + optional pre-staged** | See §3. |
 
 ---
@@ -148,7 +149,7 @@ The codebase is well-positioned — the runtime changes are small and centralize
 
 | # | Seam | Change | Phase |
 |---|---|---|---|
-| 1 | `crates/app/src/state.rs` `app_data_dir()` (the single data source) | `resolve_data_dir(app)`: if a `openpal-portable` marker / `data/` dir sits next to `std::env::current_exe()` → `<exe>/data`, else `app_data_dir()`. Use `current_exe()` (cwd is `/` on mac double-click); on mac the folder must be a **sibling of the `.app`**, never inside `Contents/` (breaks signing); add a **writability fallback** for read-only locations. | 1 |
+| 1 | `crates/app/src/state.rs` `app_data_dir()` (the single data source) | `resolve_data_dir(app)`: if a `openpal-portable` marker / `data/` dir sits next to `std::env::current_exe()` → `<exe>/data`, else `app_data_dir()`. Use `current_exe()` (cwd is `/` on mac double-click); on mac the folder must be a **sibling of the `.app`**, never inside `Contents/` (breaks signing). An **unwritable/uncreatable sibling `data/` is a hard startup error** now (`DataDirError::ReadOnlyMedia`), never a fallback into the OS app-data dir — a fallback would share a second password root/`keys/` hierarchy with an installed OpenPal. | 1 ✓ |
 | 2 | `state.rs` `resolve_engine_binary` | Resolve `llama-server.exe` on Windows. | **0 ✓** |
 | 3 | `state.rs` `resolve_plugin_dirs` | Return user-only (no built-ins) in portable → `PluginManager` finds nothing → web-search globe + voice mic auto-hide. | 1 |
 | 4 | new `get_app_info` command | Return `{ portable, data_dir }` so the Sidebar hides the Plugins tab and Settings shows the resolved data path. | 1 |

@@ -40,13 +40,25 @@ export default function RecoveryUnlock() {
     setSubmitting(true);
     setError(null);
     try {
-      await api.attemptRecoveryUnlock(trimmed);
+      const outcome = await api.attemptRecoveryUnlock(trimmed);
       // A user who just proved a valid recovery code is strictly more
       // verified than a PIN would require — they shouldn't also be
       // immediately hit with an app-lock PIN prompt right after this.
       useStore.setState({ appLockUnlocked: true });
-      // The backend has just built its store for the first time this
-      // launch (see `commands::attempt_recovery_unlock`'s call into
+      if (outcome.kind === "needsPassword") {
+        // Legacy migration window (a pre-password install whose OS keychain
+        // failed): the code proved the old DEK and re-minted the keychain
+        // slot so the create-password step can adopt it — but the backend
+        // has NOT built its store, and now reports `needsPassword`. Re-fetch
+        // `appInfo` so the App.tsx gate swaps to the create-password screen;
+        // don't call `finishBootAfterUnlock` (there's no `AppState` yet).
+        const appInfo = await api.getAppInfo();
+        useStore.setState({ appInfo });
+        setSubmitting(false);
+        return;
+      }
+      // "unlocked": the backend has just built its store for the first time
+      // this launch (see `commands::attempt_recovery_unlock`'s call into
       // `state::finish_unlock`) — `finishBootAfterUnlock` both re-fetches
       // `appInfo` (so the App.tsx gate re-evaluates `needsRecovery` to
       // false) and loads everything else `boot()`'s normal path would have

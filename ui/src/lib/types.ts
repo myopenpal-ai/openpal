@@ -1263,6 +1263,16 @@ export interface AppInfo {
   portable: boolean;
   dataDir: string;
   version: string;
+  /** Whether the first-run password ceremony still needs to run — no
+   * `keys/password.wrap` exists yet (a genuinely first-ever run, or a
+   * pre-password install's first post-upgrade launch). Drives the
+   * create-password gate; mutually exclusive with `needsUnlock` and
+   * `needsRecovery`. */
+  needsPassword: boolean;
+  /** Whether the user must enter their password (`keys/password.wrap`
+   * exists) to unlock — the normal every-launch gate. Mutually exclusive
+   * with `needsPassword` and `needsRecovery`. */
+  needsUnlock: boolean;
   /** True until the user has seen and acknowledged their one-time data
    * encryption recovery code (`RecoverySetup`) — set for every launch of an
    * existing install that predates the recovery-code feature, not just a
@@ -1271,10 +1281,10 @@ export interface AppInfo {
    * "no code has ever been generated yet, run the one-time save ceremony" —
    * distinct from `needsRecovery` below. */
   needsRecoverySetup: boolean;
-  /** True when the OS keychain that normally unlocks the encryption key
-   * silently failed (a lost keychain entry, an OS reinstall, …) and the app
-   * needs the user to type their existing recovery code back in
-   * (`RecoveryUnlock`) before anything else can proceed. Distinct from
+  /** True when the app needs the user to type their recovery code back in
+   * (`RecoveryUnlock`) before anything else can proceed: the user forgot
+   * their password, or (in the legacy migration window) a pre-password
+   * install whose OS keychain that held the old DEK failed. Distinct from
    * `needsRecoverySetup` above, which means no code exists yet. */
   needsRecovery: boolean;
   /** True whenever app-lock (the optional PIN gate) is enabled. Unlike
@@ -1293,6 +1303,20 @@ export interface AppInfo {
    * which is only known later. */
   nativeNotifications: boolean;
 }
+
+/** What `attemptRecoveryUnlock` resolved to (mirrors `RecoveryUnlockOutcome` in
+ * `crates/app/src/commands.rs` — `#[serde(tag="kind", rename_all="camelCase")]`):
+ * - `"unlocked"`: the password model was already in place (`password.wrap`
+ *   existed); the recovered items key just unlocked the app and the backend
+ *   has built its store — `RecoveryUnlock` goes straight to `finishBootAfterUnlock`.
+ * - `"needsPassword"`: the legacy migration window (a pre-password install
+ *   whose OS keychain failed); the recovery code proved the old DEK and
+ *   re-minted the keychain slot, but the mandatory password still has to be
+ *   created — re-fetch `getAppInfo` (now `needsPassword`) and show the
+ *   create-password screen. */
+export type RecoveryUnlockOutcome =
+  | { kind: "unlocked" }
+  | { kind: "needsPassword" };
 
 /** A newer OpenPal version, as returned by `checkForUpdate`. */
 export interface AvailableUpdate {

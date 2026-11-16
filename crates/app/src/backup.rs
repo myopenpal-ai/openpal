@@ -47,9 +47,6 @@ pub async fn run_if_due(app: &AppHandle) {
     let Some(state) = app.try_state::<AppState>() else {
         return;
     };
-    if state.paths.portable {
-        return;
-    }
     let current = backup::load_state(&state.app_db.lock().unwrap());
     if !backup::is_due(&current, now_ms()) {
         return;
@@ -60,7 +57,7 @@ pub async fn run_if_due(app: &AppHandle) {
     if RUNNING.swap(true, Ordering::SeqCst) {
         return;
     }
-    let result = write_one(app, &state, folder.into()).await;
+    let result = write_one(&state, folder.into()).await;
     RUNNING.store(false, Ordering::SeqCst);
 
     let finished = now_ms();
@@ -80,20 +77,14 @@ pub async fn run_if_due(app: &AppHandle) {
     let _ = app.emit(BACKUP_STATE_CHANGED_EVENT, ());
 }
 
-async fn write_one(
-    app: &AppHandle,
-    state: &AppState,
-    folder: std::path::PathBuf,
-) -> Result<(), String> {
-    let snapshot =
-        backup::read_snapshot(&state.app_db.lock().unwrap()).map_err(crate::commands::friendly)?;
+async fn write_one(state: &AppState, folder: std::path::PathBuf) -> Result<(), String> {
+    let snapshot = backup::read_snapshot(&state.app_db.lock().unwrap(), &state.dek)
+        .map_err(crate::commands::friendly)?;
     let wrap_path = state.paths.data_dir.join("keys").join("recovery.wrap");
-    let app = app.clone();
+    let dek = state.dek.clone();
     let written = tokio::task::spawn_blocking(move || {
-        let state = app.state::<AppState>();
-        let dek = state.dek.as_ref().ok_or_else(no_recovery_code)?;
         let wrap = std::fs::read(&wrap_path).map_err(|_| no_recovery_code())?;
-        backup::write_backup(&snapshot, &wrap, dek, &folder, now_ms())
+        backup::write_backup(&snapshot, &wrap, &dek, &folder, now_ms())
             .map_err(crate::commands::friendly)
     })
     .await

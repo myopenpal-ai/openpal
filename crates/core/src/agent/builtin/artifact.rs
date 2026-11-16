@@ -156,9 +156,12 @@ mod tests {
     fn test_conn() -> Arc<Mutex<Connection>> {
         let dir = tempfile::tempdir().unwrap().keep();
         Arc::new(Mutex::new(
-            crate::app_db::open(&dir.join("app.sqlite"), None)
-                .unwrap()
-                .0,
+            crate::app_db::open(
+                &dir.join("app.sqlite"),
+                &crate::crypto::key::DataKey::from_bytes([0x42; 32]),
+            )
+            .unwrap()
+            .0,
         ))
     }
 

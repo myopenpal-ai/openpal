@@ -37,13 +37,13 @@
 //!   no special-casing at all, since it just calls `tracing::error!` like
 //!   anything else — a logged, diagnosable event even though no DEK has
 //!   ever existed yet this run.
-//! - [`LogWriterState::PostUnlock`]: either [`LoggingBackend::Encrypted`]
-//!   (a DEK was available — the normal case) or
-//!   [`LoggingBackend::Plaintext`] (portable mode's `dek: None`, byte-
-//!   identical to this file's pre-encryption behaviour).
+//! - [`LogWriterState::PostUnlock`]: always [`LoggingBackend::Encrypted`].
+//!   The old portable mode that ran its whole session in plaintext is gone
+//!   (portable runs the same mandatory-password path; see `crate::bootstrap`),
+//!   so there is no post-unlock plaintext backend anymore.
 //!
 //! [`upgrade_to_encrypted`] performs that swap from `state::finish_unlock`,
-//! once `app_db` is open and a `dek: Option<&DataKey>` is available.
+//! once `app_db` is open and the DEK is available.
 //!
 //! Each encrypted frame is one `tracing` line, sealed under a key re-
 //! derived once per calendar day (`openpal_core::crypto::logframe`) — see
@@ -128,28 +128,24 @@ impl std::io::Write for EncryptingAppender {
     }
 }
 
-/// What [`LogWriterState::PostUnlock`] actually writes through — encrypted
-/// when a DEK was available, or today's exact plaintext behaviour when it
-/// wasn't (portable mode's `dek: None`; see `AppState.dek`'s own doc
-/// comment). Both wrap the same underlying `RollingFileAppender`
-/// rotation/retention.
+/// What [`LogWriterState::PostUnlock`] actually writes through — always
+/// encrypted, wrapping the same underlying `RollingFileAppender`
+/// rotation/retention the pre-encryption files used (only the bytes written
+/// changed, not the file lifecycle).
 enum LoggingBackend {
     Encrypted(EncryptingAppender),
-    Plaintext(RollingFileAppender),
 }
 
 impl std::io::Write for LoggingBackend {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         match self {
             Self::Encrypted(a) => a.write(buf),
-            Self::Plaintext(a) => a.write(buf),
         }
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
         match self {
             Self::Encrypted(a) => a.flush(),
-            Self::Plaintext(a) => a.flush(),
         }
     }
 }
@@ -244,16 +240,14 @@ pub fn init(logs_dir: &Path, level: &str) -> (Option<WorkerGuard>, LogWriter) {
     (Some(guard), writer)
 }
 
-/// Called from `state::finish_unlock`, once `app_db` is open and (in every
-/// non-portable case) a DEK exists: swap the live [`LogWriter`] from the
-/// pre-unlock plaintext `boot.log` to the real post-unlock backend —
-/// encrypted when `dek.is_some()`, plaintext (today's exact behaviour)
-/// when it's `None`. Then folds away `boot.log`/`boot.log.prev`: logs a
-/// `tracing::warn!` noting the crash-fallback file existed (so the fact
-/// itself is recorded in the now-live stream) and deletes both, making
-/// "flag it, delete on the next successful start" literally true across
-/// relaunches.
-pub fn upgrade_to_encrypted(writer: &LogWriter, logs_dir: &Path, dek: Option<&DataKey>) {
+/// Called from `state::finish_unlock`, once `app_db` is open and the DEK is
+/// known: swap the live [`LogWriter`] from the pre-unlock plaintext
+/// `boot.log` to the real encrypted post-unlock backend. Then folds away
+/// `boot.log`/`boot.log.prev`: logs a `tracing::warn!` noting the
+/// crash-fallback file existed (so the fact itself is recorded in the
+/// now-live stream) and deletes both, making "flag it, delete on the next
+/// successful start" literally true across relaunches.
+pub fn upgrade_to_encrypted(writer: &LogWriter, logs_dir: &Path, dek: &DataKey) {
     let appender = match RollingFileAppender::builder()
         .rotation(Rotation::DAILY)
         .filename_prefix(APP_LOG_PREFIX)
@@ -267,10 +261,7 @@ pub fn upgrade_to_encrypted(writer: &LogWriter, logs_dir: &Path, dek: Option<&Da
             return; // stay on the pre-unlock writer rather than lose logging entirely
         }
     };
-    let backend = match dek {
-        Some(dek) => LoggingBackend::Encrypted(EncryptingAppender::new(appender, dek)),
-        None => LoggingBackend::Plaintext(appender),
-    };
+    let backend = LoggingBackend::Encrypted(EncryptingAppender::new(appender, dek));
 
     {
         let mut state = writer.0.lock().unwrap();
@@ -362,12 +353,11 @@ fn install_panic_hook() {
 // ---------------------------------------------------------------------------
 
 /// The last `max_lines` lines of the app log at `path`, decrypted. Call
-/// [`redact`] on the result before showing it to a user. `dek: None`
-/// (portable mode) reads `path` as plain text — today's exact behaviour;
-/// `dek: Some` first tries the encrypted frame format, falling back to
-/// plain text if the bytes don't actually look like frames (a pre-
-/// migration file, or `boot.log` itself, which is always plaintext).
-pub fn decrypt_tail(path: &Path, max_lines: usize, dek: Option<&DataKey>) -> String {
+/// [`redact`] on the result before showing it to a user. First tries the
+/// encrypted frame format, falling back to plain text if the bytes don't
+/// actually look like frames (a pre-migration plaintext file, or `boot.log`
+/// itself, which is always plaintext).
+pub fn decrypt_tail(path: &Path, max_lines: usize, dek: &DataKey) -> String {
     let Ok(bytes) = std::fs::read(path) else {
         return String::new();
     };
@@ -379,17 +369,14 @@ pub fn decrypt_tail(path: &Path, max_lines: usize, dek: Option<&DataKey>) -> Str
 
 /// Every line of the app log at `path`, decrypted — used by the export
 /// path, which (unlike the viewer) wants the whole file, not just a tail.
-pub fn decrypt_all(path: &Path, dek: Option<&DataKey>) -> String {
+pub fn decrypt_all(path: &Path, dek: &DataKey) -> String {
     let Ok(bytes) = std::fs::read(path) else {
         return String::new();
     };
     decrypt_or_plaintext(&bytes, dek)
 }
 
-fn decrypt_or_plaintext(bytes: &[u8], dek: Option<&DataKey>) -> String {
-    let Some(dek) = dek else {
-        return String::from_utf8_lossy(bytes).into_owned();
-    };
+fn decrypt_or_plaintext(bytes: &[u8], dek: &DataKey) -> String {
     if !logframe::looks_like_frames(bytes) {
         // A legacy plaintext file (pre-migration) or `boot.log` itself.
         return String::from_utf8_lossy(bytes).into_owned();
@@ -601,13 +588,10 @@ mod tests {
     }
 
     #[test]
-    fn decrypt_tail_with_no_dek_reads_plaintext() {
+    fn decrypt_tail_reads_missing_file_as_empty() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("openpal.2026-06-17.enc");
-        std::fs::write(&path, "a\nb\nc\nd\ne\n").unwrap();
-        assert_eq!(decrypt_tail(&path, 2, None), "d\ne");
-        assert_eq!(decrypt_tail(&path, 99, None), "a\nb\nc\nd\ne");
-        assert_eq!(decrypt_tail(&dir.path().join("missing.enc"), 5, None), "");
+        let dek = DataKey::random();
+        assert_eq!(decrypt_tail(&dir.path().join("missing.enc"), 5, &dek), "");
     }
 
     #[test]
@@ -625,10 +609,10 @@ mod tests {
         std::fs::write(&path, &bytes).unwrap();
 
         assert_eq!(
-            decrypt_tail(&path, 99, Some(&dek)),
+            decrypt_tail(&path, 99, &dek),
             "first line\nsecond line\nthird line"
         );
-        assert_eq!(decrypt_tail(&path, 1, Some(&dek)), "third line");
+        assert_eq!(decrypt_tail(&path, 1, &dek), "third line");
     }
 
     #[test]
@@ -642,7 +626,7 @@ mod tests {
         std::fs::write(&path, logframe::seal_frame(&day_key, day, b"secret line")).unwrap();
 
         let wrong = DataKey::random();
-        assert_eq!(decrypt_tail(&path, 99, Some(&wrong)), "");
+        assert_eq!(decrypt_tail(&path, 99, &wrong), "");
     }
 
     #[test]
@@ -655,7 +639,7 @@ mod tests {
         std::fs::write(&path, "plain old line one\nplain old line two\n").unwrap();
         let dek = DataKey::random();
         assert_eq!(
-            decrypt_tail(&path, 99, Some(&dek)),
+            decrypt_tail(&path, 99, &dek),
             "plain old line one\nplain old line two"
         );
     }
@@ -669,7 +653,7 @@ mod tests {
             sink: Box::new(std::fs::File::create(dir.path().join("scratch")).unwrap()),
         })));
         let dek = DataKey::random();
-        upgrade_to_encrypted(&writer, dir.path(), Some(&dek));
+        upgrade_to_encrypted(&writer, dir.path(), &dek);
 
         assert!(
             !dir.path().join(BOOT_LOG_NAME).exists(),
@@ -683,31 +667,8 @@ mod tests {
         }
 
         let log_path = newest_app_log(dir.path()).expect("an app log file must now exist");
-        assert_eq!(
-            decrypt_tail(&log_path, 99, Some(&dek)),
-            "hello after unlock"
-        );
+        assert_eq!(decrypt_tail(&log_path, 99, &dek), "hello after unlock");
         // A wrong key must not recover the line.
-        assert_eq!(decrypt_tail(&log_path, 99, Some(&DataKey::random())), "");
-    }
-
-    #[test]
-    fn upgrade_to_encrypted_with_no_dek_writes_plaintext() {
-        let dir = tempfile::tempdir().unwrap();
-        let writer = LogWriter(Arc::new(Mutex::new(LogWriterState::PreUnlock {
-            sink: Box::new(std::fs::File::create(dir.path().join("scratch")).unwrap()),
-        })));
-        upgrade_to_encrypted(&writer, dir.path(), None);
-
-        {
-            let mut w = writer.clone();
-            w.write_all(b"portable mode line\n").unwrap();
-            w.flush().unwrap();
-        }
-
-        let log_path = newest_app_log(dir.path()).expect("an app log file must now exist");
-        // No dek at all — read straight back as plaintext, byte-identical
-        // to this file's pre-encryption behaviour.
-        assert_eq!(decrypt_tail(&log_path, 99, None), "portable mode line");
+        assert_eq!(decrypt_tail(&log_path, 99, &DataKey::random()), "");
     }
 }

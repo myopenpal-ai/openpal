@@ -700,9 +700,12 @@ mod tests {
     async fn test_gateway() -> crate::remote::RemoteAccessManager {
         let dir = tempfile::tempdir().unwrap().keep();
         let app_db = Arc::new(std::sync::Mutex::new(
-            crate::app_db::open(&dir.join("app.sqlite"), None)
-                .unwrap()
-                .0,
+            crate::app_db::open(
+                &dir.join("app.sqlite"),
+                &crate::crypto::key::DataKey::from_bytes([0x42; 32]),
+            )
+            .unwrap()
+            .0,
         ));
         let engine = Arc::new(crate::engine::EngineManager::new(dir.join("logs")));
         crate::remote::RemoteAccessManager::new(app_db, engine)
@@ -812,9 +815,12 @@ mod tests {
         let (base_url, server) = canned_classify_server(label).await;
         let dir = tempfile::tempdir().unwrap().keep();
         let app_db = Arc::new(std::sync::Mutex::new(
-            crate::app_db::open(&dir.join("app.sqlite"), None)
-                .unwrap()
-                .0,
+            crate::app_db::open(
+                &dir.join("app.sqlite"),
+                &crate::crypto::key::DataKey::from_bytes([0x42; 32]),
+            )
+            .unwrap()
+            .0,
         ));
         let engine = Arc::new(crate::engine::EngineManager::with_backend(Box::new(
             CannedClassifyEngine { base_url },

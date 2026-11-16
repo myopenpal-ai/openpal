@@ -55,6 +55,7 @@ import type {
   RemoteAccessStatusInfo,
   RemoteInferenceStatus,
   RemotePairingRecord,
+  RecoveryUnlockOutcome,
   RestoreOutcome,
   RiskSignal,
   SamplingParams,
@@ -74,6 +75,25 @@ export const api = {
   /** Portable-build flag + resolved data dir (hides the Plugins tab; shown in Settings). */
   getAppInfo: () => invoke<AppInfo>("get_app_info"),
 
+  // Mandatory password (the `PasswordGate` create/unlock gates)
+  /** First-run password creation (`AppInfo.needsPassword`): mints (or, on a
+   * pre-password install, adopts) the items key, migrates any legacy
+   * plaintext store and per-conversation rows, and finishes the app's boot —
+   * everything `finishBootAfterUnlock` needs becomes available. Rejects with
+   * a message safe to show as-is on failure. */
+  createPassword: (password: string) => invoke<void>("create_password", { password }),
+  /** The every-launch unlock (`AppInfo.needsUnlock`): verifies `password`
+   * against `password.wrap` and finishes the boot. A wrong password rejects
+   * with the exact string `"Wrong password"` — `PasswordGate` renders the
+   * locale's `auth.password.wrong` key for that. */
+  unlockWithPassword: (password: string) => invoke<void>("unlock_with_password", { password }),
+  /** Change the password (backend seam for a Settings → Security control):
+   * verify `current`, then re-wrap `password.wrap` under a root derived from
+   * `new` — only the key-encryption layer is touched; conversations are not
+   * re-encrypted. */
+  changePassword: (current: string, newPassword: string) =>
+    invoke<void>("change_password", { current, new: newPassword }),
+
   // Encryption recovery (the one-time `RecoverySetup` gate)
   /** Mint a fresh recovery code for the encryption key that's already been
    * silently generated for this install. Pure/local — no state changes until
@@ -89,11 +109,15 @@ export const api = {
    * proceeding. */
   confirmRecoveryCode: (code: string) => invoke<void>("confirm_recovery_code", { code }),
   /** Try to unlock with a recovery code typed back in by the user, from the
-   * `RecoveryUnlock` gate (`AppInfo.needsRecovery`) — shown when the OS
-   * keychain that normally unlocks the encryption key silently failed.
-   * Rejects with a message safe to show as-is on a wrong code; the caller
-   * should let the user retry rather than clearing their input. */
-  attemptRecoveryUnlock: (code: string) => invoke<void>("attempt_recovery_unlock", { code }),
+   * `RecoveryUnlock` gate — the fallback for a forgotten password, or (in
+   * the legacy migration window) for a pre-password install whose OS
+   * keychain failed. Rejects with a message safe to show as-is on a wrong
+   * code; the caller should let the user retry rather than clearing their
+   * input. Resolves to which state the app landed in: `"unlocked"` (boot
+   * finished) or `"needsPassword"` (legacy window — re-fetch `getAppInfo`,
+   * the create-password gate is now up). */
+  attemptRecoveryUnlock: (code: string) =>
+    invoke<RecoveryUnlockOutcome>("attempt_recovery_unlock", { code }),
 
   // App lock (the optional launch-time PIN gate, `AppInfo.needsAppUnlock`)
   /** Whether app-lock is currently enabled. No PIN needed to check. */

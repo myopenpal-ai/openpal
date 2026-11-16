@@ -81,10 +81,10 @@ npm run dev:onboarding                         # same, on a throwaway first-run 
 `dev:onboarding` shows the first-run onboarding on every launch without
 touching your real data: it runs `npm run dev` in portable mode against
 `target/debug/data`, emptied each time (downloaded models are kept; pass
-`-- --wipe-models` for a true first run). Portable mode has no recovery-code
-screen and no Plugins tab, and Settings → Factory reset must not be used in
-that session: it also deletes the OS-keychain key an installed OpenPal
-shares. It refuses to start while another dev server holds :5173.
+`-- --wipe-models` for a true first run). Portable mode runs the same
+mandatory password + recovery-code flow as an installed app (so the first
+launch now starts at the create-password screen), but hides the Plugins tab.
+It refuses to start while another dev server holds :5173.
 
 ### Trying a different llama.cpp build
 

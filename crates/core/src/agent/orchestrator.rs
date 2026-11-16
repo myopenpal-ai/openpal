@@ -801,9 +801,12 @@ mod tests {
             registry: Arc::new(registry),
             consent: Arc::new(ConsentBroker::new(tmp.join("grants.json"))),
             audit: Arc::new(AuditLog::open(Arc::new(std::sync::Mutex::new(
-                crate::app_db::open(&tmp.join("app.sqlite"), None)
-                    .unwrap()
-                    .0,
+                crate::app_db::open(
+                    &tmp.join("app.sqlite"),
+                    &crate::crypto::key::DataKey::from_bytes([0x42; 32]),
+                )
+                .unwrap()
+                .0,
             )))),
             workspace: Arc::new(
                 WorkspaceJail::new(
@@ -963,9 +966,12 @@ mod tests {
         .await
         .unwrap();
 
-        let conn = crate::app_db::open(&tmp.path().join("app.sqlite"), None)
-            .unwrap()
-            .0;
+        let conn = crate::app_db::open(
+            &tmp.path().join("app.sqlite"),
+            &crate::crypto::key::DataKey::from_bytes([0x42; 32]),
+        )
+        .unwrap()
+        .0;
         let audit = conn
             .prepare("SELECT line FROM agent_audit ORDER BY id")
             .unwrap()
@@ -1310,9 +1316,12 @@ mod tests {
         );
         let consent = Arc::new(ConsentBroker::new(tmp.path().join("grants.json")));
         let audit = Arc::new(AuditLog::open(Arc::new(std::sync::Mutex::new(
-            crate::app_db::open(&tmp.path().join("app.sqlite"), None)
-                .unwrap()
-                .0,
+            crate::app_db::open(
+                &tmp.path().join("app.sqlite"),
+                &crate::crypto::key::DataKey::from_bytes([0x42; 32]),
+            )
+            .unwrap()
+            .0,
         ))));
 
         let (base, _server) = fake_server_with_bodies(vec![
@@ -1330,9 +1339,12 @@ mod tests {
         let endpoint = fake_endpoint(base);
         let sampling = SamplingParams::default();
         let db = std::sync::Arc::new(std::sync::Mutex::new(
-            crate::app_db::open(&tmp.path().join("app.sqlite"), None)
-                .unwrap()
-                .0,
+            crate::app_db::open(
+                &tmp.path().join("app.sqlite"),
+                &crate::crypto::key::DataKey::from_bytes([0x42; 32]),
+            )
+            .unwrap()
+            .0,
         ));
         let plugins = Arc::new(crate::plugin::PluginManager::new(
             vec![],
@@ -2059,9 +2071,12 @@ mod tests {
         .await;
         let endpoint = fake_endpoint(base);
         let db = Arc::new(std::sync::Mutex::new(
-            crate::app_db::open(&tmp.path().join("app.sqlite"), None)
-                .unwrap()
-                .0,
+            crate::app_db::open(
+                &tmp.path().join("app.sqlite"),
+                &crate::crypto::key::DataKey::from_bytes([0x42; 32]),
+            )
+            .unwrap()
+            .0,
         ));
         let plugins = Arc::new(crate::plugin::PluginManager::new(
             vec![],

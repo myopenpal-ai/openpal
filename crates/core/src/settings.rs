@@ -44,9 +44,12 @@ mod tests {
     /// `.keep()` is used here.
     fn test_conn() -> Connection {
         let dir = tempfile::tempdir().unwrap().keep();
-        crate::app_db::open(&dir.join("app.sqlite"), None)
-            .unwrap()
-            .0
+        crate::app_db::open(
+            &dir.join("app.sqlite"),
+            &crate::crypto::key::DataKey::from_bytes([0x42; 32]),
+        )
+        .unwrap()
+        .0
     }
 
     fn write_raw(conn: &Connection, json: &str) {
@@ -172,7 +175,11 @@ mod tests {
         save(&conn, &chosen).unwrap();
         drop(conn);
 
-        let (reopened, _, _) = crate::app_db::open(std::path::Path::new(&db_path), None).unwrap();
+        let (reopened, _, _) = crate::app_db::open(
+            std::path::Path::new(&db_path),
+            &crate::crypto::key::DataKey::from_bytes([0x42; 32]),
+        )
+        .unwrap();
         let s = load(&reopened);
         assert_eq!(s.theme, "dark");
         assert!(s.onboarding_completed);
@@ -218,7 +225,11 @@ mod tests {
         save(&conn, &chosen).unwrap();
         drop(conn);
 
-        let (reopened, _, _) = crate::app_db::open(std::path::Path::new(&db_path), None).unwrap();
+        let (reopened, _, _) = crate::app_db::open(
+            std::path::Path::new(&db_path),
+            &crate::crypto::key::DataKey::from_bytes([0x42; 32]),
+        )
+        .unwrap();
         let s = load(&reopened);
         assert!(s.desktop_notifications);
         assert!(s.onboarding_completed);
@@ -275,7 +286,11 @@ mod tests {
         save(&conn, &chosen).unwrap();
         drop(conn);
 
-        let (reopened, _, _) = crate::app_db::open(std::path::Path::new(&db_path), None).unwrap();
+        let (reopened, _, _) = crate::app_db::open(
+            std::path::Path::new(&db_path),
+            &crate::crypto::key::DataKey::from_bytes([0x42; 32]),
+        )
+        .unwrap();
         let s = load(&reopened);
         assert_eq!(s.auto_delete_after_days, Some(45));
         assert!(s.onboarding_completed);

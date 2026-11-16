@@ -174,9 +174,9 @@ pub struct Snapshot {
 }
 
 /// The fast part, under `app_db`'s lock: a handful of `SELECT`s.
-pub fn read_snapshot(conn: &Connection) -> Result<Snapshot> {
+pub fn read_snapshot(conn: &Connection, items_key: &DataKey) -> Result<Snapshot> {
     Ok(Snapshot {
-        export: crate::export::read_export_data(conn, &ExportCategories::ALL),
+        export: crate::export::read_export_data(conn, &ExportCategories::ALL, items_key),
         audit_lines: crate::agent::audit::read_lines(conn)?,
     })
 }
@@ -298,7 +298,11 @@ fn open_backup_bytes(bytes: &[u8], code: &str) -> std::result::Result<Vec<u8>, O
 /// database refuses any write, nothing is kept. The app layer reloads what
 /// it holds in memory afterwards, exactly as after an import, and calls
 /// `AuditLog::resync`.
-pub fn restore(conn: &mut Connection, archive: Vec<u8>) -> Result<ImportSummary> {
+pub fn restore(
+    conn: &mut Connection,
+    archive: Vec<u8>,
+    items_key: &DataKey,
+) -> Result<ImportSummary> {
     let unreadable = || Error::Backup("This backup file is damaged or incomplete.".to_string());
     let mut archive = zip::ZipArchive::new(Cursor::new(archive)).map_err(|_| unreadable())?;
     let audit_lines = match archive.by_name(AUDIT_ENTRY) {
@@ -314,7 +318,7 @@ pub fn restore(conn: &mut Connection, archive: Vec<u8>) -> Result<ImportSummary>
     };
 
     conn.execute_batch("BEGIN IMMEDIATE")?;
-    let (summary, failed_writes) = crate::import::import_archive(conn, &mut archive);
+    let (summary, failed_writes) = crate::import::import_archive(conn, &mut archive, items_key);
     let result = if failed_writes > 0 {
         Err(Error::Backup(
             "OpenPal couldn't save the restored data, so nothing was changed. Check that you \
@@ -451,9 +455,13 @@ mod tests {
 
     fn test_conn() -> Connection {
         let dir = tempfile::tempdir().unwrap().keep();
-        crate::app_db::open(&dir.join("app.sqlite"), None)
+        crate::app_db::open(&dir.join("app.sqlite"), &test_items_key())
             .unwrap()
             .0
+    }
+
+    fn test_items_key() -> DataKey {
+        DataKey::from_bytes([0x42; 32])
     }
 
     /// A DEK and a `recovery.wrap` sealing it under `code` — what
@@ -484,10 +492,10 @@ mod tests {
     /// Every category, each carrying [`MARKER`], plus two audit events.
     fn populated() -> Connection {
         let mut conn = test_conn();
-        populate_every_category(&mut conn);
-        let mut convo = crate::store::get(&conn, "conv-1").unwrap();
+        populate_every_category(&mut conn, &test_items_key());
+        let mut convo = crate::store::get(&conn, "conv-1", &test_items_key()).unwrap();
         convo.title = format!("Chat {MARKER}");
-        crate::store::save(&conn, &convo).unwrap();
+        crate::store::save(&conn, &convo, &test_items_key()).unwrap();
         crate::projects::save(
             &conn,
             &crate::types::Project {
@@ -532,7 +540,7 @@ mod tests {
     }
 
     fn backup_of(conn: &Connection, dek: &DataKey, folder: &Path, now_ms: u64) -> PathBuf {
-        let snapshot = read_snapshot(conn).unwrap();
+        let snapshot = read_snapshot(conn, &test_items_key()).unwrap();
         write_backup(&snapshot, &recovery_wrap(dek, CODE), dek, folder, now_ms).unwrap()
     }
 
@@ -579,7 +587,7 @@ mod tests {
         // A different data directory, with a key of its own.
         let mut dst = test_conn();
         let archive = open_backup(&path, &CODE.to_lowercase().replace('-', " ")).unwrap();
-        let summary = restore(&mut dst, archive).unwrap();
+        let summary = restore(&mut dst, archive, &test_items_key()).unwrap();
         assert_eq!(
             (
                 summary.conversations,
@@ -591,7 +599,9 @@ mod tests {
         );
 
         assert_eq!(
-            crate::store::get(&dst, "conv-1").unwrap().title,
+            crate::store::get(&dst, "conv-1", &test_items_key())
+                .unwrap()
+                .title,
             format!("Chat {MARKER}")
         );
         assert_eq!(
@@ -625,7 +635,12 @@ mod tests {
         );
 
         // Restoring the same backup again adds nothing new.
-        let again = restore(&mut dst, open_backup(&path, CODE).unwrap()).unwrap();
+        let again = restore(
+            &mut dst,
+            open_backup(&path, CODE).unwrap(),
+            &test_items_key(),
+        )
+        .unwrap();
         assert_eq!(again.skipped, 0);
         assert_eq!(row_count(&dst, "agent_audit"), 3);
         assert_eq!(row_count(&dst, "conversations"), 1);
@@ -671,7 +686,12 @@ mod tests {
     #[test]
     fn a_damaged_archive_inside_a_good_envelope_restores_nothing() {
         let mut dst = test_conn();
-        assert!(restore(&mut dst, b"definitely not a zip".to_vec()).is_err());
+        assert!(restore(
+            &mut dst,
+            b"definitely not a zip".to_vec(),
+            &test_items_key()
+        )
+        .is_err());
         assert_eq!(row_count(&dst, "conversations"), 0);
     }
 
@@ -690,7 +710,11 @@ mod tests {
              BEGIN SELECT RAISE(ABORT, 'disk full'); END;",
         )
         .unwrap();
-        let err = restore(&mut dst, open_backup(&path, CODE).unwrap());
+        let err = restore(
+            &mut dst,
+            open_backup(&path, CODE).unwrap(),
+            &test_items_key(),
+        );
         assert!(err.is_err());
         assert_eq!(
             row_count(&dst, "conversations"),
@@ -701,7 +725,12 @@ mod tests {
         assert_eq!(row_count(&dst, "skills"), 0);
         assert_eq!(crate::settings::load(&dst).user_name, None);
         // The connection is usable again afterwards.
-        crate::store::save(&dst, &crate::store::get(&src, "conv-1").unwrap()).unwrap();
+        crate::store::save(
+            &dst,
+            &crate::store::get(&src, "conv-1", &test_items_key()).unwrap(),
+            &test_items_key(),
+        )
+        .unwrap();
     }
 
     #[test]
@@ -758,7 +787,7 @@ mod tests {
             .unwrap();
         }
         let shared = std::sync::Arc::new(std::sync::Mutex::new(conn));
-        let snapshot = read_snapshot(&shared.lock().unwrap()).unwrap();
+        let snapshot = read_snapshot(&shared.lock().unwrap(), &test_items_key()).unwrap();
         let dek = DataKey::random();
         let wrap = recovery_wrap(&dek, CODE);
         let folder = tempfile::tempdir().unwrap();
@@ -769,9 +798,9 @@ mod tests {
         let mut saved_while_writing = 0;
         while !writer.is_finished() {
             let conn = shared.lock().unwrap();
-            let mut convo = crate::store::get(&conn, "conv-1").unwrap();
+            let mut convo = crate::store::get(&conn, "conv-1", &test_items_key()).unwrap();
             convo.title = format!("edited {saved_while_writing}");
-            crate::store::save(&conn, &convo).unwrap();
+            crate::store::save(&conn, &convo, &test_items_key()).unwrap();
             saved_while_writing += 1;
         }
         writer.join().unwrap();
@@ -787,7 +816,7 @@ mod tests {
         let dek = DataKey::random();
         let parent = tempfile::tempdir().unwrap();
         let gone = parent.path().join("unplugged-drive");
-        let snapshot = read_snapshot(&conn).unwrap();
+        let snapshot = read_snapshot(&conn, &test_items_key()).unwrap();
         let err =
             write_backup(&snapshot, &recovery_wrap(&dek, CODE), &dek, &gone, 1_000).unwrap_err();
         assert!(matches!(err, Error::Backup(_)));
@@ -802,7 +831,7 @@ mod tests {
         let dek = DataKey::random();
         let folder = tempfile::tempdir().unwrap();
         fs::set_permissions(folder.path(), fs::Permissions::from_mode(0o500)).unwrap();
-        let snapshot = read_snapshot(&conn).unwrap();
+        let snapshot = read_snapshot(&conn, &test_items_key()).unwrap();
         let result = write_backup(
             &snapshot,
             &recovery_wrap(&dek, CODE),
@@ -842,7 +871,12 @@ mod tests {
         let folder = tempfile::tempdir().unwrap();
         let path = backup_of(&conn, &dek, folder.path(), 1_000);
         let mut dst = test_conn();
-        restore(&mut dst, open_backup(&path, CODE).unwrap()).unwrap();
+        restore(
+            &mut dst,
+            open_backup(&path, CODE).unwrap(),
+            &test_items_key(),
+        )
+        .unwrap();
         assert_eq!(load_state(&dst), BackupState::default());
     }
 

@@ -19,16 +19,17 @@ is adopted with its eyes open about the cost C was chosen to avoid.
 ## Problem statement
 
 OpenPal keeps every conversation in a single local SQLCipher database,
-`app.sqlite` (`openpal_core::app_db`), keyed by a per-install Data Encryption
-Key (DEK) that is minted once, sealed in the OS keychain, and never leaves
-the machine (`crates/app/src/bootstrap.rs::mint_or_unlock`,
-`crates/core/src/crypto/key.rs:25-29`). That is exactly right for a
-single-device, local-first product — but it means a user's chat history,
-projects, custom models, and settings are stranded on whichever machine
-created them. There is a one-way plaintext export (`export_data`,
-`crates/app/src/commands.rs:3761`) and nothing that reads it back in. No
-sync, no second-device story, no path to the Android/iOS apps that don't
-exist yet but are clearly where this product is headed.
+`app.sqlite` (`openpal_core::app_db`), keyed by an items key that the
+mandatory first-run password derives from `keys/password.wrap`
+(`crates/app/src/bootstrap.rs::{create_password_file, unlock_with_password}`
+— the old OS-keychain-sealed primary `keychain.wrap` slot is gone), and that
+never leaves the machine (`crates/core/src/crypto/key.rs:25-29`). That is
+exactly right for a single-device, local-first product — but it means a
+user's chat history, projects, custom models, and settings are stranded on
+whichever machine created them. There is a one-way plaintext export
+(`export_data`, `crates/app/src/commands.rs:3761`) and nothing that reads it
+back in. No sync, no second-device story, no path to the Android/iOS apps
+that don't exist yet but are clearly where this product is headed.
 
 This plan proposes an architecture for moving a user's data between their
 own devices without OpenPal (or a self-hosting operator) ever seeing
@@ -293,13 +294,13 @@ class of UX (users click through prompts under fatigue); this is a UX
 security requirement, not just a protocol one.
 
 **Stolen/compromised device.** Identical to today's threat model for the
-local DEK (app.sqlite plaintext is only as safe as the device's own
-lock/keychain — unaffected by any of this). A stolen device additionally
+local items key (app.sqlite is only as safe as the device's own mandatory
+password — unaffected by any of this). A stolen device additionally
 exposes its copy of the SyncKey (in `sync.wrap`, sealed under that device's
-own local KEK exactly like `keychain.wrap` is today) — i.e., everything ever
-synced in that sync group, not just that device's own data. This is
-revocable (see below) and is a strict superset, never a regression, of the
-device's existing single-device exposure.
+own local KEK, in the same `keys/password.wrap` key hierarchy) — i.e.,
+everything ever synced in that sync group, not just that device's own data.
+This is revocable (see below) and is a strict superset, never a regression,
+of the device's existing single-device exposure.
 
 **Revocation.** Removing a device = rotating the SyncKey and re-pairing
 every surviving device (each re-confirmed via the fingerprint flow). There

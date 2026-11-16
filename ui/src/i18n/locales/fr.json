@@ -1,4 +1,20 @@
 {
+  "auth": {
+    "password": {
+      "createTitle": "Créez votre mot de passe",
+      "createBody": "Votre mot de passe chiffre toutes vos conversations. OpenPal ne le stocke jamais — si vous le perdez, seul votre code de récupération peut déverrouiller vos données.",
+      "confirmLabel": "Confirmez votre mot de passe",
+      "mismatch": "Les mots de passe ne correspondent pas",
+      "unlockTitle": "Saisissez votre mot de passe",
+      "unlockBody": "Seul votre mot de passe peut déchiffrer vos conversations",
+      "wrong": "Mot de passe incorrect",
+      "recoveryHint": "Mot de passe oublié ? Utilisez votre code de récupération",
+      "creating": "Création de votre mot de passe…",
+      "unlocking": "Déverrouillage…",
+      "backToPassword": "Retour au mot de passe",
+      "readOnlyGuard": "OpenPal n'a pas pu démarrer : le mode portable est activé, mais le dossier de données à côté de l'application n'est pas accessible en écriture. Déplacez l'application vers un emplacement accessible en écriture (ou vérifiez les permissions du dossier) et réessayez."
+    }
+  },
   "common": {
     "cancel": "Annuler",
     "save": "Enregistrer",

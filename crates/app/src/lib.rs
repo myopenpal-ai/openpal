@@ -94,8 +94,9 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build());
     // A plugin's own `setup()` runs during `.build()`, before the app-level
     // `.setup(|app| {...})` closure below ever fires — so `secret_store`'s
-    // `PluginHandle` is guaranteed ready by the time `bootstrap::mint_or_unlock`
-    // needs it there.
+    // `PluginHandle` is guaranteed ready by the time the create-password
+    // path's `bootstrap::items_key_for_creation` needs it there (to adopt a
+    // pre-password install's keychain-sealed DEK).
     #[cfg(target_os = "android")]
     let builder = builder
         .plugin(secret_store::plugin_init())
@@ -129,33 +130,19 @@ pub fn run() {
                     let boot = BootState::initialize(app.handle())?;
                     create_main_window(app)?;
                     app.manage(boot);
-                    let boot = app.state::<BootState>();
 
-                    // Phase 2, unlock: skipped entirely in portable mode
-                    // (never touches the host keychain), same as before
-                    // this split.
-                    let dek = if boot.paths.portable {
-                        None
-                    } else {
-                        match bootstrap::mint_or_unlock(
-                            secret_store::store().as_ref(),
-                            &boot.paths.data_dir.join("keys"),
-                        )? {
-                            bootstrap::KeyStatus::Ready(dek) => Some(dek),
-                            bootstrap::KeyStatus::NeedsRecovery => {
-                                // Don't build `AppState` yet — the
-                                // frontend's `RecoveryUnlock` gate (driven
-                                // by `get_app_info`, which only ever needs
-                                // `BootState`) takes over from here, and
-                                // `commands::attempt_recovery_unlock` calls
-                                // `state::finish_unlock` itself on success.
-                                boot.needs_recovery
-                                    .store(true, std::sync::atomic::Ordering::Relaxed);
-                                return Ok(());
-                            }
-                        }
-                    };
-                    state::finish_unlock(app.handle(), &boot, dek)?;
+                    // Phase 2 happens *now in the frontend*, not here: there
+                    // is no silent unlock anymore. `BootState::initialize`
+                    // classified this launch into one of
+                    // `needs_password`/`needs_unlock`/`needs_recovery` (see
+                    // `crate::bootstrap::detect`), and `commands::get_app_info`
+                    // surfaces it to the frontend. One of
+                    // `commands::create_password`, `commands::
+                    // unlock_with_password` or `commands::attempt_recovery_unlock`
+                    // calls `state::finish_unlock` itself on success — and
+                    // `AppState` isn't managed until that succeeds, which
+                    // alone is what keeps the store-touching commands gated
+                    // (see `BootState`'s doc comment on `State<T>`).
                     Ok(())
                 },
             ));
@@ -164,23 +151,25 @@ pub fn run() {
                 Ok(Ok(())) => Ok(()),
                 Ok(Err(err)) => {
                     tracing::error!("startup failed: {err}");
-                    fatal_startup_error();
+                    fatal_startup_error(Some(&err.to_string()));
                 }
                 Err(_panic) => {
                     // Already logged: `logging::install_panic_hook` (live
                     // from `BootState::initialize` onward) writes the
                     // location and backtrace via `tracing::error!` before
                     // this unwind ever reaches `catch_unwind`.
-                    fatal_startup_error();
+                    fatal_startup_error(None);
                 }
             }
         })
-        // Every command below except `get_app_info`, `generate_recovery_code`,
+        // Every command below except `get_app_info`, `create_password`,
+        // `unlock_with_password`, `change_password`, `generate_recovery_code`,
         // `attempt_recovery_unlock`, `get_app_lock_status`, `verify_app_lock_pin`,
         // `set_app_lock_pin`, `unlock_app_lock_with_recovery_code`,
         // `notification_permission`, `request_notification_permission`,
         // `open_notification_settings` and `take_notification_click` (they only
-        // ask the OS, send the user to it, or hand back a click), and
+        // ask the OS, send the user to it, hand back a click, run the password
+        // create/unlock/migration ceremony, or operate on the app lock), and
         // `factory_reset` (see their own doc comments) takes
         // `State<'_, AppState>`, unmanaged until `state::finish_unlock`
         // succeeds. That alone is the pre-unlock gate for the other ~94 —
@@ -189,11 +178,15 @@ pub fn run() {
         // error (not a panic) when `T` isn't managed yet, confirmed against
         // the vendored `tauri` source (`State::from_command`). Don't add a
         // manual "is it unlocked" check to a new command on the strength of
-        // this comment alone if it does anything portable mode's `dek: None`
-        // can't tolerate — check `AppState.dek`'s doc comment first.
+        // this comment alone if it does anything `AppState.dek`'s always-
+        // present key can't tolerate — check `AppState.dek`'s doc comment
+        // first.
         .invoke_handler(tauri::generate_handler![
             commands::get_system_report,
             commands::get_app_info,
+            commands::create_password,
+            commands::unlock_with_password,
+            commands::change_password,
             commands::get_models,
             commands::download_model,
             commands::cancel_download,
@@ -410,17 +403,29 @@ fn create_main_window(app: &tauri::App) -> tauri::Result<()> {
 /// pre-run-loop, and its non-blocking `show` needs the event loop already
 /// pumping, neither of which is true this early in `setup()`; `rfd` talks
 /// to the native dialog API (NSAlert / MessageBoxW / GTK) directly,
-/// independent of any event loop.
+/// independent of any event loop. `detail` carries the error's own message
+/// when there is one (e.g. `state::DataDirError::ReadOnlyMedia`'s
+/// "portable mode is on, but the data folder next to the app isn't
+/// writable") so a diagnosable startup failure is a diagnosable *message*,
+/// not just a crash.
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-fn fatal_startup_error() -> ! {
+fn fatal_startup_error(detail: Option<&str>) -> ! {
+    let description = match detail {
+        Some(detail) => format!(
+            "OpenPal ran into a problem and couldn't start.\n\n\
+             {detail}\n\n\
+             Please try restarting the app. If the problem continues, check the log files \
+             (in the app's logs folder) or reinstall OpenPal."
+        ),
+        None => "OpenPal ran into a problem and couldn't start.\n\n\
+             Please try restarting the app. If the problem continues, check the log files \
+             (in the app's logs folder) or reinstall OpenPal."
+            .to_string(),
+    };
     rfd::MessageDialog::new()
         .set_level(rfd::MessageLevel::Error)
         .set_title("OpenPal")
-        .set_description(
-            "OpenPal ran into a problem and couldn't start.\n\n\
-             Please try restarting the app. If the problem continues, check the log files \
-             (in the app's logs folder) or reinstall OpenPal.",
-        )
+        .set_description(description)
         .set_buttons(rfd::MessageButtons::Ok)
         .show();
     std::process::exit(1);
@@ -430,7 +435,11 @@ fn fatal_startup_error() -> ! {
 /// nothing else that can show a native dialog this early in `setup()`, before
 /// the event loop pumps — log the failure and exit rather than crash silently.
 #[cfg(any(target_os = "android", target_os = "ios"))]
-fn fatal_startup_error() -> ! {
-    tracing::error!("OpenPal ran into a problem and couldn't start.");
+fn fatal_startup_error(detail: Option<&str>) -> ! {
+    if let Some(detail) = detail {
+        tracing::error!("OpenPal ran into a problem and couldn't start: {detail}");
+    } else {
+        tracing::error!("OpenPal ran into a problem and couldn't start.");
+    }
     std::process::exit(1);
 }

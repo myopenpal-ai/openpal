@@ -58,11 +58,14 @@ impl WrapHeader {
     /// A header for a keychain-backed slot: no KDF runs (the keychain
     /// access itself is the authentication), so `m_cost_kib`/`t_cost` are
     /// `0` — an honest signal of that, not a weakened real KDF. Salt is
-    /// zeroed since it's unused when no KDF runs. Mirrors
-    /// `crates/app/src/bootstrap.rs::mint_or_unlock`'s `keychain.wrap`
-    /// construction exactly — factored out here so `crate::sync::pairing`'s
-    /// three new keychain-backed wrap files (`sync_group.wrap`/`sync.wrap`/
-    /// `sync_identity.wrap`) don't each re-derive this by hand.
+    /// zeroed since it's unused when no KDF runs. Mirrors the legacy
+    /// `keychain.wrap` construction the pre-password model kept (a
+    /// `kdf_id = 0` slot whose KEK came from the OS keychain — still read
+    /// today on the create-password migration path to adopt a pre-password
+    /// install's DEK) exactly — factored out here so
+    /// `crate::sync::pairing`'s three keychain-backed wrap files
+    /// (`sync_group.wrap`/`sync.wrap`/`sync_identity.wrap`) don't each
+    /// re-derive this by hand.
     pub fn keychain_backed() -> Self {
         Self {
             m_cost_kib: 0,

@@ -41,6 +41,7 @@
 //! op with no matching outbox row) — a much narrower risk than the
 //! silent-permanent-loss bug this design already closed by construction.
 
+use crate::crypto::key::DataKey;
 use crate::sync::field_versions;
 use crate::sync::hlc::{Hlc, HlcClock};
 use crate::types::{ChatMessage, Conversation};
@@ -88,13 +89,14 @@ pub fn apply_local(
     conn: &mut Connection,
     conversation: &Conversation,
     clock: &HlcClock,
+    items_key: &DataKey,
 ) -> Result<AppliedLocal> {
     let tx = conn.transaction()?;
     let mut result = AppliedLocal::default();
 
     // --- title / project_id: independent LWW registers, unrelated to the
     // message-merge logic below. A local write always wins trivially. ---
-    if let Ok(previous) = crate::store::get(&tx, &conversation.id) {
+    if let Ok(previous) = crate::store::get(&tx, &conversation.id, items_key) {
         if previous.title != conversation.title {
             let hlc =
                 field_versions::record_local(&tx, "conversation_title", &conversation.id, clock)?;
@@ -152,7 +154,7 @@ pub fn apply_local(
         // message list on this save (e.g. a title-only edit) — no-op here.
     }
 
-    crate::store::save(&tx, conversation)?;
+    crate::store::save(&tx, conversation, items_key)?;
     tx.commit()?;
     Ok(result)
 }
@@ -167,11 +169,12 @@ pub fn apply_remote_message(
     conversation_id: &str,
     hlc: Hlc,
     message: ChatMessage,
+    items_key: &DataKey,
 ) -> Result<bool> {
     let tx = conn.transaction()?;
     let inserted = insert_op(&tx, conversation_id, &hlc, &message)?;
     if inserted {
-        recompute_and_save(&tx, conversation_id)?;
+        recompute_and_save(&tx, conversation_id, items_key)?;
     }
     tx.commit()?;
     Ok(inserted)
@@ -186,6 +189,7 @@ pub fn apply_remote_message(
 pub fn apply_remote_messages_batch(
     conn: &mut Connection,
     ops: Vec<(String, Hlc, ChatMessage)>,
+    items_key: &DataKey,
 ) -> Result<()> {
     let tx = conn.transaction()?;
     let mut dirty = std::collections::HashSet::new();
@@ -195,7 +199,7 @@ pub fn apply_remote_messages_batch(
         }
     }
     for conversation_id in dirty {
-        recompute_and_save(&tx, &conversation_id)?;
+        recompute_and_save(&tx, &conversation_id, items_key)?;
     }
     tx.commit()?;
     Ok(())
@@ -216,6 +220,7 @@ pub fn apply_remote_snapshot(
     conflicts_dir: &Path,
     hlc: Hlc,
     conversation: Conversation,
+    items_key: &DataKey,
 ) -> Result<bool> {
     let tx = conn.transaction()?;
     let wins =
@@ -226,7 +231,7 @@ pub fn apply_remote_snapshot(
         return Ok(false);
     }
     reseed_after_rewrite(&tx, &conversation.id, &conversation.messages, &hlc)?;
-    crate::store::save(&tx, &conversation)?;
+    crate::store::save(&tx, &conversation, items_key)?;
     tx.commit()?;
     Ok(true)
 }
@@ -245,12 +250,13 @@ pub fn apply_remote_title(
     conversation_id: &str,
     hlc: Hlc,
     title: String,
+    items_key: &DataKey,
 ) -> Result<bool> {
     let wins = field_versions::try_apply_remote(conn, "conversation_title", conversation_id, &hlc)?;
     if wins {
-        let mut conversation = crate::store::get(conn, conversation_id)?;
+        let mut conversation = crate::store::get(conn, conversation_id, items_key)?;
         conversation.title = title;
-        crate::store::save(conn, &conversation)?;
+        crate::store::save(conn, &conversation, items_key)?;
     }
     Ok(wins)
 }
@@ -262,13 +268,14 @@ pub fn apply_remote_project(
     conversation_id: &str,
     hlc: Hlc,
     project_id: Option<String>,
+    items_key: &DataKey,
 ) -> Result<bool> {
     let wins =
         field_versions::try_apply_remote(conn, "conversation_project", conversation_id, &hlc)?;
     if wins {
-        let mut conversation = crate::store::get(conn, conversation_id)?;
+        let mut conversation = crate::store::get(conn, conversation_id, items_key)?;
         conversation.project_id = project_id;
-        crate::store::save(conn, &conversation)?;
+        crate::store::save(conn, &conversation, items_key)?;
     }
     Ok(wins)
 }
@@ -298,13 +305,14 @@ pub fn apply_remote_pinned(
     conversation_id: &str,
     hlc: Hlc,
     pinned: bool,
+    items_key: &DataKey,
 ) -> Result<bool> {
     let wins =
         field_versions::try_apply_remote(conn, "conversation_pinned", conversation_id, &hlc)?;
     if wins {
-        let mut conversation = crate::store::get(conn, conversation_id)?;
+        let mut conversation = crate::store::get(conn, conversation_id, items_key)?;
         conversation.pinned = pinned;
-        crate::store::save(conn, &conversation)?;
+        crate::store::save(conn, &conversation, items_key)?;
     }
     Ok(wins)
 }
@@ -431,10 +439,10 @@ fn load_ordered_messages(conn: &Connection, conversation_id: &str) -> Result<Vec
     Ok(out)
 }
 
-fn recompute_and_save(conn: &Connection, conversation_id: &str) -> Result<()> {
-    let mut conversation = crate::store::get(conn, conversation_id)?;
+fn recompute_and_save(conn: &Connection, conversation_id: &str, items_key: &DataKey) -> Result<()> {
+    let mut conversation = crate::store::get(conn, conversation_id, items_key)?;
     conversation.messages = load_ordered_messages(conn, conversation_id)?;
-    crate::store::save(conn, &conversation)
+    crate::store::save(conn, &conversation, items_key)
 }
 
 /// A pure append iff `new` starts with exactly `current` (every existing
@@ -485,9 +493,22 @@ mod tests {
 
     fn test_conn() -> Connection {
         let dir = tempfile::tempdir().unwrap().keep();
-        crate::app_db::open(&dir.join("app.sqlite"), None)
+        crate::app_db::open(&dir.join("app.sqlite"), &test_items_key())
             .unwrap()
             .0
+    }
+
+    fn test_items_key() -> DataKey {
+        DataKey::from_bytes([0x42; 32])
+    }
+
+    // Local keyed shims over the real store API, so the fixtures below read
+    // as before while every conversation write/read is envelope-shaped.
+    fn store_save(conn: &Connection, conversation: &Conversation) -> crate::Result<()> {
+        crate::store::save(conn, conversation, &test_items_key())
+    }
+    fn store_get(conn: &Connection, id: &str) -> crate::Result<Conversation> {
+        crate::store::get(conn, id, &test_items_key())
     }
 
     fn conversation(id: &str, messages: Vec<ChatMessage>) -> Conversation {
@@ -547,7 +568,7 @@ mod tests {
         let clock = HlcClock::new("device-a".to_string());
 
         let conv1 = conversation("conv-1", vec![msg("user", "hello")]);
-        let applied = apply_local(&mut conn, &conv1, &clock).unwrap();
+        let applied = apply_local(&mut conn, &conv1, &clock, &test_items_key()).unwrap();
         assert_eq!(
             applied.message_ops.len(),
             1,
@@ -558,14 +579,14 @@ mod tests {
             "conv-1",
             vec![msg("user", "hello"), msg("assistant", "hi there")],
         );
-        let applied = apply_local(&mut conn, &conv2, &clock).unwrap();
+        let applied = apply_local(&mut conn, &conv2, &clock, &test_items_key()).unwrap();
         assert_eq!(
             applied.message_ops.len(),
             1,
             "a pure append must mint exactly one new op for the one new message"
         );
 
-        let saved = crate::store::get(&conn, "conv-1").unwrap();
+        let saved = store_get(&conn, "conv-1").unwrap();
         assert_eq!(saved.messages.len(), 2);
         assert_eq!(saved.messages[0].content, "hello");
         assert_eq!(saved.messages[1].content, "hi there");
@@ -591,7 +612,7 @@ mod tests {
                 msg("user", "three"),
             ],
         );
-        let applied = apply_local(&mut conn_a, &existing, &clock_a).unwrap();
+        let applied = apply_local(&mut conn_a, &existing, &clock_a, &test_items_key()).unwrap();
         assert_eq!(
             applied.message_ops.len(),
             3,
@@ -606,13 +627,14 @@ mod tests {
         // conversation metadata (title/project) arrived some other way by
         // pre-creating an empty conversation, mirroring how the real sync
         // engine would create the row before applying its first message op.
-        crate::store::save(&conn_b, &conversation("conv-1", vec![])).unwrap();
+        store_save(&conn_b, &conversation("conv-1", vec![])).unwrap();
 
         for op in applied.message_ops {
-            apply_remote_message(&mut conn_b, "conv-1", op.hlc, op.message).unwrap();
+            apply_remote_message(&mut conn_b, "conv-1", op.hlc, op.message, &test_items_key())
+                .unwrap();
         }
 
-        let b_view = crate::store::get(&conn_b, "conv-1").unwrap();
+        let b_view = store_get(&conn_b, "conv-1").unwrap();
         assert_eq!(
             b_view.messages.len(),
             3,
@@ -639,11 +661,17 @@ mod tests {
         // Both devices start from the same shared history (as if already
         // synced up to this point).
         let shared = conversation("conv-1", vec![msg("user", "shared-1")]);
-        let seed_a = apply_local(&mut conn_a, &shared, &clock_a).unwrap();
-        crate::store::save(&conn_b, &shared).unwrap();
+        let seed_a = apply_local(&mut conn_a, &shared, &clock_a, &test_items_key()).unwrap();
+        store_save(&conn_b, &shared).unwrap();
         for op in &seed_a.message_ops {
-            apply_remote_message(&mut conn_b, "conv-1", op.hlc.clone(), op.message.clone())
-                .unwrap();
+            apply_remote_message(
+                &mut conn_b,
+                "conv-1",
+                op.hlc.clone(),
+                op.message.clone(),
+                &test_items_key(),
+            )
+            .unwrap();
         }
 
         // Now offline: A appends 2 messages, B appends 1 — neither sees the
@@ -656,7 +684,7 @@ mod tests {
                 msg("user", "a-msg-2"),
             ],
         );
-        let a_ops = apply_local(&mut conn_a, &a_extended, &clock_a)
+        let a_ops = apply_local(&mut conn_a, &a_extended, &clock_a, &test_items_key())
             .unwrap()
             .message_ops;
         assert_eq!(a_ops.len(), 2);
@@ -665,7 +693,7 @@ mod tests {
             "conv-1",
             vec![msg("user", "shared-1"), msg("assistant", "b-msg-1")],
         );
-        let b_ops = apply_local(&mut conn_b, &b_extended, &clock_b)
+        let b_ops = apply_local(&mut conn_b, &b_extended, &clock_b, &test_items_key())
             .unwrap()
             .message_ops;
         assert_eq!(b_ops.len(), 1);
@@ -673,16 +701,28 @@ mod tests {
         // Both come back online and pull each other's ops, in DIFFERENT
         // orders on each side, to prove delivery order doesn't matter.
         for op in b_ops.iter().rev() {
-            apply_remote_message(&mut conn_a, "conv-1", op.hlc.clone(), op.message.clone())
-                .unwrap();
+            apply_remote_message(
+                &mut conn_a,
+                "conv-1",
+                op.hlc.clone(),
+                op.message.clone(),
+                &test_items_key(),
+            )
+            .unwrap();
         }
         for op in a_ops.iter() {
-            apply_remote_message(&mut conn_b, "conv-1", op.hlc.clone(), op.message.clone())
-                .unwrap();
+            apply_remote_message(
+                &mut conn_b,
+                "conv-1",
+                op.hlc.clone(),
+                op.message.clone(),
+                &test_items_key(),
+            )
+            .unwrap();
         }
 
-        let a_final = crate::store::get(&conn_a, "conv-1").unwrap().messages;
-        let b_final = crate::store::get(&conn_b, "conv-1").unwrap().messages;
+        let a_final = store_get(&conn_a, "conv-1").unwrap().messages;
+        let b_final = store_get(&conn_b, "conv-1").unwrap().messages;
         assert!(
             messages_equal(&a_final, &b_final),
             "both devices must converge to an identical final order"
@@ -702,7 +742,7 @@ mod tests {
     #[test]
     fn redelivered_op_is_idempotent() {
         let mut conn = test_conn();
-        crate::store::save(&conn, &conversation("conv-1", vec![])).unwrap();
+        store_save(&conn, &conversation("conv-1", vec![])).unwrap();
         let hlc = Hlc {
             physical_ms: 1000,
             counter: 0,
@@ -710,13 +750,20 @@ mod tests {
         };
         let message = msg("user", "hello");
 
-        assert!(apply_remote_message(&mut conn, "conv-1", hlc.clone(), message.clone()).unwrap());
+        assert!(apply_remote_message(
+            &mut conn,
+            "conv-1",
+            hlc.clone(),
+            message.clone(),
+            &test_items_key()
+        )
+        .unwrap());
         assert!(
-            !apply_remote_message(&mut conn, "conv-1", hlc, message).unwrap(),
+            !apply_remote_message(&mut conn, "conv-1", hlc, message, &test_items_key()).unwrap(),
             "redelivering the identical op must be a no-op"
         );
 
-        let saved = crate::store::get(&conn, "conv-1").unwrap();
+        let saved = store_get(&conn, "conv-1").unwrap();
         assert_eq!(
             saved.messages.len(),
             1,
@@ -738,37 +785,52 @@ mod tests {
         let clock_b = HlcClock::new("device-b".to_string());
 
         let shared = conversation("conv-1", vec![msg("user", "hi")]);
-        let seed = apply_local(&mut conn_a, &shared, &clock_a).unwrap();
-        crate::store::save(&conn_b, &shared).unwrap();
+        let seed = apply_local(&mut conn_a, &shared, &clock_a, &test_items_key()).unwrap();
+        store_save(&conn_b, &shared).unwrap();
         for op in &seed.message_ops {
-            apply_remote_message(&mut conn_b, "conv-1", op.hlc.clone(), op.message.clone())
-                .unwrap();
+            apply_remote_message(
+                &mut conn_b,
+                "conv-1",
+                op.hlc.clone(),
+                op.message.clone(),
+                &test_items_key(),
+            )
+            .unwrap();
         }
 
         // Device A renames the conversation (title only).
-        let mut a_renamed = crate::store::get(&conn_a, "conv-1").unwrap();
+        let mut a_renamed = store_get(&conn_a, "conv-1").unwrap();
         a_renamed.title = "Trip planning".to_string();
-        let a_applied = apply_local(&mut conn_a, &a_renamed, &clock_a).unwrap();
+        let a_applied = apply_local(&mut conn_a, &a_renamed, &clock_a, &test_items_key()).unwrap();
         let (title_hlc, new_title) = a_applied
             .title_update
             .expect("title changed, must be reported");
 
         // Device B (independently, before seeing A's rename) moves it to a
         // project (project_id only).
-        let mut b_moved = crate::store::get(&conn_b, "conv-1").unwrap();
+        let mut b_moved = store_get(&conn_b, "conv-1").unwrap();
         b_moved.project_id = Some("proj-42".to_string());
-        let b_applied = apply_local(&mut conn_b, &b_moved, &clock_b).unwrap();
+        let b_applied = apply_local(&mut conn_b, &b_moved, &clock_b, &test_items_key()).unwrap();
         let (project_hlc, new_project) = b_applied
             .project_update
             .expect("project_id changed, must be reported");
 
         // Cross-apply: A learns about B's project move, B learns about A's
         // rename.
-        assert!(apply_remote_project(&conn_a, "conv-1", project_hlc, new_project).unwrap());
-        assert!(apply_remote_title(&conn_b, "conv-1", title_hlc, new_title).unwrap());
+        assert!(apply_remote_project(
+            &conn_a,
+            "conv-1",
+            project_hlc,
+            new_project,
+            &test_items_key()
+        )
+        .unwrap());
+        assert!(
+            apply_remote_title(&conn_b, "conv-1", title_hlc, new_title, &test_items_key()).unwrap()
+        );
 
-        let a_final = crate::store::get(&conn_a, "conv-1").unwrap();
-        let b_final = crate::store::get(&conn_b, "conv-1").unwrap();
+        let a_final = store_get(&conn_a, "conv-1").unwrap();
+        let b_final = store_get(&conn_b, "conv-1").unwrap();
         assert_eq!(
             a_final.title, "Trip planning",
             "A's own rename must survive on A"
@@ -808,7 +870,7 @@ mod tests {
                 msg("user", "are you sure"),
             ],
         );
-        apply_local(&mut conn, &original, &clock).unwrap();
+        apply_local(&mut conn, &original, &clock, &test_items_key()).unwrap();
 
         // Edit-and-regenerate: drop the last 2 messages (the wrong answer +
         // follow-up) and replace with a corrected tail — same shape as the
@@ -817,7 +879,7 @@ mod tests {
             "conv-1",
             vec![msg("user", "what is 2+2"), msg("assistant", "4")],
         );
-        let applied = apply_local(&mut conn, &corrected, &clock).unwrap();
+        let applied = apply_local(&mut conn, &corrected, &clock, &test_items_key()).unwrap();
         assert!(
             applied.snapshot.is_some(),
             "a truncation must be detected as a rewrite, not a pure append"
@@ -827,7 +889,7 @@ mod tests {
             "a rewrite broadcasts a snapshot, not individual message ops"
         );
 
-        let after_rewrite = crate::store::get(&conn, "conv-1").unwrap();
+        let after_rewrite = store_get(&conn, "conv-1").unwrap();
         assert_eq!(after_rewrite.messages.len(), 2);
         assert_eq!(after_rewrite.messages[1].content, "4");
 
@@ -841,14 +903,14 @@ mod tests {
                 msg("user", "thanks"),
             ],
         );
-        let applied2 = apply_local(&mut conn, &extended, &clock).unwrap();
+        let applied2 = apply_local(&mut conn, &extended, &clock, &test_items_key()).unwrap();
         assert_eq!(
             applied2.message_ops.len(),
             1,
             "must be detected as a pure append after the rewrite, not another rewrite"
         );
 
-        let final_state = crate::store::get(&conn, "conv-1").unwrap();
+        let final_state = store_get(&conn, "conv-1").unwrap();
         assert_eq!(final_state.messages.len(), 3);
         assert_eq!(final_state.messages[2].content, "thanks");
     }
@@ -860,7 +922,7 @@ mod tests {
         let conflicts_dir = tempfile::tempdir().unwrap();
 
         let original = conversation("conv-1", vec![msg("user", "hi")]);
-        apply_local(&mut conn, &original, &clock).unwrap();
+        apply_local(&mut conn, &original, &clock, &test_items_key()).unwrap();
         // Record a NEWER local snapshot version directly, simulating this
         // device having already applied a later rewrite than the incoming
         // one below.
@@ -880,6 +942,7 @@ mod tests {
             conflicts_dir.path(),
             stale_incoming.clone(),
             incoming_conversation,
+            &test_items_key(),
         )
         .unwrap();
         assert!(
@@ -887,7 +950,7 @@ mod tests {
             "an older snapshot must lose against the newer local one"
         );
 
-        let local_state = crate::store::get(&conn, "conv-1").unwrap();
+        let local_state = store_get(&conn, "conv-1").unwrap();
         assert_eq!(
             local_state.messages[0].content, "hi",
             "the local state must be untouched by a losing snapshot"
@@ -916,7 +979,7 @@ mod tests {
             "conv-1",
             vec![msg("user", "what is 2+2"), msg("assistant", "5")],
         );
-        apply_local(&mut conn, &original, &clock).unwrap();
+        apply_local(&mut conn, &original, &clock, &test_items_key()).unwrap();
 
         // Edit-and-regenerate, same shape as
         // `edit_and_regenerate_triggers_a_snapshot_and_future_appends_still_merge`,
@@ -936,7 +999,7 @@ mod tests {
             },
         );
 
-        let applied = apply_local(&mut conn, &corrected, &clock).unwrap();
+        let applied = apply_local(&mut conn, &corrected, &clock, &test_items_key()).unwrap();
         let (hlc, snapshot) = applied
             .snapshot
             .expect("a branch-recording edit must still classify as a rewrite");
@@ -951,11 +1014,17 @@ mod tests {
         // whole-struct broadcast/apply path needs no branch-specific code.
         let mut conn_b = test_conn();
         let conflicts_dir = tempfile::tempdir().unwrap();
-        let applied_remote =
-            apply_remote_snapshot(&mut conn_b, conflicts_dir.path(), hlc, snapshot).unwrap();
+        let applied_remote = apply_remote_snapshot(
+            &mut conn_b,
+            conflicts_dir.path(),
+            hlc,
+            snapshot,
+            &test_items_key(),
+        )
+        .unwrap();
         assert!(applied_remote, "a first-ever snapshot for this id must win");
 
-        let b_view = crate::store::get(&conn_b, "conv-1").unwrap();
+        let b_view = store_get(&conn_b, "conv-1").unwrap();
         let b_branch = b_view
             .branches
             .get(&anchor_key)
@@ -989,7 +1058,7 @@ mod tests {
 
         let mut seeded = conversation("conv-2", vec![msg("user", "hi"), msg("assistant", "hello")]);
         seeded.forked_from = Some(origin.clone());
-        apply_local(&mut conn, &seeded, &clock).unwrap();
+        apply_local(&mut conn, &seeded, &clock, &test_items_key()).unwrap();
 
         let mut edited = conversation(
             "conv-2",
@@ -997,7 +1066,7 @@ mod tests {
         );
         edited.forked_from = Some(origin.clone());
 
-        let applied = apply_local(&mut conn, &edited, &clock).unwrap();
+        let applied = apply_local(&mut conn, &edited, &clock, &test_items_key()).unwrap();
         let (hlc, snapshot) = applied
             .snapshot
             .expect("an edit must classify as a rewrite");
@@ -1009,11 +1078,17 @@ mod tests {
 
         let mut conn_b = test_conn();
         let conflicts_dir = tempfile::tempdir().unwrap();
-        let applied_remote =
-            apply_remote_snapshot(&mut conn_b, conflicts_dir.path(), hlc, snapshot).unwrap();
+        let applied_remote = apply_remote_snapshot(
+            &mut conn_b,
+            conflicts_dir.path(),
+            hlc,
+            snapshot,
+            &test_items_key(),
+        )
+        .unwrap();
         assert!(applied_remote, "a first-ever snapshot for this id must win");
 
-        let b_view = crate::store::get(&conn_b, "conv-2").unwrap();
+        let b_view = store_get(&conn_b, "conv-2").unwrap();
         let b_origin = b_view
             .forked_from
             .expect("forked_from must have traveled with the snapshot to device B");
@@ -1030,7 +1105,7 @@ mod tests {
             "conv-1",
             vec![msg("user", "hello"), msg("assistant", "hi there")],
         );
-        apply_local(&mut conn, &original, &clock).unwrap();
+        apply_local(&mut conn, &original, &clock, &test_items_key()).unwrap();
 
         // A plain reload+resave with the SAME stable ids (what a correctly
         // round-tripped/backfilled conversation looks like) must be a true
@@ -1043,7 +1118,7 @@ mod tests {
             "conv-1",
             vec![msg("user", "hello"), msg("assistant", "hi there")],
         );
-        let applied = apply_local(&mut conn, &unchanged, &clock).unwrap();
+        let applied = apply_local(&mut conn, &unchanged, &clock, &test_items_key()).unwrap();
         assert!(applied.message_ops.is_empty(), "no messages were appended");
         assert!(
             applied.snapshot.is_none(),
@@ -1108,13 +1183,13 @@ mod tests {
             .unwrap();
         }
 
-        crate::store::backfill_message_ids(&mut conn).unwrap();
+        crate::store::backfill_message_ids(&mut conn, &test_items_key()).unwrap();
 
-        let backfilled = crate::store::get(&conn, "conv-1").unwrap();
+        let backfilled = store_get(&conn, "conv-1").unwrap();
         assert!(backfilled.messages.iter().all(|m| !m.id.is_empty()));
 
         let clock = HlcClock::new(device_id.to_string());
-        let applied = apply_local(&mut conn, &backfilled, &clock).unwrap();
+        let applied = apply_local(&mut conn, &backfilled, &clock, &test_items_key()).unwrap();
         assert!(
             applied.message_ops.is_empty(),
             "no new messages were appended"
@@ -1127,7 +1202,7 @@ mod tests {
         );
 
         // Stable on a further read too, not just "happened to match once".
-        let reread = crate::store::get(&conn, "conv-1").unwrap();
+        let reread = store_get(&conn, "conv-1").unwrap();
         let ids_a: Vec<&str> = backfilled.messages.iter().map(|m| m.id.as_str()).collect();
         let ids_b: Vec<&str> = reread.messages.iter().map(|m| m.id.as_str()).collect();
         assert_eq!(ids_a, ids_b);

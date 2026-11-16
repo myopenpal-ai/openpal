@@ -2050,9 +2050,18 @@ export const useStore = create<Store>()((set, get) => ({
     // command that works before the encryption key exists. Everything else
     // below needs a store the backend won't build until unlock succeeds —
     // calling it first, alone, is what lets a locked-out launch reach
-    // `RecoveryUnlock` instead of the backend rejecting `getSettings` et al.
-    // and leaving the app stuck on the bare titlebar forever.
+    // `PasswordGate`/`RecoveryUnlock` instead of the backend rejecting
+    // `getSettings` et al. and leaving the app stuck on the bare titlebar
+    // forever.
     const appInfo = await api.getAppInfo();
+    if (appInfo.needsPassword || appInfo.needsUnlock) {
+      // The mandatory-password gate (`PasswordGate`): first-run create, or
+      // the every-launch unlock. Stop here and let the gate call
+      // `finishBootAfterUnlock` itself once the password (or, for a
+      // forgotten one, a recovery code) checks out.
+      set({ appInfo, booted: true });
+      return;
+    }
     if (appInfo.needsRecovery) {
       set({ appInfo, booted: true });
       return;

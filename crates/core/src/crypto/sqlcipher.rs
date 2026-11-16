@@ -26,12 +26,7 @@ use zeroize::Zeroizing;
 /// file this is a no-op cost — there is nothing to validate yet, and the
 /// first write establishes the header under whatever key was set.
 pub(crate) fn apply_key(conn: &Connection, dek: &DataKey) -> rusqlite::Result<()> {
-    let hex = to_hex(dek.as_bytes());
-    // Wrapped in `Zeroizing` immediately at construction — `format!` itself
-    // has no zeroizing variant, so the raw hex DEK would otherwise sit in an
-    // ordinary, unscrubbed `String` allocation for the length of this call.
-    let pragma: Zeroizing<String> = Zeroizing::new(format!("PRAGMA key = \"x'{}'\";", *hex));
-    conn.execute_batch(&pragma)?;
+    conn.execute_batch(&key_pragma(dek))?;
     conn.query_row("SELECT count(*) FROM sqlite_master", [], |_| Ok(()))
         .map_err(|_| {
             rusqlite::Error::SqliteFailure(
@@ -40,6 +35,23 @@ pub(crate) fn apply_key(conn: &Connection, dek: &DataKey) -> rusqlite::Result<()
             )
         })?;
     Ok(())
+}
+
+/// The `PRAGMA key = "x'<hex>'"` statement itself, as a zeroized string —
+/// shared with `crate::app_db::encrypt_legacy_plaintext`, which opens a
+/// legacy plaintext database without a key and needs the same raw-key literal
+/// for its `ATTACH ... KEY` clause (SQLCipher can't `PRAGMA key` a plaintext
+/// file in place; it must be re-created via `sqlcipher_export`).
+pub(crate) fn key_pragma(dek: &DataKey) -> Zeroizing<String> {
+    let hex = to_hex(dek.as_bytes());
+    Zeroizing::new(format!("PRAGMA key = \"x'{}'\";", *hex))
+}
+
+/// The `KEY "x'<hex>'"` clause for an `ATTACH DATABASE ... KEY` statement —
+/// see [`key_pragma`].
+pub(crate) fn attach_key_clause(dek: &DataKey) -> Zeroizing<String> {
+    let hex = to_hex(dek.as_bytes());
+    Zeroizing::new(format!("KEY \"x'{}'\"", *hex))
 }
 
 /// Hand-rolled rather than a new direct dependency on the `hex` crate (which

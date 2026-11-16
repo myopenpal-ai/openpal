@@ -9,7 +9,9 @@
 //! `plugin_init()` must be registered in `lib.rs`'s `tauri::Builder` chain
 //! (a plugin's own `setup()` runs during `.build()`, before the app-level
 //! `.setup(|app| {...})` closure ever fires) so `store()`'s `PluginHandle`
-//! is ready by the time `bootstrap::mint_or_unlock` needs it.
+//! is ready by the time the create-password path's `bootstrap::
+//! items_key_for_creation` needs it (to adopt a pre-password install's
+//! keychain-sealed DEK).
 
 use openpal_core::crypto::lookup::KeyLookup;
 use openpal_core::crypto::secret_store::SecretStore;

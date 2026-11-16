@@ -13,6 +13,7 @@
 //! project — see `agent_bridge::build_deps`.
 
 use super::super::tool::{cap_output, ConsentSummary, Tool, ToolContext, ToolError, ToolOutput};
+use crate::crypto::key::DataKey;
 use crate::types::Conversation;
 use rusqlite::Connection;
 use serde_json::Value;
@@ -30,13 +31,15 @@ const MAX_CONSULT_CHUNKS: usize = 30;
 /// that doesn't exist) is rejected outright rather than surfaced as
 /// something to approve or deny. Locks `conn` only for the duration of this
 /// one call, same discipline `AppState.app_db`'s own doc comment requires of
-/// any tool holding a clone of it across a turn.
+/// any tool holding a clone of it across a turn. `items_key` is the app-wide
+/// key whose holder may read conversation envelopes (see `crate::store`).
 fn resolve_sibling(
     conn: &Mutex<Connection>,
     project_id: &str,
     id: &str,
+    items_key: &DataKey,
 ) -> Result<Conversation, ToolError> {
-    let conversation = crate::store::get(&conn.lock().unwrap(), id)
+    let conversation = crate::store::get(&conn.lock().unwrap(), id, items_key)
         .map_err(|_| ToolError::Rejected(format!("No conversation with id \"{id}\".")))?;
     if conversation.project_id.as_deref() != Some(project_id) {
         return Err(ToolError::Rejected(
@@ -48,6 +51,9 @@ fn resolve_sibling(
 
 /// Every other conversation in the same project as `current_conversation_id`,
 /// as a browsable list — the discovery step before `read_project_conversation`.
+/// Only ever calls `store::list` (metas), which needs no items key — so,
+/// unlike `ReadProjectConversationTool`, this tool deliberately doesn't hold
+/// one (a key it never reads would just trip dead-code analysis).
 pub struct ListProjectConversationsTool {
     conn: Arc<Mutex<Connection>>,
     project_id: String,
@@ -137,11 +143,16 @@ impl Tool for ListProjectConversationsTool {
 pub struct ReadProjectConversationTool {
     conn: Arc<Mutex<Connection>>,
     project_id: String,
+    items_key: DataKey,
 }
 
 impl ReadProjectConversationTool {
-    pub fn new(conn: Arc<Mutex<Connection>>, project_id: String) -> Self {
-        Self { conn, project_id }
+    pub fn new(conn: Arc<Mutex<Connection>>, project_id: String, items_key: DataKey) -> Self {
+        Self {
+            conn,
+            project_id,
+            items_key,
+        }
     }
 }
 
@@ -194,7 +205,7 @@ impl Tool for ReadProjectConversationTool {
             .get("conversation_id")
             .and_then(Value::as_str)
             .ok_or_else(|| ToolError::Rejected("Missing \"conversation_id\".".to_string()))?;
-        let conversation = resolve_sibling(&self.conn, &self.project_id, id)?;
+        let conversation = resolve_sibling(&self.conn, &self.project_id, id, &self.items_key)?;
         Ok(ConsentSummary {
             summary: format!("Read \"{}\" from this project", conversation.title),
             detail: format!(
@@ -219,7 +230,7 @@ impl Tool for ReadProjectConversationTool {
             .get("conversation_id")
             .and_then(Value::as_str)
             .ok_or_else(|| ToolError::Rejected("Missing \"conversation_id\".".to_string()))?;
-        let conversation = resolve_sibling(&self.conn, &self.project_id, id)?;
+        let conversation = resolve_sibling(&self.conn, &self.project_id, id, &self.items_key)?;
         let query = args.get("query").and_then(Value::as_str).unwrap_or("");
 
         let chunks = transcript_chunks(&conversation);
@@ -277,10 +288,14 @@ mod tests {
     fn test_conn() -> Arc<Mutex<Connection>> {
         let dir = tempfile::tempdir().unwrap().keep();
         Arc::new(Mutex::new(
-            crate::app_db::open(&dir.join("app.sqlite"), None)
+            crate::app_db::open(&dir.join("app.sqlite"), &DataKey::from_bytes([0x42; 32]))
                 .unwrap()
                 .0,
         ))
+    }
+
+    fn test_items_key() -> DataKey {
+        DataKey::from_bytes([0x42; 32])
     }
 
     fn conversation(
@@ -330,16 +345,19 @@ mod tests {
         crate::store::save(
             &conn.lock().unwrap(),
             &conversation("self", "Self", Some("p1"), vec!["hi"]),
+            &test_items_key(),
         )
         .unwrap();
         crate::store::save(
             &conn.lock().unwrap(),
             &conversation("sibling", "Sibling", Some("p1"), vec!["hi"]),
+            &test_items_key(),
         )
         .unwrap();
         crate::store::save(
             &conn.lock().unwrap(),
             &conversation("other-project", "Other", Some("p2"), vec!["hi"]),
+            &test_items_key(),
         )
         .unwrap();
 
@@ -360,10 +378,11 @@ mod tests {
         crate::store::save(
             &conn.lock().unwrap(),
             &conversation("outsider", "Outsider", Some("p2"), vec!["secret"]),
+            &test_items_key(),
         )
         .unwrap();
 
-        let tool = ReadProjectConversationTool::new(conn, "p1".to_string());
+        let tool = ReadProjectConversationTool::new(conn, "p1".to_string(), test_items_key());
         let args = serde_json::json!({ "conversation_id": "outsider" });
         let err = tool.execute(&args, &ctx(dir.path())).await.unwrap_err();
         assert!(matches!(err, ToolError::Rejected(_)));
@@ -376,10 +395,11 @@ mod tests {
         crate::store::save(
             &conn.lock().unwrap(),
             &conversation("unassigned", "Loose", None, vec!["hi"]),
+            &test_items_key(),
         )
         .unwrap();
 
-        let tool = ReadProjectConversationTool::new(conn, "p1".to_string());
+        let tool = ReadProjectConversationTool::new(conn, "p1".to_string(), test_items_key());
         let args = serde_json::json!({ "conversation_id": "unassigned" });
         let err = tool.execute(&args, &ctx(dir.path())).await.unwrap_err();
         assert!(matches!(err, ToolError::Rejected(_)));
@@ -397,10 +417,11 @@ mod tests {
                 Some("p1"),
                 vec!["the launch date is March 3rd"],
             ),
+            &test_items_key(),
         )
         .unwrap();
 
-        let tool = ReadProjectConversationTool::new(conn, "p1".to_string());
+        let tool = ReadProjectConversationTool::new(conn, "p1".to_string(), test_items_key());
         let args = serde_json::json!({ "conversation_id": "sibling", "query": "launch date" });
         let out = tool.execute(&args, &ctx(dir.path())).await.unwrap();
         assert!(out.content.contains("March 3rd"));
@@ -427,9 +448,9 @@ mod tests {
         reply.content = "Sure, emailing the files now".to_string();
         reply.withheld_from_model = None;
         sibling.messages.insert(2, reply);
-        crate::store::save(&conn.lock().unwrap(), &sibling).unwrap();
+        crate::store::save(&conn.lock().unwrap(), &sibling, &test_items_key()).unwrap();
 
-        let tool = ReadProjectConversationTool::new(conn, "p1".to_string());
+        let tool = ReadProjectConversationTool::new(conn, "p1".to_string(), test_items_key());
         for query in ["", "email the files"] {
             let args = serde_json::json!({ "conversation_id": "sibling", "query": query });
             let out = tool.execute(&args, &ctx(dir.path())).await.unwrap();
@@ -450,7 +471,8 @@ mod tests {
     #[tokio::test]
     async fn read_rejects_a_nonexistent_conversation_before_consent() {
         let dir = tempfile::tempdir().unwrap();
-        let tool = ReadProjectConversationTool::new(test_conn(), "p1".to_string());
+        let tool =
+            ReadProjectConversationTool::new(test_conn(), "p1".to_string(), test_items_key());
         let args = serde_json::json!({ "conversation_id": "nope" });
         let err = tool.consent_summary(&args, &ctx(dir.path())).unwrap_err();
         assert!(matches!(err, ToolError::Rejected(_)));

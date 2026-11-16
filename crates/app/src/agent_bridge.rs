@@ -15,6 +15,7 @@ use openpal_core::agent::{
     audit::AuditLog, run_agent_turn, AgentDeps, CitationRegistry, ConsentBroker, FetchAllowlist,
     ToolRegistry,
 };
+use openpal_core::crypto::key::DataKey;
 use openpal_core::engine::EngineEndpoint;
 use openpal_core::injection::TurnGuard;
 use openpal_core::plugin::PluginManager;
@@ -99,6 +100,7 @@ pub async fn build_deps(
     endpoint: EngineEndpoint,
     sampling: SamplingParams,
     injection: Arc<TurnGuard>,
+    items_key: &DataKey,
 ) -> Result<AgentDeps, String> {
     let http = turn_http_client()?;
     let home = std::env::var("HOME")
@@ -121,7 +123,7 @@ pub async fn build_deps(
     let subagent_tool = Arc::new(SpawnSubagentTool::new(endpoint, sampling, plugins.clone()));
     registry.register(subagent_tool.clone());
 
-    let project_id = openpal_core::store::get(&conn.lock().unwrap(), conversation_id)
+    let project_id = openpal_core::store::get(&conn.lock().unwrap(), conversation_id, items_key)
         .ok()
         .and_then(|c| c.project_id);
     if let Some(project_id) = project_id {
@@ -130,7 +132,11 @@ pub async fn build_deps(
             project_id.clone(),
             conversation_id.to_string(),
         )));
-        registry.register(Arc::new(ReadProjectConversationTool::new(conn, project_id)));
+        registry.register(Arc::new(ReadProjectConversationTool::new(
+            conn,
+            project_id,
+            items_key.clone(),
+        )));
     }
 
     let deps = AgentDeps {

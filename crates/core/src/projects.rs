@@ -25,6 +25,7 @@
 //!   deliberately not wrapped in one transaction with the project row delete
 //!   (an all-or-nothing failure mode this module has never had).
 
+use crate::crypto::key::DataKey;
 use crate::types::Project;
 use crate::{Error, Result};
 use rusqlite::{params, Connection};
@@ -101,23 +102,23 @@ pub fn save(conn: &Connection, project: &Project) -> Result<()> {
 /// Delete the project, then clear `project_id` on every conversation that
 /// still points at it — see this module's header for why that's a
 /// `crate::store::get`/`save` loop, not a bulk `UPDATE`.
-pub fn delete(conn: &Connection, id: &str) -> Result<()> {
+pub fn delete(conn: &Connection, id: &str, items_key: &DataKey) -> Result<()> {
     validate_id(id)?;
     conn.execute("DELETE FROM projects WHERE id = ?1", params![id])?;
-    unassign_conversations(conn, id);
+    unassign_conversations(conn, id, items_key);
     Ok(())
 }
 
-fn unassign_conversations(conn: &Connection, project_id: &str) {
+fn unassign_conversations(conn: &Connection, project_id: &str, items_key: &DataKey) {
     for meta in crate::store::list(conn) {
         if meta.project_id.as_deref() != Some(project_id) {
             continue;
         }
-        let Ok(mut conversation) = crate::store::get(conn, &meta.id) else {
+        let Ok(mut conversation) = crate::store::get(conn, &meta.id, items_key) else {
             continue;
         };
         conversation.project_id = None;
-        if let Err(e) = crate::store::save(conn, &conversation) {
+        if let Err(e) = crate::store::save(conn, &conversation, items_key) {
             tracing::warn!(
                 "couldn't unassign conversation {} from deleted project {project_id}: {e}",
                 meta.id
@@ -142,9 +143,13 @@ mod tests {
     /// `.keep()` is used here.
     fn test_conn() -> Connection {
         let dir = tempfile::tempdir().unwrap().keep();
-        crate::app_db::open(&dir.join("app.sqlite"), None)
+        crate::app_db::open(&dir.join("app.sqlite"), &test_items_key())
             .unwrap()
             .0
+    }
+
+    fn test_items_key() -> DataKey {
+        DataKey::from_bytes([0x42; 32])
     }
 
     fn project(id: &str, name: &str, updated_at_ms: u64) -> Project {
@@ -172,8 +177,8 @@ mod tests {
         let got = get(&conn, "proj-a").unwrap();
         assert_eq!(got.name, "Alpha");
 
-        delete(&conn, "proj-a").unwrap();
-        delete(&conn, "proj-a").unwrap(); // idempotent
+        delete(&conn, "proj-a", &test_items_key()).unwrap();
+        delete(&conn, "proj-a", &test_items_key()).unwrap(); // idempotent
         assert!(matches!(get(&conn, "proj-a"), Err(Error::NotFound(_))));
         assert_eq!(list(&conn).len(), 1);
     }
@@ -209,7 +214,10 @@ mod tests {
                 "get {id:?}"
             );
             assert!(
-                matches!(delete(&conn, id), Err(Error::NotFound(_))),
+                matches!(
+                    delete(&conn, id, &test_items_key()),
+                    Err(Error::NotFound(_))
+                ),
                 "delete {id:?}"
             );
             assert!(
@@ -228,18 +236,30 @@ mod tests {
         let mut in_proj_1 = test_conversation("conv-1", "proj-1");
         let mut also_in_proj_1 = test_conversation("conv-2", "proj-1");
         let in_proj_2 = test_conversation("conv-3", "proj-2");
-        crate::store::save(&conn, &in_proj_1).unwrap();
-        crate::store::save(&conn, &also_in_proj_1).unwrap();
-        crate::store::save(&conn, &in_proj_2).unwrap();
+        crate::store::save(&conn, &in_proj_1, &test_items_key()).unwrap();
+        crate::store::save(&conn, &also_in_proj_1, &test_items_key()).unwrap();
+        crate::store::save(&conn, &in_proj_2, &test_items_key()).unwrap();
 
-        delete(&conn, "proj-1").unwrap();
+        delete(&conn, "proj-1", &test_items_key()).unwrap();
 
         in_proj_1.project_id = None;
         also_in_proj_1.project_id = None;
-        assert_eq!(crate::store::get(&conn, "conv-1").unwrap().project_id, None);
-        assert_eq!(crate::store::get(&conn, "conv-2").unwrap().project_id, None);
         assert_eq!(
-            crate::store::get(&conn, "conv-3").unwrap().project_id,
+            crate::store::get(&conn, "conv-1", &test_items_key())
+                .unwrap()
+                .project_id,
+            None
+        );
+        assert_eq!(
+            crate::store::get(&conn, "conv-2", &test_items_key())
+                .unwrap()
+                .project_id,
+            None
+        );
+        assert_eq!(
+            crate::store::get(&conn, "conv-3", &test_items_key())
+                .unwrap()
+                .project_id,
             Some("proj-2".to_string()),
             "a conversation in a different project must be untouched"
         );

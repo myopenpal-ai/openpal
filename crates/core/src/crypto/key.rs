@@ -16,7 +16,7 @@ use rand::RngCore;
 use std::fmt;
 use zeroize::Zeroizing;
 
-#[derive(PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct DataKey(Zeroizing<[u8; 32]>);
 
 impl DataKey {

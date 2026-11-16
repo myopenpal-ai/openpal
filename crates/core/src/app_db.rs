@@ -51,6 +51,11 @@ pub const SCHEMA_VERSION: i64 = 13;
 pub enum OpenError {
     #[error("{0}")]
     Sqlite(#[from] rusqlite::Error),
+    /// Filesystem failure while swapping the freshly-exported encrypted
+    /// database into place during a legacy portable conversion
+    /// ([`encrypt_legacy_plaintext`]).
+    #[error("io error: {0}")]
+    Io(#[from] std::io::Error),
     /// `PRAGMA user_version` was left at something other than
     /// [`SCHEMA_VERSION`] after running every step in [`migrate`]'s ladder —
     /// in practice this means the database was already migrated by a newer
@@ -426,35 +431,88 @@ pub(crate) fn migrate(conn: &Connection) -> Result<(), OpenError> {
 }
 
 /// Opens (creating the file and its parent directory if absent) and brings
-/// the schema up to date. `dek: None` opens unkeyed (portable mode, which
-/// doesn't mint a DEK — see `AppState.dek`'s doc comment). Returns
-/// `(connection, was_fresh, version_before)`: `was_fresh` is whether this was
-/// a brand-new database (`user_version` was `0` before migrating) —
-/// `crate::state::finish_unlock` uses this to decide whether a legacy
-/// on-disk store (e.g. `crate::skills`'s old `<data_dir>/skills/` files)
-/// needs a one-time migration into it, versus this being an ordinary
-/// steady-state relaunch. `version_before` is the raw `user_version` seen
-/// before migrating (not just a freshness bit) — `finish_unlock` also uses
-/// it to gate `crate::store::backfill_message_ids`'s one-time run on
-/// `version_before < 11`, the same shape as the `was_fresh` gate but for a
-/// migration that only pre-existing (not brand-new) databases need.
-pub fn open(path: &Path, dek: Option<&DataKey>) -> Result<(Connection, bool, i64), OpenError> {
+/// the schema up to date. Every connection is keyed — there is no unkeyed
+/// `dek: None` branch anymore (the old portable mode that ran without
+/// encryption is gone; see `crates/app`'s bootstrap for the password model
+/// that replaced it). Returns `(connection, was_fresh, version_before)`:
+/// `was_fresh` is whether this was a brand-new database (`user_version`
+/// was `0` before migrating) — `crate::state::finish_unlock` uses this to
+/// decide whether a legacy on-disk store (e.g. `crate::skills`'s old
+/// `<data_dir>/skills/` files) needs a one-time migration into it, versus
+/// this being an ordinary steady-state relaunch. `version_before` is the
+/// raw `user_version` seen before migrating (not just a freshness bit) —
+/// `finish_unlock` also uses it to gate `crate::store::backfill_message_ids`'s
+/// one-time run on `version_before < 11`, the same shape as the `was_fresh`
+/// gate but for a migration that only pre-existing (not brand-new)
+/// databases need.
+pub fn open(path: &Path, dek: &DataKey) -> Result<(Connection, bool, i64), OpenError> {
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
     let conn = Connection::open(path)?;
-    if let Some(dek) = dek {
-        crate::crypto::sqlcipher::apply_key(&conn, dek)?;
-    }
+    crate::crypto::sqlcipher::apply_key(&conn, dek)?;
     let version_before: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
     let was_fresh = version_before == 0;
     migrate(&conn)?;
     Ok((conn, was_fresh, version_before))
 }
 
+/// The one permitted unkeyed open left in this crate: reads a **legacy
+/// portable** `app.sqlite` that predates encryption (plaintext SQLite, no
+/// key hierarchy) so the password-creation migration can adopt its rows in
+/// place. An `Err` (a file that's already keyed, or not a SQLite database at
+/// all) means "not a legacy plaintext store" — the caller falls through to
+/// ordinary `open`.
+///
+/// SQLCipher cannot re-key a plaintext database in place: as soon as a key
+/// is applied, every page is treated as ciphertext and even a bare write
+/// fails with "file is not a database". The supported plaintext→encrypted
+/// conversion is re-creating the database via `sqlcipher_export`, so this
+/// writes a fresh, keyed sibling file next to `path` and swaps it in once
+/// it's fully written. Row content is preserved (every table's data is
+/// copied verbatim through `sqlcipher_export`); the app's identifiers are
+/// text keys, so nothing depends on SQLite rowids surviving.
+///
+/// Deliberately *not* part of [`open`]'s signature: steady-state code
+/// never has a reason to open without a key, and keeping this helper
+/// one-shot-and-explicit keeps that boundary honest.
+pub fn encrypt_legacy_plaintext(path: &Path, dek: &DataKey) -> Result<(), OpenError> {
+    // A sibling path (same directory) so the final swap is a same-filesystem
+    // rename. Cleaned up on any failure.
+    let tmp = path.with_extension("encrypting.sqlite");
+    let conn = Connection::open(path)?;
+    // `sqlcipher_export` copies schema and rows but not the attached
+    // database's `user_version` (a per-file connection property), so capture
+    // the source's and restore it on the new file — otherwise a migrated
+    // database would look fresh (version 0) to `open`, which would re-run
+    // every `CREATE TABLE` against an already-populated schema and fail.
+    let version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+    let hex = crate::crypto::sqlcipher::attach_key_clause(dek);
+    let result = conn.execute_batch(&format!(
+        "ATTACH DATABASE '{}' AS encrypted {}; \
+         SELECT sqlcipher_export('encrypted'); \
+         PRAGMA encrypted.user_version = {version}; \
+         DETACH DATABASE encrypted;",
+        tmp.display(),
+        hex.as_str()
+    ));
+    drop(conn);
+    if let Err(e) = result {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(OpenError::from(e));
+    }
+    std::fs::rename(&tmp, path)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A stable test items key — every test connection below must be keyed.
+    fn test_dek() -> DataKey {
+        DataKey::from_bytes([0x42; 32])
+    }
 
     #[test]
     fn open_creates_file_and_is_idempotent() {
@@ -462,12 +520,12 @@ mod tests {
         let path = dir.path().join("app.sqlite");
         assert!(!path.exists());
 
-        drop(open(&path, None).unwrap());
+        drop(open(&path, &test_dek()).unwrap());
         assert!(path.exists());
 
         // Re-opening must not wipe the schema (the CREATE TABLE guard only
         // fires once, on user_version == 0).
-        let (conn, _, _) = open(&path, None).unwrap();
+        let (conn, _, _) = open(&path, &test_dek()).unwrap();
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
@@ -479,10 +537,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("app.sqlite");
 
-        let (_conn, was_fresh, _) = open(&path, None).unwrap();
+        let (_conn, was_fresh, _) = open(&path, &test_dek()).unwrap();
         assert!(was_fresh, "a brand-new file must report fresh");
 
-        let (_conn, was_fresh, _) = open(&path, None).unwrap();
+        let (_conn, was_fresh, _) = open(&path, &test_dek()).unwrap();
         assert!(
             !was_fresh,
             "re-opening an existing database must not report fresh"
@@ -492,7 +550,7 @@ mod tests {
     #[test]
     fn open_creates_every_table() {
         let dir = tempfile::tempdir().unwrap();
-        let (conn, _, _) = open(&dir.path().join("app.sqlite"), None).unwrap();
+        let (conn, _, _) = open(&dir.path().join("app.sqlite"), &test_dek()).unwrap();
         for table in [
             "conversations",
             "projects",
@@ -520,20 +578,10 @@ mod tests {
     }
 
     #[test]
-    fn unkeyed_open_produces_a_plaintext_readable_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("app.sqlite");
-        drop(open(&path, None).unwrap());
-        let bytes = std::fs::read(&path).unwrap();
-        assert!(bytes.starts_with(b"SQLite format 3\0"));
-    }
-
-    #[test]
     fn keyed_open_does_not_produce_a_plaintext_readable_file() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("app.sqlite");
-        let dek = DataKey::random();
-        drop(open(&path, Some(&dek)).unwrap());
+        drop(open(&path, &test_dek()).unwrap());
         let bytes = std::fs::read(&path).unwrap();
         assert!(!bytes.starts_with(b"SQLite format 3\0"));
     }
@@ -542,16 +590,15 @@ mod tests {
     fn correct_key_reopens() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("app.sqlite");
-        let dek = DataKey::random();
         {
-            let (conn, _, _) = open(&path, Some(&dek)).unwrap();
+            let (conn, _, _) = open(&path, &test_dek()).unwrap();
             conn.execute(
                 "INSERT INTO settings (key, json) VALUES ('current', '{}')",
                 [],
             )
             .unwrap();
         }
-        let (conn, _, _) = open(&path, Some(&dek)).unwrap();
+        let (conn, _, _) = open(&path, &test_dek()).unwrap();
         let json: String = conn
             .query_row("SELECT json FROM settings WHERE key = 'current'", [], |r| {
                 r.get(0)
@@ -564,19 +611,53 @@ mod tests {
     fn wrong_key_fails_to_open() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("app.sqlite");
-        let dek_a = DataKey::random();
-        let dek_b = DataKey::random();
-        drop(open(&path, Some(&dek_a)).unwrap());
-        assert!(open(&path, Some(&dek_b)).is_err());
+        drop(open(&path, &DataKey::random()).unwrap());
+        assert!(open(&path, &DataKey::random()).is_err());
     }
 
     #[test]
-    fn unkeyed_open_of_a_keyed_database_fails() {
+    fn encrypt_legacy_plaintext_keys_a_legacy_plaintext_file_in_place() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("app.sqlite");
-        let dek = DataKey::random();
-        drop(open(&path, Some(&dek)).unwrap());
-        assert!(open(&path, None).is_err());
+        // A legacy portable `app.sqlite`: plaintext SQLite with rows, no
+        // key ever applied.
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE t (x INTEGER); INSERT INTO t VALUES (1); PRAGMA user_version = 13;",
+            )
+            .unwrap();
+        }
+        let raw = std::fs::read(&path).unwrap();
+        assert!(
+            raw.starts_with(b"SQLite format 3\0"),
+            "legacy file is plaintext"
+        );
+
+        encrypt_legacy_plaintext(&path, &test_dek()).unwrap();
+
+        // Now keyed: an ordinary keyed open works and sees the rows.
+        let (conn, was_fresh, _) = open(&path, &test_dek()).unwrap();
+        assert!(!was_fresh);
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM t", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 1);
+        let bytes = std::fs::read(&path).unwrap();
+        assert!(
+            !bytes.starts_with(b"SQLite format 3\0"),
+            "now encrypted at rest"
+        );
+    }
+
+    #[test]
+    fn encrypt_legacy_plaintext_rejects_a_database_keyed_with_another_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.sqlite");
+        drop(open(&path, &test_dek()).unwrap());
+        // The legacy path must not silently re-key (or destroy) a database
+        // that's already encrypted under a different key.
+        assert!(encrypt_legacy_plaintext(&path, &DataKey::random()).is_err());
     }
 
     #[test]
@@ -599,8 +680,12 @@ mod tests {
             )
             .unwrap();
         }
+        // A pre-encryption legacy store is plaintext on disk — adopt it
+        // under the items key the same way the portable migration does
+        // (keychain installs were already keyed; this is the portable half).
+        encrypt_legacy_plaintext(&path, &test_dek()).unwrap();
 
-        let (conn, _, version_before) = open(&path, None).unwrap();
+        let (conn, _, version_before) = open(&path, &test_dek()).unwrap();
         assert_eq!(version_before, 11);
         let unread: bool = conn
             .query_row(
@@ -619,13 +704,15 @@ mod tests {
     fn a_schema_version_this_build_does_not_recognize_errors_instead_of_panicking() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("app.sqlite");
-        drop(open(&path, None).unwrap());
         {
-            let conn = Connection::open(&path).unwrap();
+            // Bump the version from a keyed connection — a plain `open`
+            // without the key can't even read the header of an encrypted
+            // database, let alone write to it.
+            let (conn, _, _) = open(&path, &test_dek()).unwrap();
             conn.execute_batch(&format!("PRAGMA user_version = {}", SCHEMA_VERSION + 1))
                 .unwrap();
         }
-        match open(&path, None) {
+        match open(&path, &test_dek()) {
             Err(OpenError::SchemaVersionMismatch { found, supported }) => {
                 assert_eq!(found, SCHEMA_VERSION + 1);
                 assert_eq!(supported, SCHEMA_VERSION);
