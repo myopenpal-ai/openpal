@@ -497,8 +497,12 @@ jobs:
     needs: [prepare, publish]
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ${{ matrix.os }}
+    # Draft releases are invisible to read-only tokens (the API 404s), and
+    # smoke must download the *draft* it is verifying — so write is required
+    # here even though the job only reads. Without it every smoke leg fails
+    # with "release not found" and the draft gets discarded.
     permissions:
-      contents: read
+      contents: write
     strategy:
       fail-fast: false
       matrix:

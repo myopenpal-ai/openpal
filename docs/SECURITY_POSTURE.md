@@ -23,7 +23,7 @@ normal PR.
 | Release/nightly tags are **signed**, can't be moved or deleted | tag ruleset `v*`/`b*`: `required_signatures`, `non_fast_forward`, `deletion` | 2026-11-15 |
 | Tags pushed from CI are **signed in the runner** with a dedicated key, never a personal one | `rolling.yml` / `make-release.yml` import `GIT_SIGNING_KEY` and `git tag -s`; public half registered as an SSH signing key on the operator account | 2026-11-15 |
 | All third-party actions pinned to a full 40-char commit SHA | CI gate `action-pins` in `ci.yml` (fails any floating `@tag` ref) | 2026-11-15 |
-| Least-privilege `GITHUB_TOKEN`: `contents: read` default, `actions: write` only on the `frontend` job, `contents: write` + `deployments: write` only on `portable`'s `publish`/`discard` | `permissions:` in every workflow | 2026-11-15 |
+| Least-privilege `GITHUB_TOKEN`: `contents: read` default, `actions: write` only on the `frontend` job, `contents: write` + `deployments: write` only on `portable`'s `publish`/`smoke`/`discard` (`smoke` needs write to read the *draft* release it verifies — drafts 404 for read-only tokens) | `permissions:` in every workflow | 2026-11-16 |
 | Release signing keys scoped away from every non-release job | `TAURI_SIGNING_*` live on the `production-release` environment; `publish` targets `environment: production-release` | 2026-11-15 |
 | A release tag is only signed if its commit is an ancestor of `main` | `publish` job, `Verify the tag is an ancestor of main` step | 2026-11-15 |
 | Secret scanning (incl. push protection) + dependabot security updates + automated security fixes | repo → Settings → Code security and analysis | 2026-11-15 |
