@@ -83,7 +83,7 @@ jobs:
       engine_tag: ${{ steps.engine.outputs.tag }}
       kind: ${{ steps.matrix.outputs.kind }}
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
 
       - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
 
@@ -197,9 +197,9 @@ jobs:
     name: build shared UI
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 20
           cache: npm
@@ -211,7 +211,7 @@ jobs:
       - name: Build the UI once
         run: npm --prefix ui run build
 
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ui-dist
           path: ui/dist
@@ -228,9 +228,9 @@ jobs:
         include: ${{ fromJson(needs.prepare.outputs.matrix) }}
 
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 20
           cache: npm
@@ -310,7 +310,7 @@ jobs:
       # target), so the bundler's own "already staged for this target" fast path
       # skips the GB-scale download; an engine bump is a deliberate one-time miss.
       - name: Restore engine cache (per target + resolved tag)
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: crates/app/resources/llama
           key: portable-engine-${{ matrix.target }}-${{ needs.prepare.outputs.engine_tag }}
@@ -318,7 +318,7 @@ jobs:
       # The UI was built once in the `ui` job; drop its `dist/` in place so the
       # Tauri build finds it and skips its own beforeBuildCommand entirely.
       - name: Restore shared UI build
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: ui-dist
           path: target/ui-dist
@@ -373,7 +373,7 @@ jobs:
             echo "No bare .AppImage (model bundle ships a .tar.gz instead) — skipping."
           fi
 
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: OpenPal-portable-${{ matrix.target }}
           path: |
@@ -407,7 +407,7 @@ jobs:
       contents: write
       deployments: write
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
           # Full history so the "tag is on main" check below can run.
           fetch-depth: 0
@@ -425,7 +425,7 @@ jobs:
           fi
           echo "${GITHUB_REF_NAME} ($GITHUB_SHA) is an ancestor of main."
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 20
           cache: npm
@@ -439,7 +439,7 @@ jobs:
       - name: Install npm dependencies (root — for the Tauri CLI signer)
         run: npm ci
 
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: OpenPal-portable-*
           path: target/portable-artifacts
@@ -508,7 +508,7 @@ jobs:
       matrix:
         include: ${{ fromJson(needs.prepare.outputs.matrix) }}
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
 
       - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
 
