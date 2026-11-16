@@ -22,4 +22,4 @@
 # same "vendored executable" approach OpenPal uses for llama-server) and a voice
 # model, and service.py runs Piper as a subprocess. So there is no TTS pip dep.
 faster-whisper==1.2.1
-av==17.1.0
+av==19.0.2
