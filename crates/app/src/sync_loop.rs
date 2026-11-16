@@ -263,7 +263,11 @@ async fn tick(state: &AppState, run_artifact_sweep: bool) -> openpal_core::Resul
         let batch_len = batched_messages.len();
         let batch_result = {
             let mut conn = state.app_db.lock().unwrap();
-            conversations::apply_remote_messages_batch(&mut conn, batched_messages, &state.dek)
+            conversations::apply_remote_messages_batch(
+                &mut conn,
+                batched_messages,
+                state.dek.lock().unwrap().as_ref(),
+            )
         };
         match batch_result {
             Ok(()) => to_ack.extend(batched_envelope_ids),
@@ -432,7 +436,7 @@ fn route_pulled_envelope(
                 conflicts_dir,
                 hlc,
                 conversation,
-                &state.dek,
+                state.dek.lock().unwrap().as_ref(),
             )?;
             Ok(None)
         }
@@ -446,7 +450,13 @@ fn route_pulled_envelope(
             }
             ensure_conversation_placeholder(state, &conversation_id)?;
             let conn = state.app_db.lock().unwrap();
-            conversations::apply_remote_title(&conn, &conversation_id, hlc, title, &state.dek)?;
+            conversations::apply_remote_title(
+                &conn,
+                &conversation_id,
+                hlc,
+                title,
+                state.dek.lock().unwrap().as_ref(),
+            )?;
             Ok(None)
         }
         ChangeEnvelope::ConversationProject {
@@ -464,7 +474,7 @@ fn route_pulled_envelope(
                 &conversation_id,
                 hlc,
                 project_id,
-                &state.dek,
+                state.dek.lock().unwrap().as_ref(),
             )?;
             Ok(None)
         }
@@ -491,7 +501,13 @@ fn route_pulled_envelope(
             }
             ensure_conversation_placeholder(state, &conversation_id)?;
             let conn = state.app_db.lock().unwrap();
-            conversations::apply_remote_pinned(&conn, &conversation_id, hlc, pinned, &state.dek)?;
+            conversations::apply_remote_pinned(
+                &conn,
+                &conversation_id,
+                hlc,
+                pinned,
+                state.dek.lock().unwrap().as_ref(),
+            )?;
             Ok(None)
         }
         ChangeEnvelope::ConversationDeleted {
@@ -522,7 +538,13 @@ fn route_pulled_envelope(
         }
         ChangeEnvelope::ProjectDeleted { row_key, hlc } => {
             let conn = state.app_db.lock().unwrap();
-            capture::apply_remote_project_deleted(&conn, hlc, &row_key, conflicts_dir, &state.dek)?;
+            capture::apply_remote_project_deleted(
+                &conn,
+                hlc,
+                &row_key,
+                conflicts_dir,
+                state.dek.lock().unwrap().as_ref(),
+            )?;
             Ok(None)
         }
         ChangeEnvelope::ArtifactRow {
@@ -592,7 +614,8 @@ fn ensure_conversation_placeholder(
     conversation_id: &str,
 ) -> openpal_core::Result<()> {
     let conn = state.app_db.lock().unwrap();
-    if openpal_core::store::get(&conn, conversation_id, &state.dek).is_ok() {
+    if openpal_core::store::get(&conn, conversation_id, state.dek.lock().unwrap().as_ref()).is_ok()
+    {
         return Ok(());
     }
     let now = now_ms();
@@ -610,7 +633,7 @@ fn ensure_conversation_placeholder(
         branches: std::collections::HashMap::new(),
         forked_from: None,
     };
-    openpal_core::store::save(&conn, &placeholder, &state.dek)
+    openpal_core::store::save(&conn, &placeholder, state.dek.lock().unwrap().as_ref())
 }
 
 fn now_ms() -> u64 {

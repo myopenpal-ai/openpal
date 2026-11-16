@@ -78,14 +78,30 @@ pub async fn run_if_due(app: &AppHandle) {
 }
 
 async fn write_one(state: &AppState, folder: std::path::PathBuf) -> Result<(), String> {
-    let snapshot = backup::read_snapshot(&state.app_db.lock().unwrap(), &state.dek)
+    let dek = state.dek.lock().unwrap().clone();
+    let snapshot = backup::read_snapshot(&state.app_db.lock().unwrap(), dek.as_ref())
         .map_err(crate::commands::friendly)?;
     let wrap_path = state.paths.data_dir.join("keys").join("recovery.wrap");
-    let dek = state.dek.clone();
     let written = tokio::task::spawn_blocking(move || {
-        let wrap = std::fs::read(&wrap_path).map_err(|_| no_recovery_code())?;
-        backup::write_backup(&snapshot, &wrap, &dek, &folder, now_ms())
-            .map_err(crate::commands::friendly)
+        // Password set: carry the recovery wrap alongside the sealed DEK
+        // (Some/Some → the encrypted format). No password: read no wrap and
+        // write the plaintext format (None/None).
+        let (wrap, backup_dek): (Option<Vec<u8>>, Option<openpal_core::crypto::key::DataKey>) =
+            match dek {
+                Some(dek) => (
+                    Some(std::fs::read(&wrap_path).map_err(|_| no_recovery_code())?),
+                    Some(dek),
+                ),
+                None => (None, None),
+            };
+        backup::write_backup(
+            &snapshot,
+            wrap.as_deref(),
+            backup_dek.as_ref(),
+            &folder,
+            now_ms(),
+        )
+        .map_err(crate::commands::friendly)
     })
     .await
     .map_err(|e| {

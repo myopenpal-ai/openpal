@@ -102,14 +102,14 @@ pub fn save(conn: &Connection, project: &Project) -> Result<()> {
 /// Delete the project, then clear `project_id` on every conversation that
 /// still points at it — see this module's header for why that's a
 /// `crate::store::get`/`save` loop, not a bulk `UPDATE`.
-pub fn delete(conn: &Connection, id: &str, items_key: &DataKey) -> Result<()> {
+pub fn delete(conn: &Connection, id: &str, items_key: Option<&DataKey>) -> Result<()> {
     validate_id(id)?;
     conn.execute("DELETE FROM projects WHERE id = ?1", params![id])?;
     unassign_conversations(conn, id, items_key);
     Ok(())
 }
 
-fn unassign_conversations(conn: &Connection, project_id: &str, items_key: &DataKey) {
+fn unassign_conversations(conn: &Connection, project_id: &str, items_key: Option<&DataKey>) {
     for meta in crate::store::list(conn) {
         if meta.project_id.as_deref() != Some(project_id) {
             continue;
@@ -143,7 +143,7 @@ mod tests {
     /// `.keep()` is used here.
     fn test_conn() -> Connection {
         let dir = tempfile::tempdir().unwrap().keep();
-        crate::app_db::open(&dir.join("app.sqlite"), &test_items_key())
+        crate::app_db::open(&dir.join("app.sqlite"), Some(&test_items_key()))
             .unwrap()
             .0
     }
@@ -177,8 +177,8 @@ mod tests {
         let got = get(&conn, "proj-a").unwrap();
         assert_eq!(got.name, "Alpha");
 
-        delete(&conn, "proj-a", &test_items_key()).unwrap();
-        delete(&conn, "proj-a", &test_items_key()).unwrap(); // idempotent
+        delete(&conn, "proj-a", Some(&test_items_key())).unwrap();
+        delete(&conn, "proj-a", Some(&test_items_key())).unwrap(); // idempotent
         assert!(matches!(get(&conn, "proj-a"), Err(Error::NotFound(_))));
         assert_eq!(list(&conn).len(), 1);
     }
@@ -215,7 +215,7 @@ mod tests {
             );
             assert!(
                 matches!(
-                    delete(&conn, id, &test_items_key()),
+                    delete(&conn, id, Some(&test_items_key())),
                     Err(Error::NotFound(_))
                 ),
                 "delete {id:?}"
@@ -236,28 +236,28 @@ mod tests {
         let mut in_proj_1 = test_conversation("conv-1", "proj-1");
         let mut also_in_proj_1 = test_conversation("conv-2", "proj-1");
         let in_proj_2 = test_conversation("conv-3", "proj-2");
-        crate::store::save(&conn, &in_proj_1, &test_items_key()).unwrap();
-        crate::store::save(&conn, &also_in_proj_1, &test_items_key()).unwrap();
-        crate::store::save(&conn, &in_proj_2, &test_items_key()).unwrap();
+        crate::store::save(&conn, &in_proj_1, Some(&test_items_key())).unwrap();
+        crate::store::save(&conn, &also_in_proj_1, Some(&test_items_key())).unwrap();
+        crate::store::save(&conn, &in_proj_2, Some(&test_items_key())).unwrap();
 
-        delete(&conn, "proj-1", &test_items_key()).unwrap();
+        delete(&conn, "proj-1", Some(&test_items_key())).unwrap();
 
         in_proj_1.project_id = None;
         also_in_proj_1.project_id = None;
         assert_eq!(
-            crate::store::get(&conn, "conv-1", &test_items_key())
+            crate::store::get(&conn, "conv-1", Some(&test_items_key()))
                 .unwrap()
                 .project_id,
             None
         );
         assert_eq!(
-            crate::store::get(&conn, "conv-2", &test_items_key())
+            crate::store::get(&conn, "conv-2", Some(&test_items_key()))
                 .unwrap()
                 .project_id,
             None
         );
         assert_eq!(
-            crate::store::get(&conn, "conv-3", &test_items_key())
+            crate::store::get(&conn, "conv-3", Some(&test_items_key()))
                 .unwrap()
                 .project_id,
             Some("proj-2".to_string()),

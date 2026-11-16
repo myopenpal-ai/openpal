@@ -162,14 +162,15 @@ pub fn run() {
                 }
             }
         })
-        // Every command below except `get_app_info`, `create_password`,
-        // `unlock_with_password`, `change_password`, `generate_recovery_code`,
+        // Every command below except `get_app_info`, `start_without_password`,
+        // `create_password`, `unlock_with_password`, `set_password`,
+        // `remove_password`, `change_password`, `generate_recovery_code`,
         // `attempt_recovery_unlock`, `get_app_lock_status`, `verify_app_lock_pin`,
         // `set_app_lock_pin`, `unlock_app_lock_with_recovery_code`,
         // `notification_permission`, `request_notification_permission`,
         // `open_notification_settings` and `take_notification_click` (they only
         // ask the OS, send the user to it, hand back a click, run the password
-        // create/unlock/migration ceremony, or operate on the app lock), and
+        // create/set/unlock/remove ceremony, or operate on the app lock), and
         // `factory_reset` (see their own doc comments) takes
         // `State<'_, AppState>`, unmanaged until `state::finish_unlock`
         // succeeds. That alone is the pre-unlock gate for the other ~94 —
@@ -178,14 +179,18 @@ pub fn run() {
         // error (not a panic) when `T` isn't managed yet, confirmed against
         // the vendored `tauri` source (`State::from_command`). Don't add a
         // manual "is it unlocked" check to a new command on the strength of
-        // this comment alone if it does anything `AppState.dek`'s always-
-        // present key can't tolerate — check `AppState.dek`'s doc comment
+        // this comment alone if it does anything `AppState.dek`'s maybe-
+        // absent key can't tolerate — check `AppState.dek`'s doc comment
         // first.
         .invoke_handler(tauri::generate_handler![
             commands::get_system_report,
             commands::get_app_info,
+            commands::start_without_password,
             commands::create_password,
             commands::unlock_with_password,
+            commands::set_password,
+            commands::remove_password,
+            commands::get_password_status,
             commands::change_password,
             commands::get_models,
             commands::download_model,

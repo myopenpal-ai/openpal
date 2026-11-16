@@ -803,7 +803,7 @@ mod tests {
             audit: Arc::new(AuditLog::open(Arc::new(std::sync::Mutex::new(
                 crate::app_db::open(
                     &tmp.join("app.sqlite"),
-                    &crate::crypto::key::DataKey::from_bytes([0x42; 32]),
+                    Some(&crate::crypto::key::DataKey::from_bytes([0x42; 32])),
                 )
                 .unwrap()
                 .0,
@@ -968,7 +968,7 @@ mod tests {
 
         let conn = crate::app_db::open(
             &tmp.path().join("app.sqlite"),
-            &crate::crypto::key::DataKey::from_bytes([0x42; 32]),
+            Some(&crate::crypto::key::DataKey::from_bytes([0x42; 32])),
         )
         .unwrap()
         .0;
@@ -1318,7 +1318,7 @@ mod tests {
         let audit = Arc::new(AuditLog::open(Arc::new(std::sync::Mutex::new(
             crate::app_db::open(
                 &tmp.path().join("app.sqlite"),
-                &crate::crypto::key::DataKey::from_bytes([0x42; 32]),
+                Some(&crate::crypto::key::DataKey::from_bytes([0x42; 32])),
             )
             .unwrap()
             .0,
@@ -1341,7 +1341,7 @@ mod tests {
         let db = std::sync::Arc::new(std::sync::Mutex::new(
             crate::app_db::open(
                 &tmp.path().join("app.sqlite"),
-                &crate::crypto::key::DataKey::from_bytes([0x42; 32]),
+                Some(&crate::crypto::key::DataKey::from_bytes([0x42; 32])),
             )
             .unwrap()
             .0,
@@ -2073,7 +2073,7 @@ mod tests {
         let db = Arc::new(std::sync::Mutex::new(
             crate::app_db::open(
                 &tmp.path().join("app.sqlite"),
-                &crate::crypto::key::DataKey::from_bytes([0x42; 32]),
+                Some(&crate::crypto::key::DataKey::from_bytes([0x42; 32])),
             )
             .unwrap()
             .0,

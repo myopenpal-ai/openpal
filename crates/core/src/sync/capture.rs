@@ -49,7 +49,7 @@ pub fn save_conversation_synced(
     clock: &HlcClock,
     sync_key: &SyncKey,
     mailbox_id: &str,
-    items_key: &DataKey,
+    items_key: Option<&DataKey>,
 ) -> Result<()> {
     let applied = conversations::apply_local(conn, conversation, clock, items_key)?;
 
@@ -125,7 +125,7 @@ pub fn set_conversation_pinned_synced(
     clock: &HlcClock,
     sync_key: &SyncKey,
     mailbox_id: &str,
-    items_key: &DataKey,
+    items_key: Option<&DataKey>,
 ) -> Result<()> {
     let tx = conn.transaction()?;
     let mut conversation = crate::store::get(&tx, conversation_id, items_key)?;
@@ -240,7 +240,7 @@ pub fn delete_project_synced(
     clock: &HlcClock,
     sync_key: &SyncKey,
     mailbox_id: &str,
-    items_key: &DataKey,
+    items_key: Option<&DataKey>,
 ) -> Result<()> {
     let tx = conn.transaction()?;
     crate::projects::delete(&tx, project_id, items_key)?;
@@ -390,7 +390,7 @@ pub fn apply_remote_project_deleted(
     hlc: Hlc,
     row_key: &str,
     conflicts_dir: &Path,
-    items_key: &DataKey,
+    items_key: Option<&DataKey>,
 ) -> Result<bool> {
     let wins = field_versions::try_apply_remote(conn, "projects", row_key, &hlc)?;
     if wins {
@@ -509,9 +509,12 @@ mod tests {
 
     fn test_conn() -> Connection {
         let dir = tempfile::tempdir().unwrap().keep();
-        crate::app_db::open(&dir.join("app.sqlite"), &DataKey::from_bytes([0x42; 32]))
-            .unwrap()
-            .0
+        crate::app_db::open(
+            &dir.join("app.sqlite"),
+            Some(&DataKey::from_bytes([0x42; 32])),
+        )
+        .unwrap()
+        .0
     }
 
     fn test_items_key() -> DataKey {
@@ -606,7 +609,7 @@ mod tests {
             &clock,
             &sync_key,
             "mailbox-1",
-            &test_items_key(),
+            Some(&test_items_key()),
         )
         .unwrap();
 
@@ -622,7 +625,12 @@ mod tests {
         let mut conn = test_conn();
         let clock = HlcClock::new("device-a".to_string());
         let sync_key = SyncKey::random();
-        crate::store::save(&conn, &conversation("conv-1", vec![]), &test_items_key()).unwrap();
+        crate::store::save(
+            &conn,
+            &conversation("conv-1", vec![]),
+            Some(&test_items_key()),
+        )
+        .unwrap();
 
         let saved = save_artifact_synced(
             &mut conn,
@@ -722,7 +730,7 @@ mod tests {
             &clock,
             &sync_key,
             "mailbox-1",
-            &test_items_key(),
+            Some(&test_items_key()),
         )
         .unwrap();
         // Seeding queues one envelope per pre-existing message; drain it so
@@ -741,7 +749,7 @@ mod tests {
             &clock,
             &sync_key,
             "mailbox-1",
-            &test_items_key(),
+            Some(&test_items_key()),
         )
         .unwrap();
 
@@ -771,7 +779,7 @@ mod tests {
             &clock,
             &sync_key,
             "mailbox-1",
-            &test_items_key(),
+            Some(&test_items_key()),
         )
         .unwrap();
         outbox::drain(&conn, 10)
@@ -789,7 +797,7 @@ mod tests {
             &clock,
             &sync_key,
             "mailbox-1",
-            &test_items_key(),
+            Some(&test_items_key()),
         )
         .unwrap();
 
@@ -814,7 +822,7 @@ mod tests {
         crate::store::save(
             &conn,
             &conversation("conv-1", vec![msg("user", "hello")]),
-            &test_items_key(),
+            Some(&test_items_key()),
         )
         .unwrap();
 
@@ -844,7 +852,7 @@ mod tests {
         crate::store::save(
             &conn,
             &conversation("conv-1", vec![msg("user", "hello")]),
-            &test_items_key(),
+            Some(&test_items_key()),
         )
         .unwrap();
 
@@ -855,7 +863,7 @@ mod tests {
             &clock,
             &sync_key,
             "mailbox-1",
-            &test_items_key(),
+            Some(&test_items_key()),
         )
         .unwrap();
 
@@ -928,7 +936,7 @@ mod tests {
             hlc,
             "proj-1",
             conflicts_dir.path(),
-            &test_items_key()
+            Some(&test_items_key())
         )
         .unwrap());
         assert!(crate::projects::get(&conn, "proj-1").is_err());
@@ -939,7 +947,12 @@ mod tests {
         let conn = test_conn();
         let clock = HlcClock::new("device-a".to_string());
         let conflicts_dir = tempfile::tempdir().unwrap();
-        crate::store::save(&conn, &conversation("conv-1", vec![]), &test_items_key()).unwrap();
+        crate::store::save(
+            &conn,
+            &conversation("conv-1", vec![]),
+            Some(&test_items_key()),
+        )
+        .unwrap();
 
         let newer = clock.next();
         assert!(apply_remote_artifact_row(

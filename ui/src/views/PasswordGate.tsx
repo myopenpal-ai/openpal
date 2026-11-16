@@ -6,7 +6,7 @@ import { useStore } from "../state/store";
 type Stage = "password" | "recovery";
 
 /**
- * The mandatory-password gate shown before anything else in the app once
+ * The password gate shown before anything else in the app once
  * `AppInfo.needsPassword` — first run, create your password (a brand-new
  * install, or a pre-password install's first launch after upgrade) — or
  * `AppInfo.needsUnlock` — the normal every-launch "enter your password"
@@ -20,6 +20,14 @@ type Stage = "password" | "recovery";
  * wrong password decrypts nothing — `unlock_with_password` answers every
  * failure with the exact string `"Wrong password"`, mapped here to the
  * locale's `auth.password.wrong`.
+ *
+ * Create mode also offers "continue without a password" when
+ * `AppInfo.canStartWithoutPassword` (a fresh install, or a legacy plaintext
+ * store): the Standard Notes "no account, no passcode" choice — nothing is
+ * encrypted at rest from then on, and the marker the backend writes makes
+ * every later launch skip this gate entirely. Never offered on a legacy
+ * pre-password install whose data is already encrypted (the backend reports
+ * `canStartWithoutPassword: false` there).
  *
  * The forgot-your-password fallback is the recovery code: the same form
  * `RecoveryUnlock` uses, rendered inline as a second stage (reachable in
@@ -124,6 +132,24 @@ export default function PasswordGate() {
       }
     } catch (err: unknown) {
       setRecoveryError(tRecovery("unlockError", { message: String(err) }));
+      setSubmitting(false);
+    }
+  };
+
+  const handleStartWithoutPassword = async () => {
+    if (submitting) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      // `start_without_password` writes the `keys/nopass.marker` (idempotent)
+      // and finishes the backend's boot with no DEK — the plaintext
+      // "no password = no encryption at rest" layout — so `AppState` exists
+      // by the time this resolves, and every later launch skips this gate.
+      await api.startWithoutPassword();
+      useStore.setState({ appLockUnlocked: true });
+      await useStore.getState().finishBootAfterUnlock();
+    } catch (err: unknown) {
+      setError(String(err));
       setSubmitting(false);
     }
   };
@@ -280,6 +306,17 @@ export default function PasswordGate() {
                     : t("auth.password.unlockTitle")}
               </button>
             </form>
+
+            {create && appInfo?.canStartWithoutPassword && (
+              <button
+                type="button"
+                className="btn-quiet ob-appear"
+                onClick={() => void handleStartWithoutPassword()}
+                disabled={submitting}
+              >
+                {t("auth.password.continueWithout")}
+              </button>
+            )}
 
             {!create && (
               <button

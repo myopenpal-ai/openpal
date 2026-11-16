@@ -85,7 +85,7 @@ struct PendingSkill {
 pub fn read_import_zip(
     conn: &mut Connection,
     src: &Path,
-    items_key: &DataKey,
+    items_key: Option<&DataKey>,
 ) -> Result<ImportSummary> {
     let file = std::fs::File::open(src)
         .map_err(|e| Error::DataImport(format!("couldn't open the import archive: {e}")))?;
@@ -103,7 +103,7 @@ pub fn read_import_zip(
 pub(crate) fn import_archive<R: std::io::Read + std::io::Seek>(
     conn: &mut Connection,
     archive: &mut ZipArchive<R>,
-    items_key: &DataKey,
+    items_key: Option<&DataKey>,
 ) -> (ImportSummary, usize) {
     let mut summary = ImportSummary::default();
     let mut failed_writes = 0;
@@ -368,7 +368,7 @@ fn import_conversation(
     conn: &Connection,
     _id: &str,
     contents: &str,
-    items_key: &DataKey,
+    items_key: Option<&DataKey>,
 ) -> Result<()> {
     let conversation: Conversation = serde_json::from_str(contents)?;
     crate::store::save(conn, &conversation, items_key)
@@ -415,7 +415,7 @@ mod tests {
     /// `.keep()` is used here.
     fn test_conn() -> Connection {
         let dir = tempfile::tempdir().unwrap().keep();
-        crate::app_db::open(&dir.join("app.sqlite"), &test_items_key())
+        crate::app_db::open(&dir.join("app.sqlite"), Some(&test_items_key()))
             .unwrap()
             .0
     }
@@ -445,7 +445,7 @@ mod tests {
     fn round_trips_through_export_and_import() {
         let tmp = tempfile::tempdir().unwrap();
         let src_conn = test_conn();
-        crate::store::save(&src_conn, &conversation("conv-1"), &test_items_key()).unwrap();
+        crate::store::save(&src_conn, &conversation("conv-1"), Some(&test_items_key())).unwrap();
         crate::projects::save(
             &src_conn,
             &Project {
@@ -461,7 +461,7 @@ mod tests {
         let data = crate::export::read_export_data(
             &src_conn,
             &crate::export::ExportCategories::ALL,
-            &test_items_key(),
+            Some(&test_items_key()),
         );
         let dest = tmp.path().join("export.zip");
         let export_summary = crate::export::write_export_zip(&data, &dest).unwrap();
@@ -477,7 +477,8 @@ mod tests {
 
         // Import into a second, fresh, empty database.
         let mut dst_conn = test_conn();
-        let import_summary = read_import_zip(&mut dst_conn, &dest, &test_items_key()).unwrap();
+        let import_summary =
+            read_import_zip(&mut dst_conn, &dest, Some(&test_items_key())).unwrap();
         assert_eq!(
             (
                 import_summary.conversations,
@@ -489,7 +490,7 @@ mod tests {
         );
 
         let imported_conversation =
-            crate::store::get(&dst_conn, "conv-1", &test_items_key()).unwrap();
+            crate::store::get(&dst_conn, "conv-1", Some(&test_items_key())).unwrap();
         assert_eq!(
             serde_json::to_string_pretty(&imported_conversation).unwrap(),
             serde_json::to_string_pretty(&conversation("conv-1")).unwrap(),
@@ -533,7 +534,7 @@ mod tests {
         }
 
         let mut conn = test_conn();
-        let summary = read_import_zip(&mut conn, &dest, &test_items_key()).unwrap();
+        let summary = read_import_zip(&mut conn, &dest, Some(&test_items_key())).unwrap();
         assert_eq!(
             summary.conversations, 1,
             "the well-formed entry still imports"
@@ -544,7 +545,7 @@ mod tests {
         );
 
         assert_eq!(
-            crate::store::get(&conn, "conv-1", &test_items_key())
+            crate::store::get(&conn, "conv-1", Some(&test_items_key()))
                 .unwrap()
                 .id,
             "conv-1"
@@ -572,7 +573,7 @@ mod tests {
         }
 
         let mut conn = test_conn();
-        let summary = read_import_zip(&mut conn, &dest, &test_items_key()).unwrap();
+        let summary = read_import_zip(&mut conn, &dest, Some(&test_items_key())).unwrap();
         assert_eq!(summary.conversations, 0);
         assert_eq!(summary.projects, 0);
         assert_eq!(summary.artifacts, 0);
@@ -589,13 +590,13 @@ mod tests {
 
         let mut conn = test_conn();
         assert!(matches!(
-            read_import_zip(&mut conn, &dest, &test_items_key()),
+            read_import_zip(&mut conn, &dest, Some(&test_items_key())),
             Err(Error::DataImport(_))
         ));
     }
 
     fn export(conn: &Connection, include: &ExportCategories, dest: &Path) {
-        let data = crate::export::read_export_data(conn, include, &test_items_key());
+        let data = crate::export::read_export_data(conn, include, Some(&test_items_key()));
         crate::export::write_export_zip(&data, dest).unwrap();
     }
 
@@ -621,7 +622,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let dest = tmp.path().join("export.zip");
         let mut src = test_conn();
-        populate(&mut src, &test_items_key());
+        populate(&mut src, Some(&test_items_key()));
         export(&src, &ExportCategories::ALL, &dest);
 
         let mut dst = test_conn();
@@ -639,7 +640,7 @@ mod tests {
         )
         .unwrap();
 
-        let summary = read_import_zip(&mut dst, &dest, &test_items_key()).unwrap();
+        let summary = read_import_zip(&mut dst, &dest, Some(&test_items_key())).unwrap();
         assert_eq!(
             (
                 summary.conversations,
@@ -702,7 +703,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let dest = tmp.path().join("export.zip");
         let mut src = test_conn();
-        populate(&mut src, &test_items_key());
+        populate(&mut src, Some(&test_items_key()));
         export(&src, &ExportCategories::ALL, &dest);
         let imported_spec = crate::custom::load(&src).all()[0].clone();
 
@@ -724,7 +725,7 @@ mod tests {
         });
         crate::custom::save(&dst, &local).unwrap();
 
-        read_import_zip(&mut dst, &dest, &test_items_key()).unwrap();
+        read_import_zip(&mut dst, &dest, Some(&test_items_key())).unwrap();
 
         let summarize = skill(&dst, "summarize");
         assert_eq!(summarize.body, "Summarize the text.");
@@ -752,7 +753,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let dest = tmp.path().join("export.zip");
         let mut src = test_conn();
-        populate(&mut src, &test_items_key());
+        populate(&mut src, Some(&test_items_key()));
         let chats_only = ExportCategories {
             chats: true,
             settings: false,
@@ -784,7 +785,7 @@ mod tests {
             crate::plugin::export_records_json(&dst).unwrap().0,
         );
 
-        let summary = read_import_zip(&mut dst, &dest, &test_items_key()).unwrap();
+        let summary = read_import_zip(&mut dst, &dest, Some(&test_items_key())).unwrap();
         assert_eq!(
             (
                 summary.conversations,
@@ -833,7 +834,7 @@ mod tests {
         );
 
         let mut conn = test_conn();
-        let summary = read_import_zip(&mut conn, &dest, &test_items_key()).unwrap();
+        let summary = read_import_zip(&mut conn, &dest, Some(&test_items_key())).unwrap();
         assert_eq!(
             (
                 summary.conversations,
@@ -870,7 +871,7 @@ mod tests {
         );
 
         let mut conn = test_conn();
-        let summary = read_import_zip(&mut conn, &dest, &test_items_key()).unwrap();
+        let summary = read_import_zip(&mut conn, &dest, Some(&test_items_key())).unwrap();
         assert!(!summary.settings);
         assert_eq!(summary.skipped, 1);
         assert!(crate::settings::load(&conn).user_name.is_none());

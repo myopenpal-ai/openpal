@@ -702,7 +702,7 @@ mod tests {
         let app_db = Arc::new(std::sync::Mutex::new(
             crate::app_db::open(
                 &dir.join("app.sqlite"),
-                &crate::crypto::key::DataKey::from_bytes([0x42; 32]),
+                Some(&crate::crypto::key::DataKey::from_bytes([0x42; 32])),
             )
             .unwrap()
             .0,
@@ -817,7 +817,7 @@ mod tests {
         let app_db = Arc::new(std::sync::Mutex::new(
             crate::app_db::open(
                 &dir.join("app.sqlite"),
-                &crate::crypto::key::DataKey::from_bytes([0x42; 32]),
+                Some(&crate::crypto::key::DataKey::from_bytes([0x42; 32])),
             )
             .unwrap()
             .0,

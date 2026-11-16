@@ -472,12 +472,13 @@ function ModelSettings({ drafts, setDrafts }: DraftProps) {
   );
 }
 
-/** Privacy & safety: the crisis banner, locking the app, and limits for
- * children. */
+/** Privacy & safety: encrypting data at rest, the crisis banner, locking the
+ * app, and limits for children. */
 function PrivacySettings() {
   return (
     <>
       <SafetyDetectionSection />
+      <PasswordProtectionSection />
       <SecuritySection />
       <ParentalControlsSection />
     </>
@@ -905,6 +906,247 @@ function SafetyDetectionSection() {
     </div>
   );
 }
+
+type PasswordFlow = "idle" | "set" | "change" | "removeConfirm";
+
+/**
+ * Encrypting this device's copy of the data (Settings → Privacy & safety) —
+ * the Standard Notes "no account, no passcode = database not encrypted"
+ * model: no password means everything (the database, conversation rows,
+ * logs, backups, exports) is stored in plain text; setting one encrypts it
+ * at rest under the Standard Notes-style key hierarchy (a password-derived
+ * root key wrapping the items key, which wraps each conversation's own key).
+ *
+ * Set/change/remove are all backend commands that take effect immediately:
+ * `set_password`/`remove_password` convert the live store in place
+ * (plaintext ⇄ encrypted, rewriting every conversation row) without a
+ * restart, and `change_password` only re-wraps the key-encryption layer.
+ * Removing a password is destructive (data stops being encrypted), so it
+ * goes through the shared `ConfirmDialog`.
+ *
+ * The recovery-code ceremonies (`RecoverySetup`/`AppInfo.needsRecoverySetup`)
+ * only exist on a password-protected install — with no password there is
+ * nothing to protect — so this section is also where the password status
+ * that gates them is re-read into the store after a change.
+ */
+function PasswordProtectionSection() {
+  const { t } = useTranslation();
+  const [passwordSet, setPasswordSet] = useState<boolean | null>(null);
+  const [flow, setFlow] = useState<PasswordFlow>("idle");
+  const [current, setCurrent] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const load = () =>
+    api
+      .getPasswordStatus()
+      .then((status) => setPasswordSet(status.passwordSet))
+      .catch((err: unknown) => setError(String(err)));
+
+  useEffect(() => {
+    void load();
+  }, []);
+
+  /** `needsRecoverySetup` (the backup/recovery gates) depends on the
+   * password state, so after a set/remove the whole app must re-read it —
+   * the same refetch `setUpRecoveryCode` in `AutoBackupField` does. */
+  const refreshAppInfo = async () => {
+    useStore.setState({ appInfo: await api.getAppInfo() });
+  };
+
+  const backToSummary = () => {
+    setFlow("idle");
+    setCurrent("");
+    setNewPassword("");
+    setConfirmPassword("");
+    setError(null);
+  };
+
+  const submit = async () => {
+    if (busy || !newPassword) return;
+    if (newPassword !== confirmPassword) {
+      setError(t("passwordProtection.settings.mismatch"));
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      if (flow === "set") {
+        await api.setPassword(newPassword);
+        setPasswordSet(true);
+      } else {
+        await api.changePassword(current, newPassword);
+      }
+      await refreshAppInfo();
+      backToSummary();
+    } catch (err: unknown) {
+      setError(String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const remove = async () => {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await api.removePassword();
+      setPasswordSet(false);
+      await refreshAppInfo();
+      setFlow("idle");
+    } catch (err: unknown) {
+      setError(String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const canSubmit = newPassword.length > 0 && confirmPassword.length > 0;
+  const formOkay = (flow === "change" ? current.length > 0 : true) && canSubmit;
+
+  return (
+    <SettingsGroup title={t("passwordProtection.settings.summary")}>
+      <div className="settings-field">
+        <span className="settings-hint">{t("passwordProtection.settings.hint")}</span>
+        {passwordSet === null ? (
+          <span className="settings-hint">{t("settingsSheet.parentalControls.loading")}</span>
+        ) : (
+          <span className="settings-label">
+            {t(
+              passwordSet
+                ? "passwordProtection.settings.stateOn"
+                : "passwordProtection.settings.stateOff",
+            )}
+          </span>
+        )}
+
+        {flow === "idle" && (
+          <div className="logs-actions">
+            {passwordSet ? (
+              <>
+                <button
+                  className="btn-ghost"
+                  disabled={passwordSet === null}
+                  onClick={() => setFlow("change")}
+                >
+                  {t("passwordProtection.settings.changeButton")}
+                </button>
+                <button
+                  className="btn-quiet btn-danger-quiet"
+                  disabled={passwordSet === null}
+                  onClick={() => setFlow("removeConfirm")}
+                >
+                  {t("passwordProtection.settings.removeButton")}
+                </button>
+              </>
+            ) : (
+              <button
+                className="btn-ghost"
+                disabled={passwordSet === null}
+                onClick={() => setFlow("set")}
+              >
+                {t("passwordProtection.settings.setButton")}
+              </button>
+            )}
+          </div>
+        )}
+
+        {flow === "set" || flow === "change" ? (
+          <form
+            className="backup-restore"
+            onSubmit={(e) => {
+              e.preventDefault();
+              void submit();
+            }}
+          >
+            {flow === "change" && (
+              <label className="settings-hint" htmlFor="password-protection-current">
+                {t("passwordProtection.settings.currentLabel")}
+                <input
+                  id="password-protection-current"
+                  className="settings-text"
+                  type="password"
+                  autoComplete="current-password"
+                  autoCorrect="off"
+                  autoCapitalize="off"
+                  spellCheck={false}
+                  value={current}
+                  disabled={busy}
+                  onChange={(e) => setCurrent(e.target.value)}
+                />
+              </label>
+            )}
+            <label className="settings-hint" htmlFor="password-protection-new">
+              {t("passwordProtection.settings.newLabel")}
+              <input
+                id="password-protection-new"
+                className="settings-text"
+                type="password"
+                autoComplete="new-password"
+                autoCorrect="off"
+                autoCapitalize="off"
+                spellCheck={false}
+                value={newPassword}
+                disabled={busy}
+                onChange={(e) => setNewPassword(e.target.value)}
+              />
+            </label>
+            <label className="settings-hint" htmlFor="password-protection-confirm">
+              {t("passwordProtection.settings.confirmLabel")}
+              <input
+                id="password-protection-confirm"
+                className="settings-text"
+                type="password"
+                autoComplete="new-password"
+                autoCorrect="off"
+                autoCapitalize="off"
+                spellCheck={false}
+                value={confirmPassword}
+                disabled={busy}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+              />
+            </label>
+            <div className="logs-actions">
+              <button type="submit" className="btn" disabled={!formOkay || busy}>
+                {busy
+                  ? t("passwordProtection.settings.saving")
+                  : flow === "set"
+                    ? t("passwordProtection.settings.setAction")
+                    : t("passwordProtection.settings.changeAction")}
+              </button>
+              <button type="button" className="btn-quiet" disabled={busy} onClick={backToSummary}>
+                {t("common.cancel")}
+              </button>
+            </div>
+          </form>
+        ) : null}
+
+        {flow === "removeConfirm" && (
+          <ConfirmDialog
+            title={t("passwordProtection.settings.removeTitle")}
+            message={t("passwordProtection.settings.removeBody")}
+            confirmLabel={t("passwordProtection.settings.removeConfirm")}
+            busy={busy}
+            onCancel={() => {
+              if (!busy) setFlow("idle");
+            }}
+            onConfirm={() => void remove()}
+          />
+        )}
+
+        {error && (
+          <p className="settings-hint logs-status" role="alert">
+            {error}
+          </p>
+        )}
+      </div>
+    </SettingsGroup>
+  );
+}
+
 
 /**
  * The app-lock PIN gate (`AppLockGate`, `AppInfo.needsAppUnlock`) — whether

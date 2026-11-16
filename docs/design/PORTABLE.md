@@ -138,7 +138,7 @@ linux Vulkan ~88 MB (CPU-only ~38 MB).
 | **Voice plugin** | **Not shipped built-in** | Same Python problem. Native `cpal/rodio/hound` audio stays compiled; a power user with host Python can drop a plugin into `data/plugins/`. |
 | Plugin framework (`PluginManager`) | **Keep compiled, no built-ins** | Pure Rust, ~0 MB; ship no plugin folders and hide the Plugins tab. |
 | Logging + diagnostics viewer | **Keep** | *Most* valuable here — no installer, no console. |
-| **Encryption (mandatory password + recovery)** | **Keep — same as Full** | The password model (issue #66) runs identically in portable: password-derived root → items key → per-conversation envelopes. No OS keychain primary slot; first run creates the password, `RecoveryUnlock` is the forgotten-password fallback, and logs are encrypted. |
+| **Encryption (optional password + recovery)** | **Keep — same as Full** | The password model (issue #66) runs identically in portable: password-derived root → items key → per-conversation envelopes. No OS keychain primary slot; the first run creates the password (or the user chooses "continue without a password", in which case nothing is encrypted at rest), `RecoveryUnlock` is the forgotten-password fallback, and logs are encrypted only when a password is set. |
 | Embedded model | **Lite + optional pre-staged** | See §3. |
 
 ---

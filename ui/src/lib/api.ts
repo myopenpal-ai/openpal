@@ -48,6 +48,7 @@ import type {
   ParentalStatus,
   PairedDeviceInfo,
   PairingEvent,
+  PasswordStatus,
   PinCheckResult,
   PluginEvent,
   PluginInfo,
@@ -87,12 +88,31 @@ export const api = {
    * with the exact string `"Wrong password"` — `PasswordGate` renders the
    * locale's `auth.password.wrong` key for that. */
   unlockWithPassword: (password: string) => invoke<void>("unlock_with_password", { password }),
+  /** The no-password choice (`AppInfo.noPassword`, or the "continue without a
+   * password" skip on the create gate): records the choice in
+   * `keys/nopass.marker` and boots with no encryption key — a plaintext
+   * database, rows, logs, backups and exports (the Standard Notes "no
+   * account, no passcode" model). Idempotent. Only offered when
+   * `AppInfo.canStartWithoutPassword`. */
+  startWithoutPassword: () => invoke<void>("start_without_password"),
   /** Change the password (backend seam for a Settings → Security control):
    * verify `current`, then re-wrap `password.wrap` under a root derived from
    * `new` — only the key-encryption layer is touched; conversations are not
    * re-encrypted. */
   changePassword: (current: string, newPassword: string) =>
     invoke<void>("change_password", { current, new: newPassword }),
+  /** Whether a password is currently set (Settings → Security status), read
+   * off disk. */
+  getPasswordStatus: () => invoke<PasswordStatus>("get_password_status"),
+  /** Set a password on a no-password install (Settings → Security): converts
+   * the store to encrypted at rest, in place, taking effect immediately —
+   * the reverse of `removePassword`. Rejects with a message safe to show
+   * as-is on failure. */
+  setPassword: (password: string) => invoke<void>("set_password", { password }),
+  /** Remove the password (Settings → Security): converts the store back to
+   * plaintext at rest and stops encrypting, taking effect immediately — the
+   * reverse of `setPassword`. */
+  removePassword: () => invoke<void>("remove_password"),
 
   // Encryption recovery (the one-time `RecoverySetup` gate)
   /** Mint a fresh recovery code for the encryption key that's already been

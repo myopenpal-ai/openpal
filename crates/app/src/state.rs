@@ -112,14 +112,16 @@ impl AppPaths {
 /// `T` isn't managed yet, rather than panicking).
 pub struct BootState {
     pub paths: Arc<AppPaths>,
-    /// Which of the three password-model gates this launch is behind, set
+    /// Which of the four password-model gates this launch is behind, set
     /// once by [`BootState::initialize`] from `bootstrap::detect` (mutually
     /// exclusive; exactly one is true). Read by `commands::get_app_info` to
-    /// drive the frontend's create-password / enter-password /
-    /// recovery-code screens, and cleared by
-    /// `commands::create_password`/`unlock_with_password`/
-    /// `attempt_recovery_unlock` once [`finish_unlock`] succeeds. There is
-    /// no silent unlock — see `crate::bootstrap`'s doc comment.
+    /// drive the frontend's straight-in (no password) / create-password /
+    /// enter-password / recovery-code start, and cleared by
+    /// `commands::start_without_password`/`create_password`/
+    /// `unlock_with_password`/`attempt_recovery_unlock` once
+    /// [`finish_unlock`] succeeds. There is no silent unlock — see
+    /// `crate::bootstrap`'s doc comment.
+    pub no_password: AtomicBool,
     pub needs_password: AtomicBool,
     pub needs_unlock: AtomicBool,
     /// `true` only in the legacy migration window: a pre-password install
@@ -203,14 +205,16 @@ impl BootState {
         // `crate::bootstrap::detect`'s doc comment. This is the *only*
         // boot-time crypto-touching step in Phase 1, and it only reads the
         // keychain on an un-migrated (pre-password) install.
-        let (needs_password, needs_unlock, needs_recovery) = match crate::bootstrap::detect(
-            crate::secret_store::store().as_ref(),
-            &data_dir.join("keys"),
-        ) {
-            crate::bootstrap::BootstrapStatus::CreatePassword => (true, false, false),
-            crate::bootstrap::BootstrapStatus::EnterPassword => (false, true, false),
-            crate::bootstrap::BootstrapStatus::UseRecoveryCode => (false, false, true),
-        };
+        let (no_password, needs_password, needs_unlock, needs_recovery) =
+            match crate::bootstrap::detect(
+                crate::secret_store::store().as_ref(),
+                &data_dir.join("keys"),
+            ) {
+                crate::bootstrap::BootstrapStatus::NoPassword => (true, false, false, false),
+                crate::bootstrap::BootstrapStatus::CreatePassword => (false, true, false, false),
+                crate::bootstrap::BootstrapStatus::EnterPassword => (false, false, true, false),
+                crate::bootstrap::BootstrapStatus::UseRecoveryCode => (false, false, false, true),
+            };
 
         // A previous launch that crashed or was force-killed never ran its
         // `Child`'s `Drop` (`kill_on_drop` only fires on a clean exit), so
@@ -241,6 +245,7 @@ impl BootState {
             needs_recovery: AtomicBool::new(needs_recovery),
             needs_password: AtomicBool::new(needs_password),
             needs_unlock: AtomicBool::new(needs_unlock),
+            no_password: AtomicBool::new(no_password),
             legacy_skills_dir_existed,
             _log_guard: log_guard,
             log_writer,
@@ -249,18 +254,19 @@ impl BootState {
     }
 }
 
-/// Phase 2, unlock: derive/hold the DEK, load every store, build and manage
-/// `AppState`, and start the tickers that must not run before a store
-/// exists to write into (`idle::run`/`parental::run`). Shared by
-/// `commands::create_password`/`unlock_with_password` and `commands::
-/// attempt_recovery_unlock` (the one path builds `AppState`, so the three
-/// triggers can't drift apart). `dek` is always present: there is no
-/// unkeyed mode anymore (the old portable `dek: None` is gone — portable
-/// runs the same mandatory-password path; see `crate::bootstrap`).
+/// Phase 2, unlock: derive/hold the DEK (when a password is set), load every
+/// store, build and manage `AppState`, and start the tickers that must not
+/// run before a store exists to write into (`idle::run`/`parental::run`).
+/// Shared by `commands::start_without_password` (`dek: None` — the plaintext
+/// "no password = no encryption" layout), and `commands::create_password`/
+/// `unlock_with_password`/`attempt_recovery_unlock` (`dek: Some`), so every
+/// trigger builds `AppState` through the one path and the shapes can't drift
+/// apart. `Some` keys the connection and every encrypted store; `None`
+/// opens a plaintext database with plaintext rows, logs and backups.
 pub fn finish_unlock(
     app: &AppHandle,
     boot: &BootState,
-    dek: DataKey,
+    dek: Option<DataKey>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let paths = boot.paths.clone();
 
@@ -272,14 +278,14 @@ pub fn finish_unlock(
     // through this one connection.
     let app_db_path = paths.data_dir.join("app.sqlite");
     let (app_db_conn, app_db_was_fresh, app_db_version_before) =
-        openpal_core::app_db::open(&app_db_path, &dek)?;
+        openpal_core::app_db::open(&app_db_path, dek.as_ref())?;
     let app_db = Arc::new(Mutex::new(app_db_conn));
 
     // Move the app log from the pre-unlock plaintext `boot.log` to its real
-    // encrypted backend now that the DEK is known — see `crate::logging`'s
-    // own doc comment. `dek` is still borrowable here, strictly before it
-    // moves into the `AppState` literal below.
-    crate::logging::upgrade_to_encrypted(&boot.log_writer, &paths.logs_dir, &dek);
+    // backend now that the DEK (or its absence) is known — see
+    // `crate::logging`'s own doc comment. `dek` is still borrowable here,
+    // strictly before it moves into the `AppState` literal below.
+    crate::logging::upgrade_to_encrypted(&boot.log_writer, &paths.logs_dir, dek.as_ref());
 
     let settings = openpal_core::settings::load(&app_db.lock().unwrap());
 
@@ -311,7 +317,7 @@ pub fn finish_unlock(
     // why this explicit, persisted, run-once step is required rather than
     // relying on `ChatMessage.id`'s `#[serde(default)]` alone.
     if app_db_version_before < 11 {
-        openpal_core::store::backfill_message_ids(&mut app_db.lock().unwrap(), &dek)?;
+        openpal_core::store::backfill_message_ids(&mut app_db.lock().unwrap(), dek.as_ref())?;
     }
 
     let parental_config_path = paths.data_dir.join("parental-config.json");
@@ -400,7 +406,7 @@ pub fn finish_unlock(
         logs_dir.clone(),
         crate::secret_store::store(),
     );
-    remote_backend.set_dek(Some(&dek));
+    remote_backend.set_dek(dek.as_ref());
 
     // Android's W^X policy forbids exec'ing the bundled `llama-server`
     // binary the way `SubprocessBackend` does — `RemoteBackend` (a paired
@@ -409,7 +415,7 @@ pub fn finish_unlock(
     #[cfg(not(target_os = "android"))]
     let engine = {
         let engine = Arc::new(EngineManager::new(logs_dir.clone()));
-        engine.set_dek(Some(&dek));
+        engine.set_dek(dek.as_ref());
         engine
     };
     #[cfg(target_os = "android")]
@@ -496,7 +502,7 @@ pub fn finish_unlock(
         hf_details_cache: tokio::sync::Mutex::new(HashMap::new()),
         hf_listing_cache: tokio::sync::Mutex::new(HashMap::new()),
         gguf_meta_cache: tokio::sync::Mutex::new(HashMap::new()),
-        dek,
+        dek: Mutex::new(dek),
         app_db,
         sync_clock,
     });
@@ -661,12 +667,17 @@ pub struct AppState {
     /// `commands::attempt_recovery_unlock`) before `finish_unlock` runs —
     /// the only thing any SQLCipher connection ever sees, via `PRAGMA key`,
     /// and the items key every conversation envelope is wrapped under (see
-    /// `openpal_core::crypto::vault`). Always present: `AppState` isn't
-    /// built at all while a key is still outstanding (see `BootState`'s doc
-    /// comment), so there's no "not unlocked yet" and no unkeyed portable
-    /// mode to represent here. `DataKey` has no `Clone` by design — every
-    /// consumer borrows this as `&state.dek`, never takes ownership.
-    pub dek: DataKey,
+    /// `openpal_core::crypto::vault`). `Some` on a password-protected
+    /// install, `None` on a no-password one (the plaintext "no encryption at
+    /// rest" layout). Wrapped in a `std::sync::Mutex` so the set-password /
+    /// remove-password flows can swap the live key (and the plaintext↔
+    /// encrypted conversion of the database it keys) in place without a
+    /// restart — every command reads it as
+    /// `state.dek.lock().unwrap().as_ref()` (or `.clone()` when it must hand
+    /// ownership to a spawned task), never `&state.dek` directly. `DataKey`
+    /// has no `Clone` by design — consumers borrow through the lock, never
+    /// take the key without wrapping it in the `Option`.
+    pub dek: Mutex<Option<DataKey>>,
     /// The app-wide SQLCipher database (`<data>/app.sqlite`) — conversations,
     /// projects, artifacts, settings, custom models, and plugin records.
     /// Opened, keyed, and migrated once in `finish_unlock`, before `dek`

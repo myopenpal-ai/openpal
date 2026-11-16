@@ -46,7 +46,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap().keep();
         crate::app_db::open(
             &dir.join("app.sqlite"),
-            &crate::crypto::key::DataKey::from_bytes([0x42; 32]),
+            Some(&crate::crypto::key::DataKey::from_bytes([0x42; 32])),
         )
         .unwrap()
         .0
@@ -177,7 +177,7 @@ mod tests {
 
         let (reopened, _, _) = crate::app_db::open(
             std::path::Path::new(&db_path),
-            &crate::crypto::key::DataKey::from_bytes([0x42; 32]),
+            Some(&crate::crypto::key::DataKey::from_bytes([0x42; 32])),
         )
         .unwrap();
         let s = load(&reopened);
@@ -227,7 +227,7 @@ mod tests {
 
         let (reopened, _, _) = crate::app_db::open(
             std::path::Path::new(&db_path),
-            &crate::crypto::key::DataKey::from_bytes([0x42; 32]),
+            Some(&crate::crypto::key::DataKey::from_bytes([0x42; 32])),
         )
         .unwrap();
         let s = load(&reopened);
@@ -288,7 +288,7 @@ mod tests {
 
         let (reopened, _, _) = crate::app_db::open(
             std::path::Path::new(&db_path),
-            &crate::crypto::key::DataKey::from_bytes([0x42; 32]),
+            Some(&crate::crypto::key::DataKey::from_bytes([0x42; 32])),
         )
         .unwrap();
         let s = load(&reopened);

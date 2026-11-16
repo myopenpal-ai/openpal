@@ -190,7 +190,7 @@ pub struct ExportData {
 pub fn read_export_data(
     conn: &Connection,
     include: &ExportCategories,
-    items_key: &DataKey,
+    items_key: Option<&DataKey>,
 ) -> ExportData {
     let mut skipped = 0;
     let (conversations, projects, artifacts) = if include.chats {
@@ -401,7 +401,7 @@ impl Seek for ByteCounter {
 fn read_conversations(
     conn: &Connection,
     skipped: &mut usize,
-    items_key: &DataKey,
+    items_key: Option<&DataKey>,
 ) -> Vec<(String, String)> {
     let mut stmt = match conn.prepare("SELECT id, data FROM conversations") {
         Ok(stmt) => stmt,
@@ -515,7 +515,7 @@ pub(crate) mod tests {
     /// `.keep()` is used here.
     fn test_conn() -> Connection {
         let dir = tempfile::tempdir().unwrap().keep();
-        crate::app_db::open(&dir.join("app.sqlite"), &test_items_key())
+        crate::app_db::open(&dir.join("app.sqlite"), Some(&test_items_key()))
             .unwrap()
             .0
     }
@@ -529,7 +529,7 @@ pub(crate) mod tests {
     /// with a recognisable name, a skill with a supporting file, a
     /// local-file custom model whose file doesn't exist, and a plugin record
     /// that says enabled and set up.
-    pub(crate) fn populate_every_category(conn: &mut Connection, items_key: &DataKey) {
+    pub(crate) fn populate_every_category(conn: &mut Connection, items_key: Option<&DataKey>) {
         crate::store::save(conn, &conversation("conv-1"), items_key).unwrap();
         crate::projects::save(
             conn,
@@ -607,7 +607,7 @@ pub(crate) mod tests {
     fn export_zip_contains_everything_with_correct_layout() {
         let tmp = tempfile::tempdir().unwrap();
         let conn = test_conn();
-        crate::store::save(&conn, &conversation("conv-1"), &test_items_key()).unwrap();
+        crate::store::save(&conn, &conversation("conv-1"), Some(&test_items_key())).unwrap();
         crate::projects::save(
             &conn,
             &Project {
@@ -620,7 +620,7 @@ pub(crate) mod tests {
         .unwrap();
         crate::artifacts::save(&conn, "conv-1", "art-1", "report.md", "# Report").unwrap();
 
-        let data = read_export_data(&conn, &ExportCategories::ALL, &test_items_key());
+        let data = read_export_data(&conn, &ExportCategories::ALL, Some(&test_items_key()));
         let dest = tmp.path().join("export.zip");
         let summary = write_export_zip(&data, &dest).unwrap();
 
@@ -666,7 +666,7 @@ pub(crate) mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let conn = test_conn();
 
-        let data = read_export_data(&conn, &ExportCategories::ALL, &test_items_key());
+        let data = read_export_data(&conn, &ExportCategories::ALL, Some(&test_items_key()));
         let summary = write_export_zip(&data, &tmp.path().join("export.zip")).unwrap();
         assert_eq!(
             (
@@ -688,7 +688,7 @@ pub(crate) mod tests {
     #[test]
     fn a_row_that_fails_to_extract_at_the_sql_level_is_skipped_not_fatal() {
         let conn = test_conn();
-        crate::store::save(&conn, &conversation("conv-1"), &test_items_key()).unwrap();
+        crate::store::save(&conn, &conversation("conv-1"), Some(&test_items_key())).unwrap();
         conn.execute(
             "INSERT INTO conversations \
              (id, title, created_at_ms, updated_at_ms, message_count, task_type, data) \
@@ -697,7 +697,7 @@ pub(crate) mod tests {
         )
         .unwrap();
 
-        let data = read_export_data(&conn, &ExportCategories::ALL, &test_items_key());
+        let data = read_export_data(&conn, &ExportCategories::ALL, Some(&test_items_key()));
         assert_eq!(
             data.conversations.len(),
             1,
@@ -718,9 +718,9 @@ pub(crate) mod tests {
     fn everything_ticked_carries_every_category() {
         let tmp = tempfile::tempdir().unwrap();
         let mut conn = test_conn();
-        populate_every_category(&mut conn, &test_items_key());
+        populate_every_category(&mut conn, Some(&test_items_key()));
 
-        let data = read_export_data(&conn, &ExportCategories::ALL, &test_items_key());
+        let data = read_export_data(&conn, &ExportCategories::ALL, Some(&test_items_key()));
         let dest = tmp.path().join("export.zip");
         let summary = write_export_zip(&data, &dest).unwrap();
 
@@ -775,7 +775,7 @@ pub(crate) mod tests {
     fn an_unticked_category_contributes_nothing() {
         let tmp = tempfile::tempdir().unwrap();
         let mut conn = test_conn();
-        populate_every_category(&mut conn, &test_items_key());
+        populate_every_category(&mut conn, Some(&test_items_key()));
 
         let cases: [(ExportCategories, &[&str]); 5] = [
             (
@@ -816,7 +816,11 @@ pub(crate) mod tests {
         ];
         for (include, absent_prefixes) in cases {
             let dest = tmp.path().join("export.zip");
-            write_export_zip(&read_export_data(&conn, &include, &test_items_key()), &dest).unwrap();
+            write_export_zip(
+                &read_export_data(&conn, &include, Some(&test_items_key())),
+                &dest,
+            )
+            .unwrap();
             let names = entry_names(&dest);
             for prefix in absent_prefixes {
                 assert!(
@@ -835,7 +839,7 @@ pub(crate) mod tests {
     fn the_estimate_is_exactly_the_size_written() {
         let tmp = tempfile::tempdir().unwrap();
         let mut conn = test_conn();
-        populate_every_category(&mut conn, &test_items_key());
+        populate_every_category(&mut conn, Some(&test_items_key()));
         let big = "lorem ipsum dolor sit amet ".repeat(20_000);
         crate::artifacts::save(&conn, "conv-1", "art-2", "big.md", &big).unwrap();
 
@@ -853,7 +857,7 @@ pub(crate) mod tests {
                 plugins: false,
             },
         ] {
-            let data = read_export_data(&conn, &include, &test_items_key());
+            let data = read_export_data(&conn, &include, Some(&test_items_key()));
             let estimate = estimate_export_size(&data).unwrap();
             let dest = tmp.path().join("export.zip");
             write_export_zip(&data, &dest).unwrap();
@@ -877,7 +881,7 @@ pub(crate) mod tests {
         };
         // An empty zip is just its 22-byte end-of-central-directory record.
         assert_eq!(
-            estimate_export_size(&read_export_data(&conn, &none, &test_items_key())).unwrap(),
+            estimate_export_size(&read_export_data(&conn, &none, Some(&test_items_key()))).unwrap(),
             22
         );
     }
@@ -887,7 +891,7 @@ pub(crate) mod tests {
         let mut conn = test_conn();
         assert_eq!(count_export_contents(&conn), ExportCounts::default());
 
-        populate_every_category(&mut conn, &test_items_key());
+        populate_every_category(&mut conn, Some(&test_items_key()));
         crate::artifacts::save(&conn, "conv-1", "art-2", "notes.md", "Notes").unwrap();
         let mut settings = crate::settings::load(&conn);
         settings.onboarding_completed = true;

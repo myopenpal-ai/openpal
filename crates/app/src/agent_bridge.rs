@@ -100,7 +100,7 @@ pub async fn build_deps(
     endpoint: EngineEndpoint,
     sampling: SamplingParams,
     injection: Arc<TurnGuard>,
-    items_key: &DataKey,
+    items_key: Option<&DataKey>,
 ) -> Result<AgentDeps, String> {
     let http = turn_http_client()?;
     let home = std::env::var("HOME")
@@ -135,7 +135,7 @@ pub async fn build_deps(
         registry.register(Arc::new(ReadProjectConversationTool::new(
             conn,
             project_id,
-            items_key.clone(),
+            items_key.cloned(),
         )));
     }
 

@@ -1,8 +1,13 @@
-//! The mandatory-first-run-password model: `<data>/keys/password.wrap` is
-//! the one primary slot, replacing the OS-keychain-sealed `keychain.wrap`
-//! that used to be (see `docs/SPACES_AUTHORING.md` §9). The OS keychain no
-//! longer participates in the master key at all — `keyring` remains only for
-//! the account refresh token and the remote-pairing token (`secret_store`).
+//! The optional-password model: `<data>/keys/password.wrap` is the one
+//! primary slot when a password is set, replacing the OS-keychain-sealed
+//! `keychain.wrap` that used to be (see `docs/SPACES_AUTHORING.md` §9). The
+//! OS keychain no longer participates in the master key at all — `keyring`
+//! remains only for the account refresh token and the remote-pairing token
+//! (`secret_store`). An install with **no password** is tracked by an
+//! explicit `keys/nopass.marker` file (written on skip/remove, deleted on
+//! set) — see [`nopass_marker_path`] and [`BootstrapStatus::NoPassword`] —
+//! so legacy `keychain.wrap`/pre-password detection paths stay byte-for-byte
+//! unchanged.
 //!
 //! The shape is Standard Notes-pure: a password-derived root key wraps the
 //! items key (which also keys the SQLCipher database — `AppState.dek`), and
@@ -16,11 +21,12 @@
 //! between the pre-unlock and post-unlock phases.
 //!
 //! There is **no silent unlock**. `detect` classifies a launch into one of
-//! three frontend-gated states (`needs_password` → create, `needs_unlock` →
-//! enter, `needs_recovery` → a legacy pre-password install whose OS keychain
-//! can't produce the old DEK), and `AppState` is not built until
-//! `create_password`/`unlock_with_password`/`attempt_recovery_unlock` calls
-//! `state::finish_unlock`.
+//! four frontend-gated states (`no_password` → straight in with no
+//! encryption, `needs_password` → create, `needs_unlock` → enter,
+//! `needs_recovery` → a legacy pre-password install whose OS keychain can't
+//! produce the old DEK), and `AppState` is not built until
+//! `start_without_password`/`create_password`/`unlock_with_password`/
+//! `attempt_recovery_unlock` calls `state::finish_unlock`.
 //!
 //! ## Existing installs (the one-time migration)
 //!
@@ -63,12 +69,18 @@ pub enum BootstrapError {
     Wrap(#[from] wrap::WrapError),
 }
 
-/// Which of the three boot gates a launch is behind — computed once at boot
+/// Which of the four boot gates a launch is behind — computed once at boot
 /// (`state::BootState::initialize`) and surfaced to the frontend via
-/// `commands::get_app_info`'s `needs_password`/`needs_unlock`/
-/// `needs_recovery`.
+/// `commands::get_app_info`'s `password_set`/`needs_password`/
+/// `needs_unlock`/`needs_recovery`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BootstrapStatus {
+    /// The `keys/nopass.marker` exists and no `password.wrap` does: an
+    /// install that explicitly chose "continue without a password". Nothing
+    /// is encrypted at rest — the database, per-conversation rows, logs,
+    /// backups and exports are all plaintext. The frontend goes straight
+    /// in (no gate).
+    NoPassword,
     /// No `password.wrap` yet: a genuinely first-ever run, or a pre-password
     /// install's first post-upgrade launch (its migration happens inside the
     /// create-password run). The frontend shows the create-password screen.
@@ -85,6 +97,33 @@ pub enum BootstrapStatus {
     UseRecoveryCode,
 }
 
+/// The marker file whose existence means "this install deliberately runs
+/// with no password (no encryption at rest)". Written by the
+/// continue-without-a-password and remove-password flows; deleted by the
+/// create/change-password flows. Kept as its own file rather than inferred
+/// from `password.wrap`'s absence so that a *pre-password* (un-migrated)
+/// install — which also has no `password.wrap` — is still detected through
+/// the unchanged legacy `keychain.wrap` path.
+pub fn nopass_marker_path(keys_dir: &Path) -> std::path::PathBuf {
+    keys_dir.join("nopass.marker")
+}
+
+/// Record that this install runs with no password. Idempotent.
+pub fn write_no_password_marker(keys_dir: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(keys_dir)?;
+    std::fs::write(
+        nopass_marker_path(keys_dir),
+        b"openpal no-password mode: this install has no password set, so data is stored \
+          unencrypted on this device.\n",
+    )
+}
+
+/// Remove the no-password marker (when a password is created). Missing file
+/// is not an error.
+pub fn remove_no_password_marker(keys_dir: &Path) {
+    let _ = std::fs::remove_file(nopass_marker_path(keys_dir));
+}
+
 /// Classifies what this launch must ask the user for. Never errors — every
 /// state is one the frontend can render. The only side effect is the
 /// keychain read, and only on a pre-password (un-migrated) install: once
@@ -96,12 +135,22 @@ pub fn detect(secret_store: &dyn SecretStore, keys_dir: &Path) -> BootstrapStatu
     // A pre-password install: `keychain.wrap` is still the only holder of
     // its DEK until the migration writes `password.wrap`, so a keychain
     // that can't produce the old KEK routes to the recovery-code path
-    // exactly as the old `mint_or_unlock` did.
+    // exactly as the old `mint_or_unlock` did. Checked *before* the
+    // no-password marker on purpose: such an install's data is already
+    // encrypted under the keychain-sealed DEK, so the UI never offers (and
+    // never writes a marker for) "continue without a password" on it —
+    // were a stray marker to appear, routing to [`BootstrapStatus::NoPassword`]
+    // would open that keyed database without a key and fail, whereas
+    // create-password's adopt path recovers gracefully.
     if keys_dir.join("keychain.wrap").exists() {
         let keychain_ok = matches!(keychain::load(secret_store), KeyLookup::Found(_));
         if !keychain_ok && keys_dir.join("recovery.wrap").exists() {
             return BootstrapStatus::UseRecoveryCode;
         }
+        return BootstrapStatus::CreatePassword;
+    }
+    if nopass_marker_path(keys_dir).exists() {
+        return BootstrapStatus::NoPassword;
     }
     BootstrapStatus::CreatePassword
 }
@@ -175,4 +224,80 @@ pub fn unlock_with_password(keys_dir: &Path, password: &[u8]) -> Result<DataKey,
         return Err(BootstrapError::NoPasswordFile);
     }
     Ok(vault::open_password_file(&password_path, password)?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A `SecretStore` that answers nothing — `detect` only consults it on
+    /// a pre-password (`keychain.wrap`) install, which these tests exercise
+    /// via the file layout alone.
+    struct EmptyStore;
+
+    impl SecretStore for EmptyStore {
+        fn store(&self, _key: &str, _value: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn load(&self, key: &str) -> KeyLookup<String> {
+            let _ = key;
+            KeyLookup::Absent
+        }
+        fn delete(&self, key: &str) -> Result<(), String> {
+            let _ = key;
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn marker_routes_a_launch_to_no_password_mode() {
+        let dir = tempfile::tempdir().unwrap();
+        let keys = dir.path().join("keys");
+        assert_eq!(
+            detect(&EmptyStore, &keys),
+            BootstrapStatus::CreatePassword,
+            "a keys dir that doesn't exist yet is a first-ever run"
+        );
+
+        write_no_password_marker(&keys).unwrap();
+        assert_eq!(detect(&EmptyStore, &keys), BootstrapStatus::NoPassword);
+        assert!(nopass_marker_path(&keys).exists());
+
+        // A password created later overrides the marker.
+        let items_key = DataKey::from_bytes([0x42; 32]);
+        create_password_file(&keys, &items_key, b"hunter2").unwrap();
+        assert_eq!(
+            detect(&EmptyStore, &keys),
+            BootstrapStatus::EnterPassword,
+            "password.wrap wins over the marker once a password exists"
+        );
+
+        // And removing the password restores no-password mode.
+        std::fs::remove_file(vault::password_wrap_path(&keys)).unwrap();
+        assert_eq!(detect(&EmptyStore, &keys), BootstrapStatus::NoPassword);
+    }
+
+    #[test]
+    fn the_marker_leaves_legacy_detection_untouched() {
+        let dir = tempfile::tempdir().unwrap();
+        let keys = dir.path().join("keys");
+        // A pre-password install (keychain.wrap, no password.wrap, no
+        // marker): still classified through the unchanged legacy path.
+        std::fs::create_dir_all(&keys).unwrap();
+        std::fs::write(keys.join("keychain.wrap"), b"legacy").unwrap();
+        std::fs::write(keys.join("recovery.wrap"), b"legacy").unwrap();
+        assert_eq!(
+            detect(&EmptyStore, &keys),
+            BootstrapStatus::UseRecoveryCode,
+            "the marker must not change pre-password install detection"
+        );
+        // Writing a marker on top of a legacy install must not route to
+        // NoPassword — a legacy encrypted store can't be opened plaintext.
+        write_no_password_marker(&keys).unwrap();
+        assert_eq!(
+            detect(&EmptyStore, &keys),
+            BootstrapStatus::UseRecoveryCode,
+            "keychain.wrap detection stays ahead of the marker"
+        );
+    }
 }

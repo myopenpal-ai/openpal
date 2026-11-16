@@ -2054,6 +2054,18 @@ export const useStore = create<Store>()((set, get) => ({
     // `getSettings` et al. and leaving the app stuck on the bare titlebar
     // forever.
     const appInfo = await api.getAppInfo();
+    if (appInfo.noPassword) {
+      // This install deliberately runs with no password (the user chose
+      // "continue without a password", or removed it later): nothing is
+      // encrypted at rest. The backend still has to build its store — the
+      // one boot step the password commands perform — so offer the backend
+      // the explicit no-password start (idempotent), then load everything
+      // exactly like a normal unlock would.
+      await api.startWithoutPassword();
+      set({ appInfo });
+      await get().finishBootAfterUnlock();
+      return;
+    }
     if (appInfo.needsPassword || appInfo.needsUnlock) {
       // The mandatory-password gate (`PasswordGate`): first-run create, or
       // the every-launch unlock. Stop here and let the gate call

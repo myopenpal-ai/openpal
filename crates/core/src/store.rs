@@ -142,7 +142,7 @@ pub fn list(conn: &Connection) -> Vec<ConversationMeta> {
     metas
 }
 
-pub fn get(conn: &Connection, id: &str, items_key: &DataKey) -> Result<Conversation> {
+pub fn get(conn: &Connection, id: &str, items_key: Option<&DataKey>) -> Result<Conversation> {
     validate_id(id)?;
     let data: String = conn
         .query_row(
@@ -160,29 +160,45 @@ pub fn get(conn: &Connection, id: &str, items_key: &DataKey) -> Result<Conversat
 }
 
 /// The conversation JSON inside `data` — sealed under the per-conversation
-/// key in ordinary (post-migration) rows, or plaintext in a pre-envelope
-/// row mid-migration. Shared by [`get`], [`search`], and
-/// [`backfill_message_ids`], so every reader takes the same "envelope
-/// first, legacy plaintext second" posture.
-fn conversation_bytes(data: &str, items_key: &DataKey) -> Result<Vec<u8>> {
+/// key in an encrypted (`items_key: Some`) install, or stored as plaintext
+/// when no password is set (`items_key: None`). Shared by [`get`], [`search`],
+/// and [`backfill_message_ids`], so every reader takes the same "envelope
+/// first, plaintext second" posture.
+fn conversation_bytes(data: &str, items_key: Option<&DataKey>) -> Result<Vec<u8>> {
     if vault::is_envelope(data) {
         let envelope: ConversationEnvelope = serde_json::from_str(data)?;
-        Ok(envelope.open(items_key)?.to_vec())
+        // An envelope on a no-key install is an inconsistency (the
+        // remove-password rewrite ran before the key was dropped), so
+        // refuse loudly rather than pretend to read it.
+        let key = items_key.ok_or_else(|| {
+            Error::Crypto(
+                "this conversation is stored encrypted, but no encryption key is available"
+                    .to_string(),
+            )
+        })?;
+        Ok(envelope.open(key)?.to_vec())
     } else {
-        // A pre-envelope plaintext row (a legacy install partway through
-        // its one-time adopt — `rewrite_rows_as_envelopes` runs before any
-        // read in the normal migration path, this is the defensive edge).
+        // Plaintext mode (no password), or a pre-envelope plaintext row
+        // (a legacy install partway through its one-time adopt).
         Ok(data.as_bytes().to_vec())
     }
 }
 
-pub fn save(conn: &Connection, conversation: &Conversation, items_key: &DataKey) -> Result<()> {
+pub fn save(
+    conn: &Connection,
+    conversation: &Conversation,
+    items_key: Option<&DataKey>,
+) -> Result<()> {
     validate_id(&conversation.id)?;
     let plaintext = serde_json::to_string_pretty(conversation)?;
-    let data = serde_json::to_string(&ConversationEnvelope::seal(
-        items_key,
-        plaintext.as_bytes(),
-    )?)?;
+    // `items_key: None` is the no-password layout: the row holds the
+    // conversation JSON as plaintext (nothing to seal with).
+    let data = match items_key {
+        Some(key) => {
+            serde_json::to_string(&ConversationEnvelope::seal(key, plaintext.as_bytes())?)?
+        }
+        None => plaintext,
+    };
     let task_type = serde_json::to_string(&conversation.task_type)?;
     // An upsert rather than `INSERT OR REPLACE`, which deletes and
     // re-inserts the row and so would reset `unread` to its default.
@@ -285,7 +301,67 @@ pub fn rewrite_rows_as_envelopes(conn: &mut Connection, items_key: &DataKey) -> 
     Ok(migrated)
 }
 
-/// One-time migration companion to `crate::skills::migrate_legacy_skills` —
+/// The reverse of [`rewrite_rows_as_envelopes`], run by the remove-password
+/// flow (`crates/app`'s `commands::remove_password`) before the items key
+/// is dropped: unwraps every envelope row back to the plaintext
+/// `conversations.data` the no-password layout stores, in place, ids
+/// preserved. Needs `items_key` — unsealing an envelope requires it; a row
+/// whose `data` is already plaintext is left untouched (idempotent, mirroring
+/// its encrypting sibling's re-run safety). A row whose envelope won't open
+/// (tampered, or a foreign key) is left as-is with a warning and skipped by
+/// the count — the reader keeps skipping it, never destroyed.
+///
+/// Returns how many rows were migrated (0 on a re-run).
+pub fn rewrite_rows_as_plaintext(conn: &mut Connection, items_key: &DataKey) -> Result<usize> {
+    let tx = conn.transaction()?;
+    let rows: Vec<(String, String)> = {
+        let mut stmt = tx.prepare("SELECT id, data FROM conversations")?;
+        let mapped = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        let mut out = Vec::new();
+        for row in mapped {
+            out.push(row?);
+        }
+        out
+    };
+    let mut migrated = 0usize;
+    for (id, data) in rows {
+        if !vault::is_envelope(&data) {
+            continue;
+        }
+        let envelope: ConversationEnvelope = match serde_json::from_str(&data) {
+            Ok(envelope) => envelope,
+            Err(e) => {
+                tracing::warn!(
+                    "rewrite_rows_as_plaintext: skipping conversation {id} with an unparseable \
+                     envelope: {e}"
+                );
+                continue;
+            }
+        };
+        let plaintext = match envelope.open(items_key) {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                tracing::warn!(
+                    "rewrite_rows_as_plaintext: skipping conversation {id} whose envelope won't \
+                     open: {e}"
+                );
+                continue;
+            }
+        };
+        // The envelope's content preserves the stored plaintext verbatim
+        // (`ConversationEnvelope::seal` never re-serialized), so the
+        // decrypted bytes go straight into the `data` column.
+        tx.execute(
+            "UPDATE conversations SET data = ?1 WHERE id = ?2",
+            params![String::from_utf8_lossy(&plaintext), id],
+        )?;
+        migrated += 1;
+    }
+    tx.commit()?;
+    Ok(migrated)
+}
 /// mints and persists a stable `id` for every message in every conversation
 /// whose on-disk data predates `ChatMessage.id`. Called once by
 /// `crate::state::finish_unlock` (in `crates/app`), gated on the schema
@@ -323,7 +399,7 @@ pub fn rewrite_rows_as_envelopes(conn: &mut Connection, items_key: &DataKey) -> 
 /// Idempotent overall: a row whose messages already all have `"id"` is left
 /// completely untouched (not even rewritten, so no re-seal either), so a
 /// second call is a no-op.
-pub fn backfill_message_ids(conn: &mut Connection, items_key: &DataKey) -> Result<()> {
+pub fn backfill_message_ids(conn: &mut Connection, items_key: Option<&DataKey>) -> Result<()> {
     let tx = conn.transaction()?;
 
     // Pass 1: `conversations.data` — remember the id assigned to each
@@ -375,10 +451,15 @@ pub fn backfill_message_ids(conn: &mut Connection, items_key: &DataKey) -> Resul
             }
         }
         if changed {
-            let new_data = serde_json::to_string(&ConversationEnvelope::seal(
-                items_key,
-                serde_json::to_string_pretty(&value)?.as_bytes(),
-            )?)?;
+            let pretty = serde_json::to_string_pretty(&value)?;
+            // Seal under the items key in an encrypted install, or keep the
+            // row plaintext when no password is set.
+            let new_data = match items_key {
+                Some(key) => {
+                    serde_json::to_string(&ConversationEnvelope::seal(key, pretty.as_bytes())?)?
+                }
+                None => pretty,
+            };
             tx.execute(
                 "UPDATE conversations SET data = ?1 WHERE id = ?2",
                 params![new_data, conversation_id],
@@ -473,7 +554,7 @@ const SNIPPET_CONTEXT_CHARS: usize = 60;
 pub fn search(
     conn: &Connection,
     query: &str,
-    items_key: &DataKey,
+    items_key: Option<&DataKey>,
 ) -> Vec<ConversationSearchResult> {
     let query_chars: Vec<char> = query.trim().chars().collect();
     if query_chars.is_empty() {
@@ -616,7 +697,7 @@ mod tests {
     /// harmless for a short-lived test process.
     fn test_conn() -> Connection {
         let dir = tempfile::tempdir().unwrap().keep();
-        crate::app_db::open(&dir.join("app.sqlite"), &test_items_key())
+        crate::app_db::open(&dir.join("app.sqlite"), Some(&test_items_key()))
             .unwrap()
             .0
     }
@@ -630,16 +711,16 @@ mod tests {
     // Local keyed shims over the real store API, so the fixtures below read
     // as before while every conversation write/read is envelope-shaped.
     fn save(conn: &Connection, conversation: &Conversation) -> Result<()> {
-        super::save(conn, conversation, &test_items_key())
+        super::save(conn, conversation, Some(&test_items_key()))
     }
     fn get(conn: &Connection, id: &str) -> Result<Conversation> {
-        super::get(conn, id, &test_items_key())
+        super::get(conn, id, Some(&test_items_key()))
     }
     fn search(conn: &Connection, query: &str) -> Vec<ConversationSearchResult> {
-        super::search(conn, query, &test_items_key())
+        super::search(conn, query, Some(&test_items_key()))
     }
     fn backfill_message_ids(conn: &mut Connection) -> Result<()> {
-        super::backfill_message_ids(conn, &test_items_key())
+        super::backfill_message_ids(conn, Some(&test_items_key()))
     }
 
     fn conversation(id: &str, updated_at_ms: u64) -> Conversation {
@@ -729,11 +810,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("app.sqlite");
         {
-            let (conn, _, _) = crate::app_db::open(&path, &test_items_key()).unwrap();
+            let (conn, _, _) = crate::app_db::open(&path, Some(&test_items_key())).unwrap();
             save(&conn, &conversation("conv-1", 100)).unwrap();
             set_unread(&conn, "conv-1", true).unwrap();
         }
-        let (conn, _, _) = crate::app_db::open(&path, &test_items_key()).unwrap();
+        let (conn, _, _) = crate::app_db::open(&path, Some(&test_items_key())).unwrap();
         assert!(
             list(&conn)[0].unread,
             "a relaunch must keep the New reply hint"
@@ -1101,7 +1182,87 @@ mod tests {
         let conn = test_conn();
         save(&conn, &conversation("conv-1", 100)).unwrap();
         let wrong_key = DataKey::from_bytes([0x99; 32]);
-        assert!(super::get(&conn, "conv-1", &wrong_key).is_err());
+        assert!(super::get(&conn, "conv-1", Some(&wrong_key)).is_err());
+    }
+
+    #[test]
+    fn no_password_mode_stores_and_reads_plaintext_rows() {
+        // `items_key: None` is the no-password layout: the row holds the
+        // conversation JSON as plaintext — nothing sealed, matching the
+        // unencrypted-at-rest Standard Notes model.
+        let conn = test_conn();
+        super::save(
+            &conn,
+            &conversation_with("conv-1", 7, "Chat conv-1", "secret-7"),
+            None,
+        )
+        .unwrap();
+        let raw: String = conn
+            .query_row(
+                "SELECT data FROM conversations WHERE id = 'conv-1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(
+            !crate::crypto::vault::is_envelope(&raw),
+            "a no-password row must not be an envelope"
+        );
+        assert!(
+            raw.contains("secret-7"),
+            "plaintext content must be visible in the row"
+        );
+
+        let got = super::get(&conn, "conv-1", None).unwrap();
+        assert_eq!(got.messages[0].content, "secret-7");
+    }
+
+    #[test]
+    fn rewrite_rows_as_plaintext_unwraps_every_envelope_and_is_idempotent() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.sqlite");
+        // Start encrypted: envelopes in the store.
+        {
+            let (conn, _, _) = crate::app_db::open(&path, Some(&test_items_key())).unwrap();
+            super::save(
+                &conn,
+                &conversation_with("conv-1", 3, "Chat conv-1", "secret-3"),
+                Some(&test_items_key()),
+            )
+            .unwrap();
+            super::save(
+                &conn,
+                &conversation_with("conv-2", 5, "Chat conv-2", "secret-5"),
+                Some(&test_items_key()),
+            )
+            .unwrap();
+        }
+        let mut conn = crate::app_db::open(&path, Some(&test_items_key()))
+            .unwrap()
+            .0;
+
+        // The remove-password rewrite: every envelope back to plaintext
+        // JSON, so a later `None` open can read them (the key is dropped
+        // only after this succeeds in the real flow).
+        let migrated = super::rewrite_rows_as_plaintext(&mut conn, &test_items_key()).unwrap();
+        assert_eq!(migrated, 2);
+        drop(conn);
+        // Mirror the remove-password flow: the whole database is converted
+        // back to plaintext before a `None` open can read it.
+        crate::app_db::decrypt_to_plaintext(&path, &test_items_key()).unwrap();
+        let (conn, _, _) = crate::app_db::open(&path, None).unwrap();
+        let a = super::get(&conn, "conv-1", None).unwrap();
+        assert_eq!(a.messages[0].content, "secret-3");
+        let b = super::get(&conn, "conv-2", None).unwrap();
+        assert_eq!(b.messages[0].content, "secret-5");
+
+        // Idempotent: a re-run rewrites nothing (rows are already plaintext).
+        drop(conn);
+        let mut conn = crate::app_db::open(&path, None).unwrap().0;
+        assert_eq!(
+            super::rewrite_rows_as_plaintext(&mut conn, &test_items_key()).unwrap(),
+            0
+        );
     }
 
     #[test]

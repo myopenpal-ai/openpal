@@ -43,6 +43,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::ipc::Channel;
+use tauri::Emitter;
 use tauri::Manager;
 use tauri::State;
 
@@ -1410,20 +1411,31 @@ pub struct AppInfo {
     portable: bool,
     data_dir: String,
     version: String,
+    /// Whether `password.wrap` exists — a password is set and data is
+    /// encrypted at rest. Read off disk, so it stays correct whatever the
+    /// boot flags below say; the Settings → Security section uses it to
+    /// show set/change/remove.
+    password_set: bool,
+    /// Whether this install deliberately runs with no password (the
+    /// `keys/nopass.marker` exists): no encryption at rest — the Standard
+    /// Notes "no account, no passcode" layout. The frontend skips the boot
+    /// gate and calls `start_without_password` to build state.
+    no_password: bool,
     /// Whether the first-run password ceremony still needs to run — no
     /// `password.wrap` exists yet (a genuinely first-ever run, or a
     /// pre-password install's first post-upgrade launch). Drives the
-    /// create-password gate; mutually exclusive with `needs_unlock` and
-    /// `needs_recovery`.
+    /// create-password gate, which also offers "continue without a password"
+    /// when `can_start_without_password`; mutually exclusive with
+    /// `needs_unlock` and `needs_recovery`.
     needs_password: bool,
     /// Whether the user must enter their password (`password.wrap` exists)
     /// to unlock — the normal every-launch gate. Mutually exclusive with
     /// `needs_password` and `needs_recovery`.
     needs_unlock: bool,
     /// Whether the recovery-code ceremony (`generate_recovery_code` +
-    /// `confirm_recovery_code`) still needs to run: never true once
-    /// `recovery.wrap` exists — including in portable, which now runs the
-    /// same password + recovery model. Drives whether the UI nags the user
+    /// `confirm_recovery_code`) still needs to run — only meaningful on a
+    /// password-protected install (never true when `password_set` is
+    /// false): `recovery.wrap` exists. Drives whether the UI nags the user
     /// to set up recovery.
     needs_recovery_setup: bool,
     /// Whether the legacy pre-password migration needs a recovery code before
@@ -1432,6 +1444,12 @@ pub struct AppInfo {
     /// password and chose the recovery fallback on the enter-password screen.
     /// See `BootState::needs_recovery` / `bootstrap::BootstrapStatus`.
     needs_recovery: bool,
+    /// Whether the "continue without a password" skip may be offered on the
+    /// create-password gate: false only on a legacy pre-password install
+    /// (`keychain.wrap` present) whose already-encrypted database can't be
+    /// adopted without a password — everything else (a fresh install, or a
+    /// legacy plaintext portable store) can stay or become plaintext.
+    can_start_without_password: bool,
     /// Whether the app-lock PIN (`openpal_core::applock`) is turned on.
     /// Recomputed fresh from `applock.json` on every call, same as
     /// `needs_recovery_setup` — never cached, since this must stay correct
@@ -1459,19 +1477,26 @@ pub fn get_app_info(
     state: State<'_, BootState>,
     notifications: State<'_, Notifications>,
 ) -> AppInfo {
+    let keys_dir = state.paths.data_dir.join("keys");
+    let password_set = keys_dir.join("password.wrap").exists();
     AppInfo {
         portable: state.paths.portable,
         data_dir: state.paths.data_dir.display().to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
+        password_set,
+        no_password: state.no_password.load(Ordering::Relaxed),
         needs_password: state.needs_password.load(Ordering::Relaxed),
         needs_unlock: state.needs_unlock.load(Ordering::Relaxed),
-        needs_recovery_setup: !state
-            .paths
-            .data_dir
-            .join("keys")
-            .join("recovery.wrap")
-            .exists(),
+        // The recovery-code ceremony only exists for password-protected
+        // installs — a no-password install has nothing to protect, so no
+        // recovery nag.
+        needs_recovery_setup: password_set && !keys_dir.join("recovery.wrap").exists(),
         needs_recovery: state.needs_recovery.load(Ordering::Relaxed),
+        // A legacy pre-password install's data is already encrypted under
+        // the keychain-sealed DEK — it can't be "continued without a
+        // password". Everything else (fresh install, legacy plaintext
+        // portable store, or the marker'd no-password install itself) can.
+        can_start_without_password: !keys_dir.join("keychain.wrap").exists(),
         needs_app_unlock: openpal_core::applock::load_config(
             &state.paths.data_dir.join("applock.json"),
         )
@@ -2475,6 +2500,9 @@ async fn agent_chat_turn(
         ),
     }
 
+    // Copy the key out of the lock before the await below — a `MutexGuard`
+    // held across an `.await` would make this future non-`Send`.
+    let items_key = state.dek.lock().unwrap().clone();
     let deps = agent_bridge::build_deps(
         &workspace_dir,
         &state.paths.data_dir,
@@ -2486,7 +2514,7 @@ async fn agent_chat_turn(
         endpoint.clone(),
         *sampling,
         injection,
-        &state.dek,
+        items_key.as_ref(),
     )
     .await
     .inspect_err(|e| {
@@ -3533,7 +3561,12 @@ pub fn list_conversations(state: State<'_, AppState>) -> Result<Vec<Conversation
 
 #[tauri::command]
 pub fn get_conversation(state: State<'_, AppState>, id: String) -> Result<Conversation, String> {
-    store::get(&state.app_db.lock().unwrap(), &id, &state.dek).map_err(friendly)
+    store::get(
+        &state.app_db.lock().unwrap(),
+        &id,
+        state.dek.lock().unwrap().as_ref(),
+    )
+    .map_err(friendly)
 }
 
 #[tauri::command]
@@ -3551,12 +3584,17 @@ pub async fn save_conversation(
                 &state.sync_clock,
                 &deps.sync_key,
                 &deps.mailbox_id,
-                &state.dek,
+                state.dek.lock().unwrap().as_ref(),
             )
             .map_err(friendly);
         }
     }
-    store::save(&state.app_db.lock().unwrap(), &conversation, &state.dek).map_err(friendly)
+    store::save(
+        &state.app_db.lock().unwrap(),
+        &conversation,
+        state.dek.lock().unwrap().as_ref(),
+    )
+    .map_err(friendly)
 }
 
 #[tauri::command]
@@ -3615,7 +3653,7 @@ pub fn search_conversations(
     Ok(store::search(
         &state.app_db.lock().unwrap(),
         &query,
-        &state.dek,
+        state.dek.lock().unwrap().as_ref(),
     ))
 }
 
@@ -3717,12 +3755,17 @@ pub async fn delete_project(state: State<'_, AppState>, id: String) -> Result<()
                 &state.sync_clock,
                 &deps.sync_key,
                 &deps.mailbox_id,
-                &state.dek,
+                state.dek.lock().unwrap().as_ref(),
             )
             .map_err(friendly);
         }
     }
-    projects::delete(&state.app_db.lock().unwrap(), &id, &state.dek).map_err(friendly)
+    projects::delete(
+        &state.app_db.lock().unwrap(),
+        &id,
+        state.dek.lock().unwrap().as_ref(),
+    )
+    .map_err(friendly)
 }
 
 /// Move a conversation into `project_id`, or out of whatever project it's in
@@ -3745,7 +3788,8 @@ pub async fn set_conversation_project(
         if let Some(deps) = sync_deps(&state) {
             let mut conn = state.app_db.lock().unwrap();
             let mut conversation =
-                store::get(&conn, &conversation_id, &state.dek).map_err(friendly)?;
+                store::get(&conn, &conversation_id, state.dek.lock().unwrap().as_ref())
+                    .map_err(friendly)?;
             conversation.project_id = project_id;
             return openpal_core::sync::capture::save_conversation_synced(
                 &mut conn,
@@ -3753,15 +3797,16 @@ pub async fn set_conversation_project(
                 &state.sync_clock,
                 &deps.sync_key,
                 &deps.mailbox_id,
-                &state.dek,
+                state.dek.lock().unwrap().as_ref(),
             )
             .map_err(friendly);
         }
     }
     let conn = state.app_db.lock().unwrap();
-    let mut conversation = store::get(&conn, &conversation_id, &state.dek).map_err(friendly)?;
+    let mut conversation = store::get(&conn, &conversation_id, state.dek.lock().unwrap().as_ref())
+        .map_err(friendly)?;
     conversation.project_id = project_id;
-    store::save(&conn, &conversation, &state.dek).map_err(friendly)
+    store::save(&conn, &conversation, state.dek.lock().unwrap().as_ref()).map_err(friendly)
 }
 
 /// Rename a conversation from the sidebar's row menu. A read-modify-write on
@@ -3783,7 +3828,8 @@ pub async fn set_conversation_title(
         if let Some(deps) = sync_deps(&state) {
             let mut conn = state.app_db.lock().unwrap();
             let mut conversation =
-                store::get(&conn, &conversation_id, &state.dek).map_err(friendly)?;
+                store::get(&conn, &conversation_id, state.dek.lock().unwrap().as_ref())
+                    .map_err(friendly)?;
             conversation.title = title;
             return openpal_core::sync::capture::save_conversation_synced(
                 &mut conn,
@@ -3791,15 +3837,16 @@ pub async fn set_conversation_title(
                 &state.sync_clock,
                 &deps.sync_key,
                 &deps.mailbox_id,
-                &state.dek,
+                state.dek.lock().unwrap().as_ref(),
             )
             .map_err(friendly);
         }
     }
     let conn = state.app_db.lock().unwrap();
-    let mut conversation = store::get(&conn, &conversation_id, &state.dek).map_err(friendly)?;
+    let mut conversation = store::get(&conn, &conversation_id, state.dek.lock().unwrap().as_ref())
+        .map_err(friendly)?;
     conversation.title = title;
-    store::save(&conn, &conversation, &state.dek).map_err(friendly)
+    store::save(&conn, &conversation, state.dek.lock().unwrap().as_ref()).map_err(friendly)
 }
 
 /// Pin/unpin a conversation from the sidebar's row menu. Synced as its own
@@ -3823,15 +3870,16 @@ pub async fn set_conversation_pinned(
                 &state.sync_clock,
                 &deps.sync_key,
                 &deps.mailbox_id,
-                &state.dek,
+                state.dek.lock().unwrap().as_ref(),
             )
             .map_err(friendly);
         }
     }
     let conn = state.app_db.lock().unwrap();
-    let mut conversation = store::get(&conn, &conversation_id, &state.dek).map_err(friendly)?;
+    let mut conversation = store::get(&conn, &conversation_id, state.dek.lock().unwrap().as_ref())
+        .map_err(friendly)?;
     conversation.pinned = pinned;
-    store::save(&conn, &conversation, &state.dek).map_err(friendly)
+    store::save(&conn, &conversation, state.dek.lock().unwrap().as_ref()).map_err(friendly)
 }
 
 /// Set or clear a conversation's "New reply" hint in the sidebar — set when
@@ -4288,30 +4336,34 @@ pub async fn sign_out(state: State<'_, AppState>) -> Result<(), String> {
 }
 
 // ---------------------------------------------------------------------------
-// Mandatory password (create / unlock / change)
+// Password (create / unlock / change / set / remove)
 //
 // `password.wrap` is the one primary slot (see `crate::bootstrap` and
-// `openpal_core::crypto::vault`). All three commands take `State<'_, BootState>`
-// — never `AppState`, which doesn't exist until `create_password` or
-// `unlock_with_password` succeeds — and finish by calling the same
-// `state::finish_unlock` the recovery command uses.
+// `openpal_core::crypto::vault`); its absence — with `keys/nopass.marker`
+// present — is the no-password, no-encryption layout. All the boot commands
+// take `State<'_, BootState>` — never `AppState`, which doesn't exist until
+// `start_without_password`/`create_password`/`unlock_with_password`
+// succeeds — and finish by calling the same `state::finish_unlock` the
+// recovery command uses. `set_password`/`remove_password` run post-unlock
+// and convert the live store in place (see each one's doc comment).
 // ---------------------------------------------------------------------------
 
 /// First-run password creation. On a genuinely new install it mints a fresh
 /// items key; on a pre-password install it ADOPTS the existing DEK (from the
 /// OS-keychain-wrapped `keychain.wrap`) so old recovery codes keep working
-/// and the already-SQLCipher-keyed `app.sqlite` opens unchanged. Then, in
-/// order:
+/// and the already-SQLCipher-keyed `app.sqlite` opens unchanged; on a
+/// no-password install it mints a fresh key and converts the plaintext
+/// store to encrypted. Then, in order:
 ///
-/// 1. Converts a legacy plaintext `app.sqlite` (pre-password portable) to
-///    the keyed layout in place (`openpal_core::app_db::
-///    encrypt_legacy_plaintext`).
+/// 1. Converts a legacy plaintext `app.sqlite` (pre-password portable, or a
+///    current no-password install setting a password) to the keyed layout in
+///    place (`openpal_core::app_db::encrypt_legacy_plaintext`).
 /// 2. Adopts every pre-envelope conversation row into the per-conversation
 ///    envelope layout (`openpal_core::store::rewrite_rows_as_envelopes`).
 /// 3. Writes `password.wrap` — LAST, only once both data migrations
 ///    succeeded, so a crash mid-migration never leaves a
 ///    `password.wrap`-with-unmigrated-data split (the file's existence is
-///    the install's "migrated" marker).
+///    the install's "migrated" marker), and removes the no-password marker.
 /// 4. Builds `AppState` (`state::finish_unlock`).
 ///
 /// Idempotent (a no-op once `AppState` is managed), like
@@ -4354,7 +4406,7 @@ pub fn create_password(
     //    idempotent, so a re-run on a half-migrated install is safe.
     {
         let (mut conn, _was_fresh, _version_before) =
-            openpal_core::app_db::open(&app_db_path, &items_key)
+            openpal_core::app_db::open(&app_db_path, Some(&items_key))
                 .map_err(|e| friendly(CoreError::from(e)))?;
         let migrated = openpal_core::store::rewrite_rows_as_envelopes(&mut conn, &items_key)
             .map_err(friendly)?;
@@ -4366,17 +4418,53 @@ pub fn create_password(
     }
 
     // 3. Mark the install migrated — written strictly after the data below
-    //    it succeeded.
+    //    it succeeded. (A no-password install's marker, if any, is cleared
+    //    at the same moment: a password now exists.)
     bootstrap::create_password_file(&keys_dir, &items_key, password.as_bytes())
         .map_err(bootstrap_friendly)?;
+    bootstrap::remove_no_password_marker(&keys_dir);
 
     // 4. Build `AppState`.
-    crate::state::finish_unlock(&app, &state, items_key).map_err(|e| {
+    crate::state::finish_unlock(&app, &state, Some(items_key)).map_err(|e| {
         tracing::error!("created the password, but couldn't finish booting: {e}");
         "Your password was created, but OpenPal couldn't finish starting up. Please restart \
          OpenPal."
             .to_string()
     })?;
+    state.no_password.store(false, Ordering::Relaxed);
+    state.needs_password.store(false, Ordering::Relaxed);
+    state.needs_unlock.store(false, Ordering::Relaxed);
+    state.needs_recovery.store(false, Ordering::Relaxed);
+    Ok(())
+}
+
+/// The first-run "continue without a password" choice (or the every-launch
+/// straight-in of an install that chose it before): records the choice in
+/// `keys/nopass.marker` (idempotent), then builds `AppState` with no DEK —
+/// the plaintext "no account, no passcode = no encryption at rest" layout.
+/// The database is opened unkeyed, conversation rows stay plaintext, and
+/// logs/backups/exports are written in the clear. Only offered when
+/// `get_app_info`'s `canStartWithoutPassword` is true (never on a legacy
+/// pre-password install whose data is already encrypted). Idempotent like the
+/// other boot commands.
+#[tauri::command]
+pub fn start_without_password(
+    app: tauri::AppHandle,
+    state: State<'_, BootState>,
+) -> Result<(), String> {
+    if app.try_state::<AppState>().is_some() {
+        return Ok(());
+    }
+    let keys_dir = state.paths.data_dir.join("keys");
+    crate::bootstrap::write_no_password_marker(&keys_dir).map_err(|e| {
+        tracing::error!("couldn't record the no-password choice: {e}");
+        "OpenPal couldn't start without a password. Please try again.".to_string()
+    })?;
+    crate::state::finish_unlock(&app, &state, None).map_err(|e| {
+        tracing::error!("no-password boot failed: {e}");
+        "OpenPal couldn't finish starting up. Please restart OpenPal.".to_string()
+    })?;
+    state.no_password.store(false, Ordering::Relaxed);
     state.needs_password.store(false, Ordering::Relaxed);
     state.needs_unlock.store(false, Ordering::Relaxed);
     state.needs_recovery.store(false, Ordering::Relaxed);
@@ -4404,10 +4492,11 @@ pub fn unlock_with_password(
             // as such rather than leaking whether it was a missing file.
             "Wrong password".to_string()
         })?;
-    crate::state::finish_unlock(&app, &state, items_key).map_err(|e| {
+    crate::state::finish_unlock(&app, &state, Some(items_key)).map_err(|e| {
         tracing::error!("unlocked, but couldn't finish booting: {e}");
         "OpenPal couldn't finish starting up. Please restart OpenPal.".to_string()
     })?;
+    state.no_password.store(false, Ordering::Relaxed);
     state.needs_password.store(false, Ordering::Relaxed);
     state.needs_unlock.store(false, Ordering::Relaxed);
     state.needs_recovery.store(false, Ordering::Relaxed);
@@ -4436,18 +4525,183 @@ pub fn change_password(
             "Wrong password".to_string()
         })?;
     // Sanity: the key currently in use must be the one `current` unlocks,
-    // or the change would silently orphan the data.
-    if current_root != state.dek {
+    // or the change would silently orphan the data (`Option` -> `None` on a
+    // no-password install is also a mismatch — the UI only offers this
+    // command when a password is set).
+    if Some(&current_root) != state.dek.lock().unwrap().as_ref() {
         tracing::error!(
             "password change: the verified password unlocks a different key than the running \
              session — refusing to re-wrap"
         );
         return Err("Wrong password".to_string());
     }
-    crate::bootstrap::change_password_file(&keys_dir, &state.dek, new.as_bytes()).map_err(|e| {
-        tracing::error!("password change failed: {e}");
-        "Something went wrong saving your new password. Please try again.".to_string()
+    crate::bootstrap::change_password_file(&keys_dir, &current_root, new.as_bytes()).map_err(
+        |e| {
+            tracing::error!("password change failed: {e}");
+            "Something went wrong saving your new password. Please try again.".to_string()
+        },
+    )?;
+    Ok(())
+}
+
+/// Whether a password is currently set — the field Settings → Security
+/// shows, read off disk (`password.wrap` exists) so it stays correct after
+/// `set_password`/`remove_password` without relying on the caller to pass
+/// back a result.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PasswordStatus {
+    password_set: bool,
+}
+
+/// Settings → Security's status query — reads off disk (`password.wrap`
+/// exists) so it stays correct after `set_password`/`remove_password`
+/// without relying on the caller to pass back a result.
+#[tauri::command]
+pub fn get_password_status(state: State<'_, AppState>) -> Result<PasswordStatus, String> {
+    let password_set = state
+        .paths
+        .data_dir
+        .join("keys")
+        .join("password.wrap")
+        .exists();
+    Ok(PasswordStatus { password_set })
+}
+
+/// Set a password on a no-password install (Settings → Security): converts
+/// the plaintext store to the encrypted layout and starts encrypting at
+/// rest — the Standard Notes "add a passcode" step, reversing
+/// [`remove_password`]. Runs entirely under `app_db`'s lock, then `dek`'s
+/// (the lock order used everywhere): it closes the plaintext connection,
+/// re-creates `app.sqlite` keyed under a freshly minted items key
+/// (`openpal_core::app_db::encrypt_legacy_plaintext`), rewrites every
+/// plaintext conversation row into its per-conversation envelope
+/// (`openpal_core::store::rewrite_rows_as_envelopes`), writes `password.wrap`
+/// and drops the `keys/nopass.marker`, then swaps the live DEK and switches
+/// logs to encrypted frames — all in one critical section, so no other
+/// command can read a half-converted store. Takes effect immediately, no
+/// restart.
+///
+/// This is the post-unlock form of the first-run `create_password`; unlike
+/// that command it never adopts a legacy keychain DEK — it is only reachable
+/// when no password is set, so it always mints a fresh items key.
+#[tauri::command]
+pub fn set_password(
+    app: tauri::AppHandle,
+    boot: State<'_, BootState>,
+    password: String,
+) -> Result<(), String> {
+    use crate::bootstrap;
+
+    if password.trim().is_empty() {
+        return Err("The password can't be empty.".to_string());
+    }
+    let state = app.state::<AppState>();
+    let keys_dir = state.paths.data_dir.join("keys");
+    let app_db_path = state.paths.data_dir.join("app.sqlite");
+    let items_key = openpal_core::crypto::key::DataKey::random();
+
+    // `app_db` first, then `dek` — the lock order every command follows.
+    let mut conn_guard = state.app_db.lock().unwrap();
+    let mut dek_guard = state.dek.lock().unwrap();
+
+    // Close the old plaintext connection before the in-place conversion: it
+    // holds the file open, and the swap below must start from a converted
+    // file (on Windows, renaming over an open file fails).
+    *conn_guard =
+        rusqlite::Connection::open_in_memory().map_err(|e| friendly(CoreError::from(e)))?;
+
+    // 1. Plaintext -> keyed, in place. `encrypt_legacy_plaintext`'s error
+    //    ("not a plaintext store") is swallowed the same way the first-run
+    //    command does; the keyed open below then sees the real state.
+    if app_db_path.exists() {
+        if let Err(e) = openpal_core::app_db::encrypt_legacy_plaintext(&app_db_path, &items_key) {
+            tracing::debug!("app.sqlite is not a legacy plaintext store ({e}); opening as keyed");
+        }
+    }
+    // 2. Reopen keyed and swap the in-memory connection.
+    let (new_conn, _, _) = openpal_core::app_db::open(&app_db_path, Some(&items_key))
+        .map_err(|e| friendly(CoreError::from(e)))?;
+    *conn_guard = new_conn;
+    // 3. Adopt every plaintext row into its envelope.
+    openpal_core::store::rewrite_rows_as_envelopes(&mut conn_guard, &items_key)
+        .map_err(friendly)?;
+    // 4. `password.wrap` LAST, then drop the no-password marker — the wrap
+    //    file's existence is the "migrated" marker (same ordering rule as
+    //    `create_password`).
+    bootstrap::create_password_file(&keys_dir, &items_key, password.as_bytes())
+        .map_err(bootstrap_friendly)?;
+    bootstrap::remove_no_password_marker(&keys_dir);
+    // 5. Swap the live DEK, then release the section.
+    *dek_guard = Some(items_key.clone());
+    drop(dek_guard);
+    drop(conn_guard);
+
+    // 6. Logs -> encrypted, off the critical section. Best-effort: `logging`
+    //    degrades gracefully if the swap fails.
+    crate::logging::upgrade_to_encrypted(&boot.log_writer, &state.paths.logs_dir, Some(&items_key));
+    tracing::info!("password set: the store is now encrypted at rest");
+    let _ = app.emit("password-changed", true);
+    Ok(())
+}
+
+/// Remove the password and stop encrypting at rest (Settings → Security) —
+/// the Standard Notes "remove passcode" step, reversing [`set_password`]:
+/// every conversation row is unwrapped back to plaintext JSON, the database
+/// is re-created as plaintext (`openpal_core::app_db::decrypt_to_plaintext`),
+/// `password.wrap`/`recovery.wrap` are deleted and the `keys/nopass.marker`
+/// written, the live DEK is swapped to `None` and logs switch to plaintext —
+/// all under `app_db`'s lock (then `dek`'s) in one critical section, so no
+/// command sees a half-converted store. The items key is kept alive through
+/// the envelope-unwrapping step and dropped only after it, so nothing is
+/// orphaned. Takes effect immediately, no restart.
+#[tauri::command]
+pub fn remove_password(app: tauri::AppHandle, boot: State<'_, BootState>) -> Result<(), String> {
+    use crate::bootstrap;
+
+    let state = app.state::<AppState>();
+    let keys_dir = state.paths.data_dir.join("keys");
+    let app_db_path = state.paths.data_dir.join("app.sqlite");
+
+    // `app_db` first, then `dek` — the lock order every command follows.
+    let mut conn_guard = state.app_db.lock().unwrap();
+    let mut dek_guard = state.dek.lock().unwrap();
+    let Some(items_key) = dek_guard.clone() else {
+        return Err("No password is set.".to_string());
+    };
+
+    // Close the keyed connection before the in-place decryption.
+    *conn_guard =
+        rusqlite::Connection::open_in_memory().map_err(|e| friendly(CoreError::from(e)))?;
+
+    // 1. Keyed -> plaintext, in place.
+    openpal_core::app_db::decrypt_to_plaintext(&app_db_path, &items_key)
+        .map_err(|e| friendly(CoreError::from(e)))?;
+    // 2. Reopen plaintext and swap the in-memory connection.
+    let (new_conn, _, _) =
+        openpal_core::app_db::open(&app_db_path, None).map_err(|e| friendly(CoreError::from(e)))?;
+    *conn_guard = new_conn;
+    // 3. Unwrap every envelope row back to plaintext — the items key is
+    //    still held here, and is dropped only after this succeeds.
+    openpal_core::store::rewrite_rows_as_plaintext(&mut conn_guard, &items_key)
+        .map_err(friendly)?;
+    // 4. Drop the password slot and the recovery slot (nothing to recover
+    //    without a password), and record the no-password choice.
+    let _ = std::fs::remove_file(keys_dir.join("password.wrap"));
+    let _ = std::fs::remove_file(keys_dir.join("recovery.wrap"));
+    bootstrap::write_no_password_marker(&keys_dir).map_err(|e| {
+        tracing::error!("couldn't record the no-password choice: {e}");
+        "OpenPal couldn't remove your password. Please try again.".to_string()
     })?;
+    // 5. Swap the live DEK to `None`, then release the section.
+    *dek_guard = None;
+    drop(dek_guard);
+    drop(conn_guard);
+
+    // 6. Logs -> plaintext.
+    crate::logging::upgrade_to_encrypted(&boot.log_writer, &state.paths.logs_dir, None);
+    tracing::info!("password removed: data is stored unencrypted at rest from now on");
+    let _ = app.emit("password-changed", false);
     Ok(())
 }
 
@@ -4482,8 +4736,14 @@ pub fn confirm_recovery_code(state: State<'_, AppState>, code: String) -> Result
     // The items key is already sitting on `AppState` — the app unlocked via
     // its password (or a recovery code) earlier this same launch (see
     // `state::finish_unlock`) and this command only ever runs post-unlock,
-    // so there's no need to re-derive it a second time.
-    let dek = &state.dek;
+    // so there's no need to re-derive it a second time. Only meaningful on a
+    // password-protected install: with no password there is no key to
+    // protect, so nowhere to write a wrap for.
+    let Some(dek) = state.dek.lock().unwrap().clone() else {
+        return Err(
+            "No password is set, so there is nothing to protect with a recovery code.".to_string(),
+        );
+    };
 
     let instance_dir = state.paths.data_dir.join("keys");
 
@@ -4500,7 +4760,7 @@ pub fn confirm_recovery_code(state: State<'_, AppState>, code: String) -> Result
     let header = wrap::WrapHeader::new(salt);
     wrap::write_wrap(
         &instance_dir.join("recovery.wrap"),
-        dek,
+        &dek,
         &recovery_kek,
         &header,
     )
@@ -4627,7 +4887,7 @@ pub fn attempt_recovery_unlock(
     if password_path.exists() {
         // Post-migration forgot-password: build `AppState` with the
         // recovered items key, same as `unlock_with_password` would.
-        crate::state::finish_unlock(&app, &state, dek).map_err(|e| {
+        crate::state::finish_unlock(&app, &state, Some(dek)).map_err(|e| {
             tracing::error!("recovered the items key, but couldn't finish booting: {e}");
             "Your recovery code worked, but OpenPal couldn't finish starting up. Please restart \
              OpenPal."
@@ -5314,7 +5574,9 @@ pub fn get_recent_logs(
         state.engine.tail_log(max_lines)
     } else {
         match logging::newest_app_log(&state.paths.logs_dir) {
-            Some(path) => logging::decrypt_tail(&path, max_lines, &state.dek),
+            Some(path) => {
+                logging::decrypt_tail(&path, max_lines, state.dek.lock().unwrap().as_ref())
+            }
             None => String::new(),
         }
     };
@@ -5352,7 +5614,7 @@ pub async fn export_logs(
     };
     let dest = picked.into_path().map_err(internal)?;
 
-    let dek = &state.dek;
+    let dek = state.dek.lock().unwrap().clone();
     let mut combined = String::new();
     for path in logging::all_app_logs(&state.paths.logs_dir) {
         let name = path
@@ -5360,7 +5622,7 @@ pub async fn export_logs(
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
         combined.push_str(&format!("==== {name} ====\n"));
-        combined.push_str(&logging::decrypt_all(&path, dek));
+        combined.push_str(&logging::decrypt_all(&path, dek.as_ref()));
         combined.push_str("\n\n");
     }
     combined.push_str(&state.engine.export_logs());
@@ -5424,8 +5686,11 @@ pub async fn export_data(
     // export can be large, and every other command touching conversations/
     // projects/artifacts/settings/custom models/plugins would otherwise
     // stall behind it for as long as the zip write takes.
-    let export_data =
-        openpal_core::export::read_export_data(&state.app_db.lock().unwrap(), &include, &state.dek);
+    let export_data = openpal_core::export::read_export_data(
+        &state.app_db.lock().unwrap(),
+        &include,
+        state.dek.lock().unwrap().as_ref(),
+    );
     tokio::task::spawn_blocking(move || openpal_core::export::write_export_zip(&export_data, &dest))
         .await
         .map_err(internal)?
@@ -5443,8 +5708,11 @@ pub async fn estimate_export_size(
     state: State<'_, AppState>,
     include: openpal_core::export::ExportCategories,
 ) -> Result<u64, String> {
-    let export_data =
-        openpal_core::export::read_export_data(&state.app_db.lock().unwrap(), &include, &state.dek);
+    let export_data = openpal_core::export::read_export_data(
+        &state.app_db.lock().unwrap(),
+        &include,
+        state.dek.lock().unwrap().as_ref(),
+    );
     tokio::task::spawn_blocking(move || openpal_core::export::estimate_export_size(&export_data))
         .await
         .map_err(internal)?
@@ -5496,10 +5764,10 @@ pub async fn import_data(
     // conversations/projects/artifacts/settings/custom models/plugins for as
     // long as a large import takes.
     let app_db = state.app_db.clone();
-    let items_key = state.dek.clone();
+    let items_key = state.dek.lock().unwrap().clone();
     let summary = tokio::task::spawn_blocking(move || {
         let mut conn = app_db.lock().unwrap();
-        openpal_core::import::read_import_zip(&mut conn, &src, &items_key)
+        openpal_core::import::read_import_zip(&mut conn, &src, items_key.as_ref())
     })
     .await
     .map_err(internal)?
@@ -5686,9 +5954,9 @@ pub async fn restore_backup(
     };
 
     let app_db = state.app_db.clone();
-    let items_key = state.dek.clone();
+    let items_key = state.dek.lock().unwrap().clone();
     let summary = tokio::task::spawn_blocking(move || {
-        openpal_core::backup::restore(&mut app_db.lock().unwrap(), archive, &items_key)
+        openpal_core::backup::restore(&mut app_db.lock().unwrap(), archive, items_key.as_ref())
     })
     .await
     .map_err(internal)?

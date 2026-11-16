@@ -158,7 +158,7 @@ mod tests {
         Arc::new(Mutex::new(
             crate::app_db::open(
                 &dir.join("app.sqlite"),
-                &crate::crypto::key::DataKey::from_bytes([0x42; 32]),
+                Some(&crate::crypto::key::DataKey::from_bytes([0x42; 32])),
             )
             .unwrap()
             .0,

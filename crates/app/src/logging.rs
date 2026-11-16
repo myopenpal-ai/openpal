@@ -37,13 +37,18 @@
 //!   no special-casing at all, since it just calls `tracing::error!` like
 //!   anything else — a logged, diagnosable event even though no DEK has
 //!   ever existed yet this run.
-//! - [`LogWriterState::PostUnlock`]: always [`LoggingBackend::Encrypted`].
-//!   The old portable mode that ran its whole session in plaintext is gone
-//!   (portable runs the same mandatory-password path; see `crate::bootstrap`),
-//!   so there is no post-unlock plaintext backend anymore.
+//! - On [`LogWriterState::PostUnlock`]: encrypted
+//!   (`LoggingBackend::Encrypted`, `openpal.<date>.enc`) on a
+//!   password-protected install, or plaintext
+//!   (`LoggingBackend::Plaintext`, `openpal.<date>.log`) on a no-password
+//!   install — the "no account, no passcode = no encryption at rest"
+//!   layout, matching the database itself (see `crate::bootstrap` and
+//!   `crate::state`). The old portable mode that ran its whole session in
+//!   plaintext against an encrypted store is gone; the plaintext backend
+//!   now exists only where the data itself is plaintext.
 //!
 //! [`upgrade_to_encrypted`] performs that swap from `state::finish_unlock`,
-//! once `app_db` is open and the DEK is available.
+//! once `app_db` is open and the DEK (if any) is known.
 //!
 //! Each encrypted frame is one `tracing` line, sealed under a key re-
 //! derived once per calendar day (`openpal_core::crypto::logframe`) — see
@@ -128,24 +133,28 @@ impl std::io::Write for EncryptingAppender {
     }
 }
 
-/// What [`LogWriterState::PostUnlock`] actually writes through — always
-/// encrypted, wrapping the same underlying `RollingFileAppender`
-/// rotation/retention the pre-encryption files used (only the bytes written
-/// changed, not the file lifecycle).
+/// What [`LogWriterState::PostUnlock`] actually writes through — encrypted
+/// frames on a password-protected install, plaintext lines on a no-password
+/// one (the "no account, no passcode = no encryption at rest" layout), both
+/// wrapping the same underlying `RollingFileAppender` rotation/retention the
+/// pre-encryption files used.
 enum LoggingBackend {
     Encrypted(EncryptingAppender),
+    Plaintext(RollingFileAppender),
 }
 
 impl std::io::Write for LoggingBackend {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         match self {
             Self::Encrypted(a) => a.write(buf),
+            Self::Plaintext(a) => a.write(buf),
         }
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
         match self {
             Self::Encrypted(a) => a.flush(),
+            Self::Plaintext(a) => a.flush(),
         }
     }
 }
@@ -240,28 +249,36 @@ pub fn init(logs_dir: &Path, level: &str) -> (Option<WorkerGuard>, LogWriter) {
     (Some(guard), writer)
 }
 
-/// Called from `state::finish_unlock`, once `app_db` is open and the DEK is
-/// known: swap the live [`LogWriter`] from the pre-unlock plaintext
-/// `boot.log` to the real encrypted post-unlock backend. Then folds away
-/// `boot.log`/`boot.log.prev`: logs a `tracing::warn!` noting the
-/// crash-fallback file existed (so the fact itself is recorded in the
-/// now-live stream) and deletes both, making "flag it, delete on the next
-/// successful start" literally true across relaunches.
-pub fn upgrade_to_encrypted(writer: &LogWriter, logs_dir: &Path, dek: &DataKey) {
-    let appender = match RollingFileAppender::builder()
+/// Called from `state::finish_unlock`, once `app_db` is open and the DEK (if
+/// any) is known: swap the live [`LogWriter`] from the pre-unlock plaintext
+/// `boot.log` to the real post-unlock backend — encrypted frames when a
+/// password is set (`dek: Some`), plaintext lines when not (`dek: None`, the
+/// no-encryption-at-rest layout). Then folds away `boot.log`/`boot.log.prev`:
+/// logs a `tracing::warn!` noting the crash-fallback file existed (so the
+/// fact itself is recorded in the now-live stream) and deletes both, making
+/// "flag it, delete on the next successful start" literally true across
+/// relaunches.
+pub fn upgrade_to_encrypted(writer: &LogWriter, logs_dir: &Path, dek: Option<&DataKey>) {
+    let build = RollingFileAppender::builder()
         .rotation(Rotation::DAILY)
         .filename_prefix(APP_LOG_PREFIX)
-        .filename_suffix("enc")
-        .max_log_files(MAX_LOG_FILES)
-        .build(logs_dir)
-    {
-        Ok(appender) => appender,
-        Err(err) => {
-            tracing::warn!("could not open the app log file in {logs_dir:?}: {err}");
-            return; // stay on the pre-unlock writer rather than lose logging entirely
-        }
+        .max_log_files(MAX_LOG_FILES);
+    let backend = match dek {
+        Some(dek) => match build.filename_suffix("enc").build(logs_dir) {
+            Ok(appender) => LoggingBackend::Encrypted(EncryptingAppender::new(appender, dek)),
+            Err(err) => {
+                tracing::warn!("could not open the app log file in {logs_dir:?}: {err}");
+                return; // stay on the pre-unlock writer rather than lose logging entirely
+            }
+        },
+        None => match build.filename_suffix("log").build(logs_dir) {
+            Ok(appender) => LoggingBackend::Plaintext(appender),
+            Err(err) => {
+                tracing::warn!("could not open the app log file in {logs_dir:?}: {err}");
+                return; // stay on the pre-unlock writer rather than lose logging entirely
+            }
+        },
     };
-    let backend = LoggingBackend::Encrypted(EncryptingAppender::new(appender, dek));
 
     {
         let mut state = writer.0.lock().unwrap();
@@ -352,16 +369,20 @@ fn install_panic_hook() {
 // Reading logs back (for the in-app viewer and export)
 // ---------------------------------------------------------------------------
 
-/// The last `max_lines` lines of the app log at `path`, decrypted. Call
-/// [`redact`] on the result before showing it to a user. First tries the
-/// encrypted frame format, falling back to plain text if the bytes don't
-/// actually look like frames (a pre-migration plaintext file, or `boot.log`
-/// itself, which is always plaintext).
-pub fn decrypt_tail(path: &Path, max_lines: usize, dek: &DataKey) -> String {
+/// The last `max_lines` lines of the app log at `path`, decrypted when it's
+/// encrypted (`dek: Some`), read as plain text when the install has no
+/// password (`dek: None`). Call [`redact`] on the result before showing it
+/// to a user. First tries the encrypted frame format, falling back to plain
+/// text if the bytes don't actually look like frames (a pre-migration
+/// plaintext file, or `boot.log` itself, which is always plaintext).
+pub fn decrypt_tail(path: &Path, max_lines: usize, dek: Option<&DataKey>) -> String {
     let Ok(bytes) = std::fs::read(path) else {
         return String::new();
     };
-    let text = decrypt_or_plaintext(&bytes, dek);
+    let text = match dek {
+        Some(dek) => decrypt_or_plaintext(&bytes, dek),
+        None => String::from_utf8_lossy(&bytes).into_owned(),
+    };
     let lines: Vec<&str> = text.lines().collect();
     let start = lines.len().saturating_sub(max_lines);
     lines[start..].join("\n")
@@ -369,11 +390,14 @@ pub fn decrypt_tail(path: &Path, max_lines: usize, dek: &DataKey) -> String {
 
 /// Every line of the app log at `path`, decrypted — used by the export
 /// path, which (unlike the viewer) wants the whole file, not just a tail.
-pub fn decrypt_all(path: &Path, dek: &DataKey) -> String {
+pub fn decrypt_all(path: &Path, dek: Option<&DataKey>) -> String {
     let Ok(bytes) = std::fs::read(path) else {
         return String::new();
     };
-    decrypt_or_plaintext(&bytes, dek)
+    match dek {
+        Some(dek) => decrypt_or_plaintext(&bytes, dek),
+        None => String::from_utf8_lossy(&bytes).into_owned(),
+    }
 }
 
 fn decrypt_or_plaintext(bytes: &[u8], dek: &DataKey) -> String {
@@ -591,7 +615,10 @@ mod tests {
     fn decrypt_tail_reads_missing_file_as_empty() {
         let dir = tempfile::tempdir().unwrap();
         let dek = DataKey::random();
-        assert_eq!(decrypt_tail(&dir.path().join("missing.enc"), 5, &dek), "");
+        assert_eq!(
+            decrypt_tail(&dir.path().join("missing.enc"), 5, Some(&dek)),
+            ""
+        );
     }
 
     #[test]
@@ -609,10 +636,10 @@ mod tests {
         std::fs::write(&path, &bytes).unwrap();
 
         assert_eq!(
-            decrypt_tail(&path, 99, &dek),
+            decrypt_tail(&path, 99, Some(&dek)),
             "first line\nsecond line\nthird line"
         );
-        assert_eq!(decrypt_tail(&path, 1, &dek), "third line");
+        assert_eq!(decrypt_tail(&path, 1, Some(&dek)), "third line");
     }
 
     #[test]
@@ -626,7 +653,7 @@ mod tests {
         std::fs::write(&path, logframe::seal_frame(&day_key, day, b"secret line")).unwrap();
 
         let wrong = DataKey::random();
-        assert_eq!(decrypt_tail(&path, 99, &wrong), "");
+        assert_eq!(decrypt_tail(&path, 99, Some(&wrong)), "");
     }
 
     #[test]
@@ -639,7 +666,7 @@ mod tests {
         std::fs::write(&path, "plain old line one\nplain old line two\n").unwrap();
         let dek = DataKey::random();
         assert_eq!(
-            decrypt_tail(&path, 99, &dek),
+            decrypt_tail(&path, 99, Some(&dek)),
             "plain old line one\nplain old line two"
         );
     }
@@ -653,7 +680,7 @@ mod tests {
             sink: Box::new(std::fs::File::create(dir.path().join("scratch")).unwrap()),
         })));
         let dek = DataKey::random();
-        upgrade_to_encrypted(&writer, dir.path(), &dek);
+        upgrade_to_encrypted(&writer, dir.path(), Some(&dek));
 
         assert!(
             !dir.path().join(BOOT_LOG_NAME).exists(),
@@ -667,8 +694,11 @@ mod tests {
         }
 
         let log_path = newest_app_log(dir.path()).expect("an app log file must now exist");
-        assert_eq!(decrypt_tail(&log_path, 99, &dek), "hello after unlock");
+        assert_eq!(
+            decrypt_tail(&log_path, 99, Some(&dek)),
+            "hello after unlock"
+        );
         // A wrong key must not recover the line.
-        assert_eq!(decrypt_tail(&log_path, 99, &DataKey::random()), "");
+        assert_eq!(decrypt_tail(&log_path, 99, Some(&DataKey::random())), "");
     }
 }

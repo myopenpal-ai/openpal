@@ -4,6 +4,7 @@
       "createTitle": "Créez votre mot de passe",
       "createBody": "Votre mot de passe chiffre toutes vos conversations. OpenPal ne le stocke jamais — si vous le perdez, seul votre code de récupération peut déverrouiller vos données.",
       "confirmLabel": "Confirmez votre mot de passe",
+      "continueWithout": "Continuer sans mot de passe",
       "mismatch": "Les mots de passe ne correspondent pas",
       "unlockTitle": "Saisissez votre mot de passe",
       "unlockBody": "Seul votre mot de passe peut déchiffrer vos conversations",
@@ -924,6 +925,27 @@
         "summary": "Zone dangereuse",
         "eraseButton": "Effacer toutes les données et repartir à zéro"
       }
+    }
+  },
+  "passwordProtection": {
+    "settings": {
+      "summary": "Chiffrement des données",
+      "hint": "Un mot de passe chiffre la copie de vos données sur cet appareil. Sans lui, tout est stocké en texte clair.",
+      "stateOn": "Mot de passe défini — vos données sont chiffrées sur cet appareil",
+      "stateOff": "Aucun mot de passe — vos données sont stockées non chiffrées sur cet appareil",
+      "setButton": "Définir un mot de passe…",
+      "changeButton": "Changer le mot de passe…",
+      "removeButton": "Supprimer le mot de passe",
+      "currentLabel": "Mot de passe actuel",
+      "newLabel": "Nouveau mot de passe",
+      "confirmLabel": "Confirmer le nouveau mot de passe",
+      "mismatch": "Les mots de passe ne correspondent pas",
+      "setAction": "Définir le mot de passe",
+      "changeAction": "Changer le mot de passe",
+      "saving": "Enregistrement…",
+      "removeTitle": "Supprimer le mot de passe ?",
+      "removeBody": "Vos données ne seront plus chiffrées sur cet appareil. Toute personne ayant accès à ce Mac pourra les lire.",
+      "removeConfirm": "Supprimer le mot de passe"
     }
   },
   "discover": {

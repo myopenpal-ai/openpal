@@ -154,6 +154,11 @@ export const SETTINGS_SEARCH_ENTRIES = [
     label: "settingsSheet.safetyDetection.summary",
     hint: "settingsSheet.safetyDetection.hint",
   },
+  {
+    section: "privacy",
+    label: "passwordProtection.settings.summary",
+    hint: "passwordProtection.settings.hint",
+  },
   { section: "privacy", label: "appLock.settings.summary", hint: "appLock.settings.hint" },
   {
     section: "privacy",
