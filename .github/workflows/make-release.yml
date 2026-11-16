@@ -14,6 +14,17 @@
 # a real run would do, without creating anything. The full stable-cut runbook
 # (bump → finalize → Make Release → smoke → promote) is docs/RELEASING.md.
 #
+# Run identification and serialization (the bug this workflow ships against is
+# two dispatches ~30 s apart on the same commit — one real cut, one dry run —
+# racing and leaving an unlabelled red dry run):
+# - `run-name` labels every run in the Actions run list as a `dry run` or a
+#   `real cut`, so one mode can never be mistaken for the other.
+# - the `concurrency` block queues overlapping dispatches instead of racing
+#   them, mirroring rolling.yml's guard.
+# - a dry run on a version whose `vX.Y.Z` tag already exists (an earlier real
+#   cut shipped it) exits green as an "already cut" no-op — it never red-fails
+#   on `not strictly newer` when the version was, in fact, already released.
+#
 # Pre-release validation (skippable with `skip_checks`):
 # 1. The chosen commit belongs to `main` and is not stale vs HEAD (it must be
 #    the current tip of `main` — cut from an older commit only by deliberately
@@ -21,9 +32,15 @@
 # 2. The workspace version on that commit is strictly newer than the last `v*`
 #    tag — otherwise the run fails naming the bump command:
 #    `node scripts/bump-version.mjs --bump …` (version bumps are PR-driven and
-#    must land before the cut).
+#    must land before the cut). Exception: when the `vX.Y.Z` tag already
+#    exists, a dry run exits green as an "already cut" no-op.
 # 3. In non-dry-run, the tag is refused if it already exists on origin.
 name: Make Release
+
+# Shown as the run title in the Actions run list. `inputs` (workflow_dispatch)
+# and the standard expression functions are available here, so a dry run can
+# never be mistaken for a real cut in the run list.
+run-name: Make Release — ${{ inputs.dry_run == 'true' && 'dry run' || 'real cut' }}
 
 on:
   workflow_dispatch:
@@ -43,6 +60,17 @@ on:
         required: false
         type: boolean
         default: false
+
+# Overlapping dispatches on the same commit (the agent tooling acting on this
+# repo fires a dry run and a real cut moments apart) are serialized, not
+# raced: a later run queues until the earlier one finishes, so a dry run never
+# validates against a tag that is about to appear and two runs never push at
+# the same time. `github.ref` is the dispatched branch (for a manual dispatch,
+# the selected branch — `main`), so every Make Release run on `main` shares
+# the group. Same convention as rolling.yml.
+concurrency:
+  group: make-release-${{ github.ref }}
+  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -78,6 +106,7 @@ jobs:
         id: checks
         env:
           SKIP: ${{ inputs.skip_checks }}
+          DRY_RUN: ${{ inputs.dry_run }}
         run: |
           set -euo pipefail
 
@@ -121,23 +150,48 @@ jobs:
             exit 1
           fi
 
+          ALREADY_CUT=false
           if [[ "$SKIP" != "true" ]]; then
             LAST_TAG="$(git describe --tags --abbrev=0 --match 'v*' "$SHA" 2>/dev/null || true)"
             if [[ -n "$LAST_TAG" ]]; then
               if ! newer_semver "$VERSION" "${LAST_TAG#v}"; then
-                echo "::error::workspace version v${VERSION} is not strictly newer than the last release ${LAST_TAG} — bump first:"
-                echo "::error::  node scripts/bump-version.mjs --bump patch|minor|major --notes \"One curated line for [Unreleased]\""
-                echo "::error::(version bumps are PR-driven and must land on main before the cut — docs/RELEASING.md)"
-                exit 1
+                # The workspace version is not strictly newer than the last
+                # reachable v* tag. Two situations, and only one of them is an
+                # error:
+                #  1. The vX.Y.Z tag for this version already exists — that
+                #     version was already cut (typically by an earlier real-cut
+                #     run, since the version only bumps on the next user-facing
+                #     PR). A dry run exits green as an "already cut" no-op;
+                #     a real cut refuses — you cannot re-cut a version whose
+                #     tag exists (and the push step below is the backstop).
+                #  2. The last tag is strictly newer (the version would go
+                #     backwards, or was never bumped) and no v${VERSION} tag
+                #     exists — a genuine "bump first" error, dry run or not.
+                if git rev-parse -q --verify "refs/tags/v${VERSION}" >/dev/null 2>&1; then
+                  echo "workspace version v${VERSION} was already cut — tag v${VERSION} exists"
+                  if [[ "$DRY_RUN" == "true" ]]; then
+                    echo "dry run — the version is already released; exiting green as an 'already cut' no-op"
+                    ALREADY_CUT=true
+                  else
+                    echo "::error::workspace version v${VERSION} was already cut — tag v${VERSION} already exists, refusing to re-cut. Delete the tag (and its release, if any) before re-cutting, or bump for the next release."
+                    exit 1
+                  fi
+                else
+                  echo "::error::workspace version v${VERSION} is not strictly newer than the last release ${LAST_TAG} — bump first:"
+                  echo "::error::  node scripts/bump-version.mjs --bump patch|minor|major --notes \"One curated line for [Unreleased]\""
+                  echo "::error::(version bumps are PR-driven and must land on main before the cut — docs/RELEASING.md)"
+                  exit 1
+                fi
+              else
+                echo "workspace version v${VERSION} is strictly newer than ${LAST_TAG} — OK"
               fi
-              echo "workspace version v${VERSION} is strictly newer than ${LAST_TAG} — OK"
             else
               echo "no previous v* tag — first release, version v${VERSION} accepted"
             fi
           fi
 
-          echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
-          echo "version=v${VERSION}" >> "$GITHUB_OUTPUT"
+          printf 'sha=%s\nversion=v%s\nalready_cut=%s\n' \
+            "$SHA" "$VERSION" "$ALREADY_CUT" >> "$GITHUB_OUTPUT"
 
       # The v*/b* tag ruleset requires *signed* tags, so the tag is signed in
       # the runner with the dedicated GIT_SIGNING_KEY (public half registered
@@ -213,8 +267,22 @@ jobs:
           SHA: ${{ steps.checks.outputs.sha }}
           DRY_RUN: ${{ inputs.dry_run }}
           SKIP: ${{ inputs.skip_checks }}
+          ALREADY_CUT: ${{ steps.checks.outputs.already_cut }}
         run: |
-          if [[ "$DRY_RUN" == "true" ]]; then
+          if [[ "$ALREADY_CUT" == "true" ]]; then
+            cat >> "$GITHUB_STEP_SUMMARY" <<EOF
+          ## $VERSION was already cut — nothing to do
+
+          Tag **$VERSION** already exists on origin: this version was shipped by
+          an earlier Make Release run. No tag was created.
+
+          The next release needs a version bump (version bumps are PR-driven):
+
+          \`\`\`
+          node scripts/bump-version.mjs --bump patch|minor|major --notes "One curated line for [Unreleased]"
+          \`\`\`
+          EOF
+          elif [[ "$DRY_RUN" == "true" ]]; then
             cat >> "$GITHUB_STEP_SUMMARY" <<EOF
           ## Make Release dry run — no tag created
 
