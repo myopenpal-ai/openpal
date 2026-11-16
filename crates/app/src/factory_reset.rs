@@ -8,8 +8,15 @@
 //! fresh process's very first `run()` call (before the `tauri::Builder`
 //! chain starts, same spot `apply_pending_update` runs) sees them, wipes,
 //! and falls straight through into an ordinary boot — which, finding no
-//! `keys/keychain.wrap` and no OS keychain entry, mints a brand-new master
-//! key exactly like a first-ever launch.
+//! `keys/password.wrap`, shows the create-password screen exactly like a
+//! first-ever launch.
+//!
+//! Deliberately touches no OS keychain entry anymore: the keychain's
+//! `master-key` role was removed with the password model (see
+//! `crates/app/src/bootstrap.rs`), so there is nothing keychain-shaped to
+//! clean up, and its remaining uses (account refresh token, remote-pairing
+//! token) are not this wiper's to revoke — `wipe` already clears the
+//! pairing state on disk.
 
 use std::path::Path;
 
@@ -23,10 +30,9 @@ const ENV_OLD_PID: &str = "OPENPAL_FACTORY_RESET_OLD_PID";
 /// files open the instant this one starts — see
 /// `openpal_core::boot::factory_reset::wait_for_pid_exit`'s own doc comment
 /// for why skipping this isn't just a cosmetic race), then wipes the data
-/// directory and the OS keychain entry, then falls through into a
-/// completely normal `run()` continuation — unlike the Portable
-/// update-apply helper, this process is a real, first-class launch, not a
-/// throwaway copy that exits immediately.
+/// directory, then falls through into a completely normal `run()`
+/// continuation — unlike the Portable update-apply helper, this process is
+/// a real, first-class launch, not a throwaway copy that exits immediately.
 pub fn apply_pending_reset() {
     let (Ok(data_dir), Ok(models_dir), Ok(old_pid)) = (
         std::env::var(ENV_DATA_DIR),
@@ -42,14 +48,6 @@ pub fn apply_pending_reset() {
         );
     }
     let _ = openpal_core::boot::factory_reset::wipe(Path::new(&data_dir), Path::new(&models_dir));
-    // On Android this runs before the Tauri plugin registry exists (this
-    // whole function is called before `tauri::Builder::default()`, same as
-    // `apply_pending_update`), so `secret_store::store()`'s plugin handle
-    // isn't ready yet and this delete is a silent no-op there — matches
-    // `spawn_relaunch_for_reset`'s re-exec relaunch, which doesn't work on
-    // Android either; factory reset on Android needs its own design, not
-    // covered here.
-    let _ = openpal_core::crypto::keychain::delete(crate::secret_store::store().as_ref());
 }
 
 /// Spawns this same executable with the env vars [`apply_pending_reset`]

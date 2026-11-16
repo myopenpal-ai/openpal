@@ -1,4 +1,21 @@
 {
+  "auth": {
+    "password": {
+      "createTitle": "Create your password",
+      "createBody": "Your password encrypts all your conversations. OpenPal never stores it — if you lose it, only your recovery code can unlock your data.",
+      "confirmLabel": "Confirm your password",
+      "continueWithout": "Continue without a password",
+      "mismatch": "The passwords don't match",
+      "unlockTitle": "Enter your password",
+      "unlockBody": "Only your password can decrypt your conversations",
+      "wrong": "Incorrect password",
+      "recoveryHint": "Forgot your password? Use your recovery code",
+      "creating": "Creating your password…",
+      "unlocking": "Unlocking…",
+      "backToPassword": "Back to password",
+      "readOnlyGuard": "OpenPal couldn't start: portable mode is on, but the data folder next to the app isn't writable. Move the app to a writable location (or check the folder's permissions) and try again."
+    }
+  },
   "common": {
     "cancel": "Cancel",
     "save": "Save",
@@ -908,6 +925,27 @@
         "summary": "Danger zone",
         "eraseButton": "Erase all data and start over"
       }
+    }
+  },
+  "passwordProtection": {
+    "settings": {
+      "summary": "Data encryption",
+      "hint": "A password encrypts this device's copy of your data. Without one, everything is stored in plain text.",
+      "stateOn": "Password set — your data is encrypted on this device",
+      "stateOff": "No password — your data is stored unencrypted on this device",
+      "setButton": "Set password…",
+      "changeButton": "Change password…",
+      "removeButton": "Remove password",
+      "currentLabel": "Current password",
+      "newLabel": "New password",
+      "confirmLabel": "Confirm new password",
+      "mismatch": "The passwords don't match",
+      "setAction": "Set password",
+      "changeAction": "Change password",
+      "saving": "Saving…",
+      "removeTitle": "Remove the password?",
+      "removeBody": "Your data will no longer be encrypted on this device. Anyone with access to this Mac can read it.",
+      "removeConfirm": "Remove password"
     }
   },
   "discover": {

@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { useStore } from "./state/store";
 import AppLockGate from "./views/AppLockGate";
 import Onboarding from "./views/Onboarding";
+import PasswordGate from "./views/PasswordGate";
 import RecoverySetup from "./views/RecoverySetup";
 import RecoveryUnlock from "./views/RecoveryUnlock";
 import ChatView from "./views/ChatView";
@@ -127,7 +128,23 @@ export default function App() {
     return <header className="titlebar" data-tauri-drag-region />;
   }
 
-  // Checked first, ahead of both recovery setup and onboarding, and ahead of
+  // Checked first, ahead of everything else: the mandatory-password gates
+  // (`needsPassword` = first run, create your password; `needsUnlock` = the
+  // every-launch unlock). The backend won't build a store to read `settings`
+  // from until the password checks out — see `boot()`'s two-phase split in
+  // `state/store.ts`. This screen must render without it. The two flags are
+  // mutually exclusive (see `get_app_info`); one PasswordGate handles both
+  // modes off `create = needsPassword`.
+  if (appInfo?.needsPassword || appInfo?.needsUnlock) {
+    return (
+      <>
+        <header className="titlebar" data-tauri-drag-region />
+        <PasswordGate />
+      </>
+    );
+  }
+
+  // Checked next, ahead of both recovery setup and onboarding, and ahead of
   // the `!settings` check below: a user who's actually locked out (the OS
   // keychain that normally unlocks the encryption key silently failed)
   // takes priority over everything else, and the backend won't build a

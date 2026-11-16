@@ -41,8 +41,16 @@ use rusqlite::Connection;
 
 fn device(device_id: &str) -> (Connection, HlcClock) {
     let dir = tempfile::tempdir().unwrap().keep();
-    let (conn, _, _) = openpal_core::app_db::open(&dir.join("app.sqlite"), None).unwrap();
+    let (conn, _, _) = openpal_core::app_db::open(
+        &dir.join("app.sqlite"),
+        Some(&openpal_core::crypto::key::DataKey::from_bytes([0x42; 32])),
+    )
+    .unwrap();
     (conn, HlcClock::new(device_id.to_string()))
+}
+
+fn test_items_key() -> openpal_core::crypto::key::DataKey {
+    openpal_core::crypto::key::DataKey::from_bytes([0x42; 32])
 }
 
 fn conversation(id: &str, messages: Vec<ChatMessage>) -> Conversation {
@@ -87,8 +95,12 @@ fn msg(role: &str, content: &str) -> ChatMessage {
 /// any row for. Mirrors `crates/app/src/sync_loop.rs::ensure_conversation_
 /// placeholder` exactly (duplicated here rather than shared, since a
 /// `crates/core` integration test can't reach into `crates/app`).
-fn ensure_conversation_placeholder(conn: &Connection, conversation_id: &str) {
-    if openpal_core::store::get(conn, conversation_id).is_ok() {
+fn ensure_conversation_placeholder(
+    conn: &Connection,
+    conversation_id: &str,
+    items_key: Option<&openpal_core::crypto::key::DataKey>,
+) {
+    if openpal_core::store::get(conn, conversation_id, items_key).is_ok() {
         return;
     }
     openpal_core::store::save(
@@ -107,6 +119,7 @@ fn ensure_conversation_placeholder(conn: &Connection, conversation_id: &str) {
             branches: std::collections::HashMap::new(),
             forked_from: None,
         },
+        items_key,
     )
     .unwrap();
 }
@@ -128,7 +141,12 @@ fn is_stale_against_deletion(conn: &Connection, conversation_id: &str, hlc: &Hlc
 /// against the real `outbox`/`envelope` wire format rather than passing
 /// Rust values directly between the two devices. Batches `AppendMessage`
 /// envelopes through `apply_remote_messages_batch`, same as the real loop.
-fn deliver(from: &Connection, to: &mut Connection, sync_key: &SyncKey) {
+fn deliver(
+    from: &Connection,
+    to: &mut Connection,
+    sync_key: &SyncKey,
+    items_key: Option<&openpal_core::crypto::key::DataKey>,
+) {
     let items = outbox::drain(from, 1000).unwrap();
     let mut message_ops = Vec::new();
     for item in &items {
@@ -141,13 +159,19 @@ fn deliver(from: &Connection, to: &mut Connection, sync_key: &SyncKey) {
                 if is_stale_against_deletion(to, &conversation_id, &hlc) {
                     continue;
                 }
-                ensure_conversation_placeholder(to, &conversation_id);
+                ensure_conversation_placeholder(to, &conversation_id, items_key);
                 message_ops.push((conversation_id, hlc, message));
             }
             envelope::ChangeEnvelope::ConversationSnapshot { hlc, conversation } => {
                 let conflicts = tempfile::tempdir().unwrap();
-                conversations::apply_remote_snapshot(to, conflicts.path(), hlc, conversation)
-                    .unwrap();
+                conversations::apply_remote_snapshot(
+                    to,
+                    conflicts.path(),
+                    hlc,
+                    conversation,
+                    items_key,
+                )
+                .unwrap();
             }
             envelope::ChangeEnvelope::ConversationTitle {
                 conversation_id,
@@ -157,8 +181,9 @@ fn deliver(from: &Connection, to: &mut Connection, sync_key: &SyncKey) {
                 if is_stale_against_deletion(to, &conversation_id, &hlc) {
                     continue;
                 }
-                ensure_conversation_placeholder(to, &conversation_id);
-                conversations::apply_remote_title(to, &conversation_id, hlc, title).unwrap();
+                ensure_conversation_placeholder(to, &conversation_id, items_key);
+                conversations::apply_remote_title(to, &conversation_id, hlc, title, items_key)
+                    .unwrap();
             }
             envelope::ChangeEnvelope::ConversationProject {
                 conversation_id,
@@ -168,8 +193,15 @@ fn deliver(from: &Connection, to: &mut Connection, sync_key: &SyncKey) {
                 if is_stale_against_deletion(to, &conversation_id, &hlc) {
                     continue;
                 }
-                ensure_conversation_placeholder(to, &conversation_id);
-                conversations::apply_remote_project(to, &conversation_id, hlc, project_id).unwrap();
+                ensure_conversation_placeholder(to, &conversation_id, items_key);
+                conversations::apply_remote_project(
+                    to,
+                    &conversation_id,
+                    hlc,
+                    project_id,
+                    items_key,
+                )
+                .unwrap();
             }
             envelope::ChangeEnvelope::ConversationUnread {
                 conversation_id,
@@ -179,7 +211,7 @@ fn deliver(from: &Connection, to: &mut Connection, sync_key: &SyncKey) {
                 if is_stale_against_deletion(to, &conversation_id, &hlc) {
                     continue;
                 }
-                ensure_conversation_placeholder(to, &conversation_id);
+                ensure_conversation_placeholder(to, &conversation_id, items_key);
                 conversations::apply_remote_unread(to, &conversation_id, hlc, unread).unwrap();
             }
             envelope::ChangeEnvelope::ConversationPinned {
@@ -190,8 +222,9 @@ fn deliver(from: &Connection, to: &mut Connection, sync_key: &SyncKey) {
                 if is_stale_against_deletion(to, &conversation_id, &hlc) {
                     continue;
                 }
-                ensure_conversation_placeholder(to, &conversation_id);
-                conversations::apply_remote_pinned(to, &conversation_id, hlc, pinned).unwrap();
+                ensure_conversation_placeholder(to, &conversation_id, items_key);
+                conversations::apply_remote_pinned(to, &conversation_id, hlc, pinned, items_key)
+                    .unwrap();
             }
             envelope::ChangeEnvelope::ConversationDeleted {
                 conversation_id,
@@ -212,7 +245,14 @@ fn deliver(from: &Connection, to: &mut Connection, sync_key: &SyncKey) {
             }
             envelope::ChangeEnvelope::ProjectDeleted { row_key, hlc } => {
                 let conflicts = tempfile::tempdir().unwrap();
-                capture::apply_remote_project_deleted(to, hlc, &row_key, conflicts.path()).unwrap();
+                capture::apply_remote_project_deleted(
+                    to,
+                    hlc,
+                    &row_key,
+                    conflicts.path(),
+                    items_key,
+                )
+                .unwrap();
             }
             envelope::ChangeEnvelope::ArtifactRow {
                 hlc,
@@ -242,7 +282,7 @@ fn deliver(from: &Connection, to: &mut Connection, sync_key: &SyncKey) {
         }
     }
     if !message_ops.is_empty() {
-        conversations::apply_remote_messages_batch(to, message_ops).unwrap();
+        conversations::apply_remote_messages_batch(to, message_ops, items_key).unwrap();
     }
     for item in &items {
         outbox::ack(from, &item.envelope_id).unwrap();
@@ -264,9 +304,16 @@ fn offline_concurrent_appends_converge_over_the_real_encrypted_pipe() {
 
     // Both devices start from the same synced history.
     let shared = conversation("conv-1", vec![msg("user", "shared-1")]);
-    capture::save_conversation_synced(&mut conn_a, &shared, &clock_a, &sync_key, "mailbox")
-        .unwrap();
-    deliver(&conn_a, &mut conn_b, &sync_key);
+    capture::save_conversation_synced(
+        &mut conn_a,
+        &shared,
+        &clock_a,
+        &sync_key,
+        "mailbox",
+        Some(&test_items_key()),
+    )
+    .unwrap();
+    deliver(&conn_a, &mut conn_b, &sync_key, Some(&test_items_key()));
 
     // Offline: A appends 2, B appends 1 — neither has seen the other's yet.
     let a_extended = conversation(
@@ -277,24 +324,38 @@ fn offline_concurrent_appends_converge_over_the_real_encrypted_pipe() {
             msg("user", "a-msg-2"),
         ],
     );
-    capture::save_conversation_synced(&mut conn_a, &a_extended, &clock_a, &sync_key, "mailbox")
-        .unwrap();
+    capture::save_conversation_synced(
+        &mut conn_a,
+        &a_extended,
+        &clock_a,
+        &sync_key,
+        "mailbox",
+        Some(&test_items_key()),
+    )
+    .unwrap();
 
     let b_extended = conversation(
         "conv-1",
         vec![msg("user", "shared-1"), msg("assistant", "b-msg-1")],
     );
-    capture::save_conversation_synced(&mut conn_b, &b_extended, &clock_b, &sync_key, "mailbox")
-        .unwrap();
+    capture::save_conversation_synced(
+        &mut conn_b,
+        &b_extended,
+        &clock_b,
+        &sync_key,
+        "mailbox",
+        Some(&test_items_key()),
+    )
+    .unwrap();
 
     // Both come back online — deliver in both directions.
-    deliver(&conn_a, &mut conn_b, &sync_key);
-    deliver(&conn_b, &mut conn_a, &sync_key);
+    deliver(&conn_a, &mut conn_b, &sync_key, Some(&test_items_key()));
+    deliver(&conn_b, &mut conn_a, &sync_key, Some(&test_items_key()));
 
-    let a_final = openpal_core::store::get(&conn_a, "conv-1")
+    let a_final = openpal_core::store::get(&conn_a, "conv-1", Some(&test_items_key()))
         .unwrap()
         .messages;
-    let b_final = openpal_core::store::get(&conn_b, "conv-1")
+    let b_final = openpal_core::store::get(&conn_b, "conv-1", Some(&test_items_key()))
         .unwrap()
         .messages;
     let a_contents: Vec<&str> = a_final.iter().map(|m| m.content.as_str()).collect();
@@ -332,7 +393,15 @@ fn unread_replicates_and_reading_on_one_device_clears_it_on_the_other() {
     let sync_key = SyncKey::random();
 
     let chat = conversation("conv-1", vec![msg("user", "hi"), msg("assistant", "hello")]);
-    capture::save_conversation_synced(&mut conn_a, &chat, &clock_a, &sync_key, "mailbox").unwrap();
+    capture::save_conversation_synced(
+        &mut conn_a,
+        &chat,
+        &clock_a,
+        &sync_key,
+        "mailbox",
+        Some(&test_items_key()),
+    )
+    .unwrap();
     capture::set_conversation_unread_synced(
         &mut conn_a,
         "conv-1",
@@ -342,13 +411,13 @@ fn unread_replicates_and_reading_on_one_device_clears_it_on_the_other() {
         "mailbox",
     )
     .unwrap();
-    deliver(&conn_a, &mut conn_b, &sync_key);
+    deliver(&conn_a, &mut conn_b, &sync_key, Some(&test_items_key()));
     assert!(
         unread(&conn_b, "conv-1"),
         "the reply's unread state must reach B"
     );
     assert_eq!(
-        openpal_core::store::get(&conn_b, "conv-1")
+        openpal_core::store::get(&conn_b, "conv-1", Some(&test_items_key()))
             .unwrap()
             .messages
             .len(),
@@ -366,7 +435,7 @@ fn unread_replicates_and_reading_on_one_device_clears_it_on_the_other() {
         "mailbox",
     )
     .unwrap();
-    deliver(&conn_b, &mut conn_a, &sync_key);
+    deliver(&conn_b, &mut conn_a, &sync_key, Some(&test_items_key()));
     assert!(
         !unread(&conn_a, "conv-1"),
         "reading on B must clear the hint on A"
@@ -380,7 +449,15 @@ fn concurrent_read_and_unread_on_two_devices_settle_to_the_same_state() {
     let sync_key = SyncKey::random();
 
     let chat = conversation("conv-1", vec![msg("user", "hi"), msg("assistant", "hello")]);
-    capture::save_conversation_synced(&mut conn_a, &chat, &clock_a, &sync_key, "mailbox").unwrap();
+    capture::save_conversation_synced(
+        &mut conn_a,
+        &chat,
+        &clock_a,
+        &sync_key,
+        "mailbox",
+        Some(&test_items_key()),
+    )
+    .unwrap();
     capture::set_conversation_unread_synced(
         &mut conn_a,
         "conv-1",
@@ -390,7 +467,7 @@ fn concurrent_read_and_unread_on_two_devices_settle_to_the_same_state() {
         "mailbox",
     )
     .unwrap();
-    deliver(&conn_a, &mut conn_b, &sync_key);
+    deliver(&conn_a, &mut conn_b, &sync_key, Some(&test_items_key()));
 
     // Offline: B reads it and renames it, while A marks it unread again for
     // a later reply — neither has seen the other's change yet.
@@ -403,10 +480,18 @@ fn concurrent_read_and_unread_on_two_devices_settle_to_the_same_state() {
         "mailbox",
     )
     .unwrap();
-    let mut b_renamed = openpal_core::store::get(&conn_b, "conv-1").unwrap();
+    let mut b_renamed =
+        openpal_core::store::get(&conn_b, "conv-1", Some(&test_items_key())).unwrap();
     b_renamed.title = "Trip planning".to_string();
-    capture::save_conversation_synced(&mut conn_b, &b_renamed, &clock_b, &sync_key, "mailbox")
-        .unwrap();
+    capture::save_conversation_synced(
+        &mut conn_b,
+        &b_renamed,
+        &clock_b,
+        &sync_key,
+        "mailbox",
+        Some(&test_items_key()),
+    )
+    .unwrap();
     capture::set_conversation_unread_synced(
         &mut conn_a,
         "conv-1",
@@ -417,8 +502,8 @@ fn concurrent_read_and_unread_on_two_devices_settle_to_the_same_state() {
     )
     .unwrap();
 
-    deliver(&conn_a, &mut conn_b, &sync_key);
-    deliver(&conn_b, &mut conn_a, &sync_key);
+    deliver(&conn_a, &mut conn_b, &sync_key, Some(&test_items_key()));
+    deliver(&conn_b, &mut conn_a, &sync_key, Some(&test_items_key()));
 
     assert_eq!(
         unread(&conn_a, "conv-1"),
@@ -437,7 +522,9 @@ fn concurrent_read_and_unread_on_two_devices_settle_to_the_same_state() {
     );
     for conn in [&conn_a, &conn_b] {
         assert_eq!(
-            openpal_core::store::get(conn, "conv-1").unwrap().title,
+            openpal_core::store::get(conn, "conv-1", Some(&test_items_key()))
+                .unwrap()
+                .title,
             "Trip planning",
             "the rename rides its own register and must survive either way"
         );
@@ -457,9 +544,16 @@ fn concurrent_title_and_project_edits_both_survive_over_the_real_encrypted_pipe(
     let sync_key = SyncKey::random();
 
     let shared = conversation("conv-1", vec![msg("user", "hi")]);
-    capture::save_conversation_synced(&mut conn_a, &shared, &clock_a, &sync_key, "mailbox")
-        .unwrap();
-    deliver(&conn_a, &mut conn_b, &sync_key);
+    capture::save_conversation_synced(
+        &mut conn_a,
+        &shared,
+        &clock_a,
+        &sync_key,
+        "mailbox",
+        Some(&test_items_key()),
+    )
+    .unwrap();
+    deliver(&conn_a, &mut conn_b, &sync_key, Some(&test_items_key()));
 
     let project = Project {
         id: "proj-42".to_string(),
@@ -468,26 +562,41 @@ fn concurrent_title_and_project_edits_both_survive_over_the_real_encrypted_pipe(
         updated_at_ms: 1,
     };
     capture::save_project_synced(&mut conn_a, &project, &clock_a, &sync_key, "mailbox").unwrap();
-    deliver(&conn_a, &mut conn_b, &sync_key);
+    deliver(&conn_a, &mut conn_b, &sync_key, Some(&test_items_key()));
     outbox::drain(&conn_a, 1000).unwrap(); // (nothing pending; drains to empty, keeps scenario tidy)
 
     // Device A renames (title only); Device B moves to the project (project_id only) —
     // neither has seen the other's edit yet.
-    let mut a_renamed = openpal_core::store::get(&conn_a, "conv-1").unwrap();
+    let mut a_renamed =
+        openpal_core::store::get(&conn_a, "conv-1", Some(&test_items_key())).unwrap();
     a_renamed.title = "Trip planning".to_string();
-    capture::save_conversation_synced(&mut conn_a, &a_renamed, &clock_a, &sync_key, "mailbox")
-        .unwrap();
+    capture::save_conversation_synced(
+        &mut conn_a,
+        &a_renamed,
+        &clock_a,
+        &sync_key,
+        "mailbox",
+        Some(&test_items_key()),
+    )
+    .unwrap();
 
-    let mut b_moved = openpal_core::store::get(&conn_b, "conv-1").unwrap();
+    let mut b_moved = openpal_core::store::get(&conn_b, "conv-1", Some(&test_items_key())).unwrap();
     b_moved.project_id = Some("proj-42".to_string());
-    capture::save_conversation_synced(&mut conn_b, &b_moved, &clock_b, &sync_key, "mailbox")
-        .unwrap();
+    capture::save_conversation_synced(
+        &mut conn_b,
+        &b_moved,
+        &clock_b,
+        &sync_key,
+        "mailbox",
+        Some(&test_items_key()),
+    )
+    .unwrap();
 
-    deliver(&conn_a, &mut conn_b, &sync_key);
-    deliver(&conn_b, &mut conn_a, &sync_key);
+    deliver(&conn_a, &mut conn_b, &sync_key, Some(&test_items_key()));
+    deliver(&conn_b, &mut conn_a, &sync_key, Some(&test_items_key()));
 
-    let a_final = openpal_core::store::get(&conn_a, "conv-1").unwrap();
-    let b_final = openpal_core::store::get(&conn_b, "conv-1").unwrap();
+    let a_final = openpal_core::store::get(&conn_a, "conv-1", Some(&test_items_key())).unwrap();
+    let b_final = openpal_core::store::get(&conn_b, "conv-1", Some(&test_items_key())).unwrap();
     assert_eq!(
         a_final.title, "Trip planning",
         "A's own rename must survive on A"
@@ -528,11 +637,18 @@ fn edit_and_regenerate_propagates_as_a_snapshot_and_future_appends_still_merge()
             msg("user", "are you sure"),
         ],
     );
-    capture::save_conversation_synced(&mut conn_a, &original, &clock_a, &sync_key, "mailbox")
-        .unwrap();
-    deliver(&conn_a, &mut conn_b, &sync_key);
+    capture::save_conversation_synced(
+        &mut conn_a,
+        &original,
+        &clock_a,
+        &sync_key,
+        "mailbox",
+        Some(&test_items_key()),
+    )
+    .unwrap();
+    deliver(&conn_a, &mut conn_b, &sync_key, Some(&test_items_key()));
     assert_eq!(
-        openpal_core::store::get(&conn_b, "conv-1")
+        openpal_core::store::get(&conn_b, "conv-1", Some(&test_items_key()))
             .unwrap()
             .messages
             .len(),
@@ -545,11 +661,19 @@ fn edit_and_regenerate_propagates_as_a_snapshot_and_future_appends_still_merge()
         "conv-1",
         vec![msg("user", "what is 2+2"), msg("assistant", "4")],
     );
-    capture::save_conversation_synced(&mut conn_a, &corrected, &clock_a, &sync_key, "mailbox")
-        .unwrap();
-    deliver(&conn_a, &mut conn_b, &sync_key);
+    capture::save_conversation_synced(
+        &mut conn_a,
+        &corrected,
+        &clock_a,
+        &sync_key,
+        "mailbox",
+        Some(&test_items_key()),
+    )
+    .unwrap();
+    deliver(&conn_a, &mut conn_b, &sync_key, Some(&test_items_key()));
 
-    let b_after_rewrite = openpal_core::store::get(&conn_b, "conv-1").unwrap();
+    let b_after_rewrite =
+        openpal_core::store::get(&conn_b, "conv-1", Some(&test_items_key())).unwrap();
     assert_eq!(
         b_after_rewrite.messages.len(),
         2,
@@ -568,11 +692,18 @@ fn edit_and_regenerate_propagates_as_a_snapshot_and_future_appends_still_merge()
             msg("user", "thanks"),
         ],
     );
-    capture::save_conversation_synced(&mut conn_a, &extended, &clock_a, &sync_key, "mailbox")
-        .unwrap();
-    deliver(&conn_a, &mut conn_b, &sync_key);
+    capture::save_conversation_synced(
+        &mut conn_a,
+        &extended,
+        &clock_a,
+        &sync_key,
+        "mailbox",
+        Some(&test_items_key()),
+    )
+    .unwrap();
+    deliver(&conn_a, &mut conn_b, &sync_key, Some(&test_items_key()));
 
-    let b_final = openpal_core::store::get(&conn_b, "conv-1").unwrap();
+    let b_final = openpal_core::store::get(&conn_b, "conv-1", Some(&test_items_key())).unwrap();
     assert_eq!(b_final.messages.len(), 3);
     assert_eq!(b_final.messages[2].content, "thanks");
     let _ = clock_b; // device B never writes locally in this scenario
@@ -600,21 +731,28 @@ fn a_fresh_device_receives_preexisting_history_over_the_real_encrypted_pipe() {
             msg("user", "three"),
         ],
     );
-    capture::save_conversation_synced(&mut conn_a, &existing, &clock_a, &sync_key, "mailbox")
-        .unwrap();
+    capture::save_conversation_synced(
+        &mut conn_a,
+        &existing,
+        &clock_a,
+        &sync_key,
+        "mailbox",
+        Some(&test_items_key()),
+    )
+    .unwrap();
 
     // Device B has never seen this conversation at all — no placeholder
     // pre-created, unlike the other scenarios above (this IS the case
     // under test: `deliver`'s own `ensure_conversation_placeholder` call
     // must be what creates the row).
     assert!(
-        openpal_core::store::get(&conn_b, "conv-1").is_err(),
+        openpal_core::store::get(&conn_b, "conv-1", Some(&test_items_key())).is_err(),
         "sanity: B starts with no row for this conversation"
     );
 
-    deliver(&conn_a, &mut conn_b, &sync_key);
+    deliver(&conn_a, &mut conn_b, &sync_key, Some(&test_items_key()));
 
-    let b_view = openpal_core::store::get(&conn_b, "conv-1").unwrap();
+    let b_view = openpal_core::store::get(&conn_b, "conv-1", Some(&test_items_key())).unwrap();
     assert_eq!(
         b_view.messages.len(),
         3,
@@ -641,11 +779,18 @@ fn deleting_a_conversation_propagates_and_a_stale_append_does_not_resurrect_it()
     let sync_key = SyncKey::random();
 
     let shared = conversation("conv-1", vec![msg("user", "hello")]);
-    capture::save_conversation_synced(&mut conn_a, &shared, &clock_a, &sync_key, "mailbox")
-        .unwrap();
-    deliver(&conn_a, &mut conn_b, &sync_key);
+    capture::save_conversation_synced(
+        &mut conn_a,
+        &shared,
+        &clock_a,
+        &sync_key,
+        "mailbox",
+        Some(&test_items_key()),
+    )
+    .unwrap();
+    deliver(&conn_a, &mut conn_b, &sync_key, Some(&test_items_key()));
     assert!(
-        openpal_core::store::get(&conn_b, "conv-1").is_ok(),
+        openpal_core::store::get(&conn_b, "conv-1", Some(&test_items_key())).is_ok(),
         "sanity: B has the conversation before the delete"
     );
 
@@ -655,8 +800,15 @@ fn deleting_a_conversation_propagates_and_a_stale_append_does_not_resurrect_it()
         "conv-1",
         vec![msg("user", "hello"), msg("assistant", "one more thing")],
     );
-    capture::save_conversation_synced(&mut conn_b, &b_extended, &clock_b, &sync_key, "mailbox")
-        .unwrap();
+    capture::save_conversation_synced(
+        &mut conn_b,
+        &b_extended,
+        &clock_b,
+        &sync_key,
+        "mailbox",
+        Some(&test_items_key()),
+    )
+    .unwrap();
 
     // A deletes the conversation, causally after B's append never reached
     // it — but HLC-wise, whichever side's clock is ahead determines who
@@ -670,15 +822,15 @@ fn deleting_a_conversation_propagates_and_a_stale_append_does_not_resurrect_it()
     // Deliver A's deletion to B first, THEN B's stale append back to A —
     // proving delivery order doesn't matter (the guard is HLC-based, not
     // delivery-order-based).
-    deliver(&conn_a, &mut conn_b, &sync_key);
-    deliver(&conn_b, &mut conn_a, &sync_key);
+    deliver(&conn_a, &mut conn_b, &sync_key, Some(&test_items_key()));
+    deliver(&conn_b, &mut conn_a, &sync_key, Some(&test_items_key()));
 
     assert!(
-        openpal_core::store::get(&conn_a, "conv-1").is_err(),
+        openpal_core::store::get(&conn_a, "conv-1", Some(&test_items_key())).is_err(),
         "A must have the conversation deleted locally"
     );
     assert!(
-        openpal_core::store::get(&conn_b, "conv-1").is_err(),
+        openpal_core::store::get(&conn_b, "conv-1", Some(&test_items_key())).is_err(),
         "B must apply the deletion, not keep (or resurrect) the conversation from its own stale append"
     );
 }
@@ -696,15 +848,22 @@ fn a_later_edit_after_a_stale_delete_still_applies_normally() {
     let sync_key = SyncKey::random();
 
     let shared = conversation("conv-1", vec![msg("user", "hello")]);
-    capture::save_conversation_synced(&mut conn_a, &shared, &clock_a, &sync_key, "mailbox")
-        .unwrap();
-    deliver(&conn_a, &mut conn_b, &sync_key);
+    capture::save_conversation_synced(
+        &mut conn_a,
+        &shared,
+        &clock_a,
+        &sync_key,
+        "mailbox",
+        Some(&test_items_key()),
+    )
+    .unwrap();
+    deliver(&conn_a, &mut conn_b, &sync_key, Some(&test_items_key()));
 
     capture::delete_conversation_synced(&mut conn_a, "conv-1", &clock_a, &sync_key, "mailbox")
         .unwrap();
-    deliver(&conn_a, &mut conn_b, &sync_key);
+    deliver(&conn_a, &mut conn_b, &sync_key, Some(&test_items_key()));
     assert!(
-        openpal_core::store::get(&conn_b, "conv-1").is_err(),
+        openpal_core::store::get(&conn_b, "conv-1", Some(&test_items_key())).is_err(),
         "sanity: B applied the deletion"
     );
 
@@ -715,11 +874,18 @@ fn a_later_edit_after_a_stale_delete_still_applies_normally() {
     // direct `apply_local` call (fresh HLC, strictly after the delete) is
     // the precise thing under test.
     let revived = conversation("conv-1", vec![msg("user", "starting fresh")]);
-    capture::save_conversation_synced(&mut conn_b, &revived, &clock_b, &sync_key, "mailbox")
-        .unwrap();
-    deliver(&conn_b, &mut conn_a, &sync_key);
+    capture::save_conversation_synced(
+        &mut conn_b,
+        &revived,
+        &clock_b,
+        &sync_key,
+        "mailbox",
+        Some(&test_items_key()),
+    )
+    .unwrap();
+    deliver(&conn_b, &mut conn_a, &sync_key, Some(&test_items_key()));
 
-    let a_final = openpal_core::store::get(&conn_a, "conv-1");
+    let a_final = openpal_core::store::get(&conn_a, "conv-1", Some(&test_items_key()));
     assert!(
         a_final.is_ok(),
         "a genuinely later op must still apply, not be permanently blocked by an older deletion"
@@ -745,7 +911,7 @@ fn artifact_sync_sweep_pushes_a_new_artifact_over_the_real_encrypted_pipe() {
     // The real write path never calls `capture::save_artifact_synced`
     // directly (see that function's doc comment) — a plain `artifacts::save`
     // mirrors the actual `create_artifact` agent-mode tool's write.
-    ensure_conversation_placeholder(&conn_a, "conv-1");
+    ensure_conversation_placeholder(&conn_a, "conv-1", Some(&test_items_key()));
     openpal_core::artifacts::save(&conn_a, "conv-1", "art-1", "report.md", "# Hello").unwrap();
     assert!(
         outbox::drain(&conn_a, 10).unwrap().is_empty(),
@@ -755,7 +921,7 @@ fn artifact_sync_sweep_pushes_a_new_artifact_over_the_real_encrypted_pipe() {
     let stats = artifact_sweep::sweep_once(&mut conn_a, &clock_a, &sync_key, "mailbox").unwrap();
     assert_eq!(stats.pushed, 1);
 
-    deliver(&conn_a, &mut conn_b, &sync_key);
+    deliver(&conn_a, &mut conn_b, &sync_key, Some(&test_items_key()));
 
     let b_artifact = openpal_core::artifacts::get(&conn_b, "conv-1", "art-1").unwrap();
     assert_eq!(b_artifact.content, "# Hello");
@@ -766,7 +932,7 @@ fn artifact_sync_sweep_does_not_requeue_unchanged_content_on_a_later_pass() {
     let (mut conn_a, clock_a) = device("device-a");
     let sync_key = SyncKey::random();
 
-    ensure_conversation_placeholder(&conn_a, "conv-1");
+    ensure_conversation_placeholder(&conn_a, "conv-1", Some(&test_items_key()));
     openpal_core::artifacts::save(&conn_a, "conv-1", "art-1", "report.md", "# Hello").unwrap();
     let first = artifact_sweep::sweep_once(&mut conn_a, &clock_a, &sync_key, "mailbox").unwrap();
     assert_eq!(first.pushed, 1);
@@ -790,7 +956,7 @@ fn artifact_sync_sweep_never_syncs_an_oversized_artifact() {
     let (mut conn_b, _clock_b) = device("device-b");
     let sync_key = SyncKey::random();
 
-    ensure_conversation_placeholder(&conn_a, "conv-1");
+    ensure_conversation_placeholder(&conn_a, "conv-1", Some(&test_items_key()));
     let oversized = "x".repeat(artifact_sweep::ARTIFACT_SYNC_MAX_BYTES + 1);
     openpal_core::artifacts::save(&conn_a, "conv-1", "art-1", "big.txt", &oversized).unwrap();
 
@@ -801,7 +967,7 @@ fn artifact_sync_sweep_never_syncs_an_oversized_artifact() {
         "an oversized artifact must never leave the device"
     );
 
-    deliver(&conn_a, &mut conn_b, &sync_key);
+    deliver(&conn_a, &mut conn_b, &sync_key, Some(&test_items_key()));
     assert!(
         openpal_core::artifacts::get(&conn_b, "conv-1", "art-1").is_err(),
         "B must never receive an artifact that was never pushed"
@@ -828,8 +994,16 @@ fn a_pin_on_one_device_protects_the_conversation_from_the_other_devices_cleanup(
         updated_at_ms: 200 * day_ms,
         ..conversation("conv-1", vec![msg("user", "hi")])
     };
-    capture::save_conversation_synced(&mut conn_a, &chat, &clock_a, &sync_key, "mailbox").unwrap();
-    deliver(&conn_a, &mut conn_b, &sync_key);
+    capture::save_conversation_synced(
+        &mut conn_a,
+        &chat,
+        &clock_a,
+        &sync_key,
+        "mailbox",
+        Some(&test_items_key()),
+    )
+    .unwrap();
+    deliver(&conn_a, &mut conn_b, &sync_key, Some(&test_items_key()));
     let expired_on_a = |conn: &Connection| {
         openpal_core::retention::expired(&openpal_core::store::list(conn), now_ms, Some(90))
     };
@@ -842,11 +1016,14 @@ fn a_pin_on_one_device_protects_the_conversation_from_the_other_devices_cleanup(
         &clock_b,
         &sync_key,
         "mailbox",
+        Some(&test_items_key()),
     )
     .unwrap();
-    deliver(&conn_b, &mut conn_a, &sync_key);
+    deliver(&conn_b, &mut conn_a, &sync_key, Some(&test_items_key()));
     assert!(
-        openpal_core::store::get(&conn_a, "conv-1").unwrap().pinned,
+        openpal_core::store::get(&conn_a, "conv-1", Some(&test_items_key()))
+            .unwrap()
+            .pinned,
         "B's pin must reach A"
     );
     assert!(expired_on_a(&conn_a).is_empty(), "so A's cleanup keeps it");
@@ -858,11 +1035,14 @@ fn a_pin_on_one_device_protects_the_conversation_from_the_other_devices_cleanup(
         &clock_b,
         &sync_key,
         "mailbox",
+        Some(&test_items_key()),
     )
     .unwrap();
-    deliver(&conn_b, &mut conn_a, &sync_key);
+    deliver(&conn_b, &mut conn_a, &sync_key, Some(&test_items_key()));
     assert!(
-        !openpal_core::store::get(&conn_a, "conv-1").unwrap().pinned,
+        !openpal_core::store::get(&conn_a, "conv-1", Some(&test_items_key()))
+            .unwrap()
+            .pinned,
         "and so must B's unpin"
     );
     assert_eq!(expired_on_a(&conn_a), ["conv-1"]);

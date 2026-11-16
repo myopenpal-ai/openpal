@@ -62,7 +62,16 @@ pub const MAX_BACKUPS: usize = 7;
 pub const RETRY_AFTER_MS: u64 = 60 * 60 * 1000;
 
 const MAGIC: &[u8; 8] = b"OPNPALBK";
+/// Version 1: the encrypted layout below — `wrap_length | recovery.wrap |
+/// nonce | AES-256-GCM ciphertext || tag`, sealed under the DEK's backup
+/// subkey.
 const FORMAT_VERSION: u8 = 1;
+/// Version 2: the no-password (plaintext) layout — `MAGIC | 2 | 0u32 |
+/// zip bytes`. Nothing is encrypted and there is no wrap file: a backup of
+/// an install with no password set is readable straight off disk, matching
+/// Standard Notes' model where no passcode means the device database isn't
+/// encrypted.
+const PLAINTEXT_FORMAT_VERSION: u8 = 2;
 const HEADER_FIXED_LEN: usize = MAGIC.len() + 1 + 4;
 /// `recovery.wrap` is well under 100 bytes; anything claiming more than this
 /// is a damaged length field, not a wrap file.
@@ -174,23 +183,29 @@ pub struct Snapshot {
 }
 
 /// The fast part, under `app_db`'s lock: a handful of `SELECT`s.
-pub fn read_snapshot(conn: &Connection) -> Result<Snapshot> {
+pub fn read_snapshot(conn: &Connection, items_key: Option<&DataKey>) -> Result<Snapshot> {
     Ok(Snapshot {
-        export: crate::export::read_export_data(conn, &ExportCategories::ALL),
+        export: crate::export::read_export_data(conn, &ExportCategories::ALL, items_key),
         audit_lines: crate::agent::audit::read_lines(conn)?,
     })
 }
 
-/// The slow part, off the lock: build the archive, seal it under the DEK's
-/// backup subkey with `recovery_wrap` (the bytes of `recovery.wrap`)
-/// alongside, write it into `folder`, then trim the folder to
+/// The slow part, off the lock: build the archive, then either seal it under
+/// the DEK's backup subkey with `recovery_wrap` (the bytes of
+/// `recovery.wrap`) alongside (encrypted, password-protected install), or
+/// write it out as plaintext when no password is set (`recovery_wrap` and
+/// `dek` both `None` — the no-encryption layout of Standard Notes' no-account
+/// model). Writes it into `folder`, then trims the folder to
 /// [`MAX_BACKUPS`]. Never creates `folder` — a missing one means an
 /// unplugged drive, and creating it would quietly fill the internal disk
 /// instead. Returns the new file's path.
+///
+/// `recovery_wrap` and `dek` must arrive together: either both `Some`
+/// (encrypted) or both `None` (plaintext). A half-set pair is refused.
 pub fn write_backup(
     snapshot: &Snapshot,
-    recovery_wrap: &[u8],
-    dek: &DataKey,
+    recovery_wrap: Option<&[u8]>,
+    dek: Option<&DataKey>,
     folder: &Path,
     now_ms: u64,
 ) -> Result<PathBuf> {
@@ -208,7 +223,15 @@ pub fn write_backup(
             summary.skipped
         );
     }
-    let sealed = seal(&payload, recovery_wrap, dek)?;
+    let sealed = match (recovery_wrap, dek) {
+        (Some(wrap), Some(dek)) => seal(&payload, Some(wrap), Some(dek))?,
+        (None, None) => seal_plaintext(&payload)?,
+        _ => {
+            return Err(Error::Backup(
+                "OpenPal couldn't encrypt the backup.".to_string(),
+            ))
+        }
+    };
 
     let name = file_name(now_ms);
     let dest = folder.join(&name);
@@ -246,7 +269,23 @@ fn open_backup_bytes(bytes: &[u8], code: &str) -> std::result::Result<Vec<u8>, O
             "That file isn't an OpenPal backup.".to_string(),
         ));
     }
-    if bytes[MAGIC.len()] != FORMAT_VERSION {
+    let version = bytes[MAGIC.len()];
+    // Version 2 is the no-password, plaintext layout: `MAGIC | 2 | 0u32 |
+    // zip bytes`. The bytes after the fixed header are the archive itself,
+    // so there is nothing to decrypt — return them verbatim (the recovery
+    // code, if any, is irrelevant for it).
+    if version == PLAINTEXT_FORMAT_VERSION {
+        let wrap_len = u32::from_be_bytes(
+            bytes[MAGIC.len() + 1..HEADER_FIXED_LEN]
+                .try_into()
+                .map_err(|_| damaged())?,
+        ) as usize;
+        if wrap_len != 0 {
+            return Err(damaged());
+        }
+        return Ok(bytes[HEADER_FIXED_LEN..].to_vec());
+    }
+    if version != FORMAT_VERSION {
         return Err(OpenError::Unreadable(
             "This backup was made by a newer version of OpenPal. Update OpenPal and try again."
                 .to_string(),
@@ -298,7 +337,11 @@ fn open_backup_bytes(bytes: &[u8], code: &str) -> std::result::Result<Vec<u8>, O
 /// database refuses any write, nothing is kept. The app layer reloads what
 /// it holds in memory afterwards, exactly as after an import, and calls
 /// `AuditLog::resync`.
-pub fn restore(conn: &mut Connection, archive: Vec<u8>) -> Result<ImportSummary> {
+pub fn restore(
+    conn: &mut Connection,
+    archive: Vec<u8>,
+    items_key: Option<&DataKey>,
+) -> Result<ImportSummary> {
     let unreadable = || Error::Backup("This backup file is damaged or incomplete.".to_string());
     let mut archive = zip::ZipArchive::new(Cursor::new(archive)).map_err(|_| unreadable())?;
     let audit_lines = match archive.by_name(AUDIT_ENTRY) {
@@ -314,7 +357,7 @@ pub fn restore(conn: &mut Connection, archive: Vec<u8>) -> Result<ImportSummary>
     };
 
     conn.execute_batch("BEGIN IMMEDIATE")?;
-    let (summary, failed_writes) = crate::import::import_archive(conn, &mut archive);
+    let (summary, failed_writes) = crate::import::import_archive(conn, &mut archive, items_key);
     let result = if failed_writes > 0 {
         Err(Error::Backup(
             "OpenPal couldn't save the restored data, so nothing was changed. Check that you \
@@ -343,8 +386,16 @@ fn backup_key(dek: &DataKey) -> std::result::Result<LessSafeKey, ring::error::Un
     )?))
 }
 
-fn seal(payload: &[u8], recovery_wrap: &[u8], dek: &DataKey) -> Result<Vec<u8>> {
+fn seal(payload: &[u8], recovery_wrap: Option<&[u8]>, dek: Option<&DataKey>) -> Result<Vec<u8>> {
     let failed = || Error::Backup("OpenPal couldn't encrypt the backup.".to_string());
+    // Encrypted writes always carry both; the no-password layout goes
+    // through [`seal_plaintext`] instead. A half-set pair is a caller bug —
+    // refusing keeps the "either fully encrypted or fully plaintext"
+    // invariant honest.
+    let (recovery_wrap, dek) = match (recovery_wrap, dek) {
+        (Some(wrap), Some(dek)) => (wrap, dek),
+        _ => return Err(failed()),
+    };
     if recovery_wrap.len() > MAX_WRAP_LEN {
         return Err(failed());
     }
@@ -371,6 +422,20 @@ fn seal(payload: &[u8], recovery_wrap: &[u8], dek: &DataKey) -> Result<Vec<u8>> 
         .map_err(|_| failed())?;
     out.extend_from_slice(&nonce);
     out.extend_from_slice(&body);
+    Ok(out)
+}
+
+/// The plaintext (version 2) layout for a no-password install: `MAGIC | 2 |
+/// wrap length 0 | zip bytes`. Everything after the fixed header is the
+/// archive itself — nothing is encrypted, nothing is keyed.
+fn seal_plaintext(payload: &[u8]) -> Result<Vec<u8>> {
+    let mut out = Vec::with_capacity(HEADER_FIXED_LEN + payload.len());
+    out.extend_from_slice(MAGIC);
+    out.push(PLAINTEXT_FORMAT_VERSION);
+    // The wrap-length field is kept so the header shape is uniform across
+    // versions; the reader returns the bytes after it verbatim.
+    out.extend_from_slice(&0u32.to_be_bytes());
+    out.extend_from_slice(payload);
     Ok(out)
 }
 
@@ -451,9 +516,13 @@ mod tests {
 
     fn test_conn() -> Connection {
         let dir = tempfile::tempdir().unwrap().keep();
-        crate::app_db::open(&dir.join("app.sqlite"), None)
+        crate::app_db::open(&dir.join("app.sqlite"), Some(&test_items_key()))
             .unwrap()
             .0
+    }
+
+    fn test_items_key() -> DataKey {
+        DataKey::from_bytes([0x42; 32])
     }
 
     /// A DEK and a `recovery.wrap` sealing it under `code` — what
@@ -484,10 +553,10 @@ mod tests {
     /// Every category, each carrying [`MARKER`], plus two audit events.
     fn populated() -> Connection {
         let mut conn = test_conn();
-        populate_every_category(&mut conn);
-        let mut convo = crate::store::get(&conn, "conv-1").unwrap();
+        populate_every_category(&mut conn, Some(&test_items_key()));
+        let mut convo = crate::store::get(&conn, "conv-1", Some(&test_items_key())).unwrap();
         convo.title = format!("Chat {MARKER}");
-        crate::store::save(&conn, &convo).unwrap();
+        crate::store::save(&conn, &convo, Some(&test_items_key())).unwrap();
         crate::projects::save(
             &conn,
             &crate::types::Project {
@@ -532,8 +601,15 @@ mod tests {
     }
 
     fn backup_of(conn: &Connection, dek: &DataKey, folder: &Path, now_ms: u64) -> PathBuf {
-        let snapshot = read_snapshot(conn).unwrap();
-        write_backup(&snapshot, &recovery_wrap(dek, CODE), dek, folder, now_ms).unwrap()
+        let snapshot = read_snapshot(conn, Some(&test_items_key())).unwrap();
+        write_backup(
+            &snapshot,
+            Some(&recovery_wrap(dek, CODE)),
+            Some(dek),
+            folder,
+            now_ms,
+        )
+        .unwrap()
     }
 
     fn json<T: serde::Serialize>(value: &T) -> serde_json::Value {
@@ -570,6 +646,63 @@ mod tests {
     }
 
     #[test]
+    fn a_no_password_backup_is_written_and_read_plaintext() {
+        let conn = populated();
+        let folder = tempfile::tempdir().unwrap();
+        // No recovery wrap and no DEK: the no-password install writes the
+        // plaintext (version 2) layout — the Standard Notes "no account, no
+        // passcode = not encrypted" model applied to backups.
+        let snapshot = read_snapshot(&conn, Some(&test_items_key())).unwrap();
+        let path = write_backup(&snapshot, None, None, folder.path(), 1_000).unwrap();
+
+        let bytes = fs::read(&path).unwrap();
+        // The layout is `MAGIC | 2 | 0u32 | zip bytes` — no nonce, no AEAD
+        // tag, nothing encrypted. (The archive itself is DEFLATE-compressed,
+        // so the marker is asserted after unzipping, below — what the header
+        // proves is that there is no encryption layer at all.)
+        assert_eq!(&bytes[..MAGIC.len()], MAGIC, "magic header");
+        assert_eq!(
+            bytes[MAGIC.len()],
+            PLAINTEXT_FORMAT_VERSION,
+            "a no-password backup is written as version 2 (plaintext)"
+        );
+        let wrap_len =
+            u32::from_be_bytes(bytes[MAGIC.len() + 1..HEADER_FIXED_LEN].try_into().unwrap());
+        assert_eq!(wrap_len, 0, "a plaintext backup carries no recovery wrap");
+
+        // Opens back with any code (the code is irrelevant for v2), and the
+        // archive is intact.
+        let archive = open_backup(&path, "ignored-code-for-plaintext").unwrap();
+        let mut zip = zip::ZipArchive::new(Cursor::new(archive)).unwrap();
+        let mut settings = String::new();
+        zip.by_name("settings.json")
+            .unwrap()
+            .read_to_string(&mut settings)
+            .unwrap();
+        assert!(settings.contains(MARKER));
+
+        // And restores onto a fresh install exactly like an encrypted one.
+        let mut dst = test_conn();
+        let archive = open_backup(&path, CODE).unwrap();
+        let summary = restore(&mut dst, archive, Some(&test_items_key())).unwrap();
+        assert_eq!(
+            (
+                summary.conversations,
+                summary.projects,
+                summary.artifacts,
+                summary.skipped
+            ),
+            (1, 1, 1, 0)
+        );
+        assert_eq!(
+            crate::store::get(&dst, "conv-1", Some(&test_items_key()))
+                .unwrap()
+                .title,
+            format!("Chat {MARKER}")
+        );
+    }
+
+    #[test]
     fn every_category_round_trips_onto_a_fresh_install() {
         let src = add_audit_events(populated(), 3);
         let dek = DataKey::random();
@@ -579,7 +712,7 @@ mod tests {
         // A different data directory, with a key of its own.
         let mut dst = test_conn();
         let archive = open_backup(&path, &CODE.to_lowercase().replace('-', " ")).unwrap();
-        let summary = restore(&mut dst, archive).unwrap();
+        let summary = restore(&mut dst, archive, Some(&test_items_key())).unwrap();
         assert_eq!(
             (
                 summary.conversations,
@@ -591,7 +724,9 @@ mod tests {
         );
 
         assert_eq!(
-            crate::store::get(&dst, "conv-1").unwrap().title,
+            crate::store::get(&dst, "conv-1", Some(&test_items_key()))
+                .unwrap()
+                .title,
             format!("Chat {MARKER}")
         );
         assert_eq!(
@@ -625,7 +760,12 @@ mod tests {
         );
 
         // Restoring the same backup again adds nothing new.
-        let again = restore(&mut dst, open_backup(&path, CODE).unwrap()).unwrap();
+        let again = restore(
+            &mut dst,
+            open_backup(&path, CODE).unwrap(),
+            Some(&test_items_key()),
+        )
+        .unwrap();
         assert_eq!(again.skipped, 0);
         assert_eq!(row_count(&dst, "agent_audit"), 3);
         assert_eq!(row_count(&dst, "conversations"), 1);
@@ -671,7 +811,12 @@ mod tests {
     #[test]
     fn a_damaged_archive_inside_a_good_envelope_restores_nothing() {
         let mut dst = test_conn();
-        assert!(restore(&mut dst, b"definitely not a zip".to_vec()).is_err());
+        assert!(restore(
+            &mut dst,
+            b"definitely not a zip".to_vec(),
+            Some(&test_items_key())
+        )
+        .is_err());
         assert_eq!(row_count(&dst, "conversations"), 0);
     }
 
@@ -690,7 +835,11 @@ mod tests {
              BEGIN SELECT RAISE(ABORT, 'disk full'); END;",
         )
         .unwrap();
-        let err = restore(&mut dst, open_backup(&path, CODE).unwrap());
+        let err = restore(
+            &mut dst,
+            open_backup(&path, CODE).unwrap(),
+            Some(&test_items_key()),
+        );
         assert!(err.is_err());
         assert_eq!(
             row_count(&dst, "conversations"),
@@ -701,7 +850,12 @@ mod tests {
         assert_eq!(row_count(&dst, "skills"), 0);
         assert_eq!(crate::settings::load(&dst).user_name, None);
         // The connection is usable again afterwards.
-        crate::store::save(&dst, &crate::store::get(&src, "conv-1").unwrap()).unwrap();
+        crate::store::save(
+            &dst,
+            &crate::store::get(&src, "conv-1", Some(&test_items_key())).unwrap(),
+            Some(&test_items_key()),
+        )
+        .unwrap();
     }
 
     #[test]
@@ -758,20 +912,21 @@ mod tests {
             .unwrap();
         }
         let shared = std::sync::Arc::new(std::sync::Mutex::new(conn));
-        let snapshot = read_snapshot(&shared.lock().unwrap()).unwrap();
+        let snapshot = read_snapshot(&shared.lock().unwrap(), Some(&test_items_key())).unwrap();
         let dek = DataKey::random();
         let wrap = recovery_wrap(&dek, CODE);
         let folder = tempfile::tempdir().unwrap();
         let dir = folder.path().to_path_buf();
-        let writer =
-            std::thread::spawn(move || write_backup(&snapshot, &wrap, &dek, &dir, 1_000).unwrap());
+        let writer = std::thread::spawn(move || {
+            write_backup(&snapshot, Some(&wrap), Some(&dek), &dir, 1_000).unwrap()
+        });
 
         let mut saved_while_writing = 0;
         while !writer.is_finished() {
             let conn = shared.lock().unwrap();
-            let mut convo = crate::store::get(&conn, "conv-1").unwrap();
+            let mut convo = crate::store::get(&conn, "conv-1", Some(&test_items_key())).unwrap();
             convo.title = format!("edited {saved_while_writing}");
-            crate::store::save(&conn, &convo).unwrap();
+            crate::store::save(&conn, &convo, Some(&test_items_key())).unwrap();
             saved_while_writing += 1;
         }
         writer.join().unwrap();
@@ -787,9 +942,15 @@ mod tests {
         let dek = DataKey::random();
         let parent = tempfile::tempdir().unwrap();
         let gone = parent.path().join("unplugged-drive");
-        let snapshot = read_snapshot(&conn).unwrap();
-        let err =
-            write_backup(&snapshot, &recovery_wrap(&dek, CODE), &dek, &gone, 1_000).unwrap_err();
+        let snapshot = read_snapshot(&conn, Some(&test_items_key())).unwrap();
+        let err = write_backup(
+            &snapshot,
+            Some(&recovery_wrap(&dek, CODE)),
+            Some(&dek),
+            &gone,
+            1_000,
+        )
+        .unwrap_err();
         assert!(matches!(err, Error::Backup(_)));
         assert!(!gone.exists());
     }
@@ -802,11 +963,11 @@ mod tests {
         let dek = DataKey::random();
         let folder = tempfile::tempdir().unwrap();
         fs::set_permissions(folder.path(), fs::Permissions::from_mode(0o500)).unwrap();
-        let snapshot = read_snapshot(&conn).unwrap();
+        let snapshot = read_snapshot(&conn, Some(&test_items_key())).unwrap();
         let result = write_backup(
             &snapshot,
-            &recovery_wrap(&dek, CODE),
-            &dek,
+            Some(&recovery_wrap(&dek, CODE)),
+            Some(&dek),
             folder.path(),
             1,
         );
@@ -842,7 +1003,12 @@ mod tests {
         let folder = tempfile::tempdir().unwrap();
         let path = backup_of(&conn, &dek, folder.path(), 1_000);
         let mut dst = test_conn();
-        restore(&mut dst, open_backup(&path, CODE).unwrap()).unwrap();
+        restore(
+            &mut dst,
+            open_backup(&path, CODE).unwrap(),
+            Some(&test_items_key()),
+        )
+        .unwrap();
         assert_eq!(load_state(&dst), BackupState::default());
     }
 

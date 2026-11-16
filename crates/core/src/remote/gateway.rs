@@ -386,9 +386,12 @@ mod tests {
 
     fn test_shared() -> Arc<Shared> {
         let dir = tempfile::tempdir().unwrap().keep();
-        let app_db_conn = crate::app_db::open(&dir.join("app.sqlite"), None)
-            .unwrap()
-            .0;
+        let app_db_conn = crate::app_db::open(
+            &dir.join("app.sqlite"),
+            Some(&crate::crypto::key::DataKey::from_bytes([0x42; 32])),
+        )
+        .unwrap()
+        .0;
         let engine = EngineManager::new(dir.join("logs"));
         Arc::new(Shared {
             app_db: Arc::new(std::sync::Mutex::new(app_db_conn)),

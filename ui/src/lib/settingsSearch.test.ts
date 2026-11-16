@@ -163,7 +163,10 @@ describe("notifications", () => {
     expect(labels("notifications", android)).toEqual(["Notifications", "Notifications on this device"]);
     expect(labels("downloads and answers", android)).toEqual(["Notifications on this device"]);
     expect(labels("desktop notifications", android)).toEqual([]);
-    expect(labels("on this device")).toEqual([]);
+    // "On this device" is the whole point of the data-encryption section, so
+    // searching it lands there; the notification copy (whose word-boundary
+    // rules don't match that phrase) stays a search miss.
+    expect(labels("on this device")).toEqual(["Data encryption"]);
   });
 
   it("doesn't offer them in a build with no OS notifications, where Settings doesn't show them", () => {
