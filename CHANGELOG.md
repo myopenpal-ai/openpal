@@ -9,6 +9,10 @@ exactly as [docs/RELEASING.md](docs/RELEASING.md) defines it: `fix` → patch,
 
 ## [Unreleased]
 
+(No notable changes yet.)
+
+## [0.2.0] - 2026-11-16
+
 ### Added
 - First release of OpenPal: scan your Mac, get a model recommendation, download, and chat with a fully local, private LLM in minutes (runs on-device with Metal acceleration).
 - 19-model curated catalog with plain-language fit badges, quantization picker, speed vs. intelligence slider, resumable downloads, run-from-disk, and custom models (Hugging Face or a local .gguf).
