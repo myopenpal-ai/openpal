@@ -20,7 +20,7 @@
     "clsx": "^2.1.1",
     "diff": "^9.0.0",
     "i18next": "^26",
-    "katex": "^0.16.47",
+    "katex": "^0.18.2",
     "qrcode": "^1.5.4",
     "react": "^19",
     "react-dom": "^19",
@@ -58,6 +58,7 @@
   "overrides": {
     "@emnapi/core": "^1.7.1",
     "@emnapi/runtime": "^1.7.1",
+    "katex": "^0.18.2",
     "eslint-plugin-jsx-a11y": {
       "eslint": "$eslint"
     }
