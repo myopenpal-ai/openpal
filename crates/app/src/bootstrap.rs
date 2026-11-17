@@ -1,101 +1,303 @@
-//! The desktop happy path's mint-or-unlock: `<data>/keys/keychain.wrap`
-//! doesn't exist yet on first launch (mint a DEK and a random KEK, store
-//! the KEK in the OS keychain, seal the DEK under it) or it does (fetch
-//! the KEK back from the keychain, unseal the DEK). Called synchronously
-//! during startup — see `crates/app/src/lib.rs`'s `setup()` split for
-//! where this fits between the pre-unlock and post-unlock phases.
+//! The optional-password model: `<data>/keys/password.wrap` is the one
+//! primary slot when a password is set, replacing the OS-keychain-sealed
+//! `keychain.wrap` that used to be (see `docs/SPACES_AUTHORING.md` §9). The
+//! OS keychain no longer participates in the master key at all — `keyring`
+//! remains only for the account refresh token and the remote-pairing token
+//! (`secret_store`). An install with **no password** is tracked by an
+//! explicit `keys/nopass.marker` file (written on skip/remove, deleted on
+//! set) — see [`nopass_marker_path`] and [`BootstrapStatus::NoPassword`] —
+//! so legacy `keychain.wrap`/pre-password detection paths stay byte-for-byte
+//! unchanged.
 //!
-//! The resulting `DataKey` is verified (`write_wrap`/`read_wrap` already
-//! do this) and returned via `KeyStatus::Ready`, so the caller can carry
-//! it into `AppState.dek` and from there into the SQLCipher connections
-//! that need `PRAGMA key`.
+//! The shape is Standard Notes-pure: a password-derived root key wraps the
+//! items key (which also keys the SQLCipher database — `AppState.dek`), and
+//! that items key wraps every conversation's own per-conversation key (see
+//! `openpal_core::crypto::vault`). The root derivation is Argon2id at the
+//! compiled-in KDF floor (`openpal_core::crypto::kdf`), and the wrap file's
+//! own header records the salt and parameters actually used, so an unlock
+//! re-derives exactly what the creation run used and a downgraded header is
+//! rejected, never silently weakened. See
+//! `crates/app/src/lib.rs`'s `setup()` for where these functions fit
+//! between the pre-unlock and post-unlock phases.
 //!
-//! A keychain failure on an existing install (`Unavailable` — backend
-//! unreachable, or `Absent` — the wrap file exists but the keychain entry
-//! is gone; likewise a stored KEK that fails to open its own wrap file) is
-//! only a hard error when there's genuinely nothing to fall back to. If
-//! `<data>/keys/recovery.wrap` exists — the one-time-shown recovery code
-//! ceremony (`crates/app/src/commands.rs`'s `confirm_recovery_code`) ran at
-//! some earlier launch — this returns [`KeyStatus::NeedsRecovery`] instead
-//! of an `Err`, so `setup()` sets `BootState::needs_recovery` and defers
-//! building `AppState` entirely rather than failing; the frontend reads
-//! that flag (via `commands::get_app_info`) and prompts the user to type
-//! their recovery code back in via `commands::attempt_recovery_unlock`,
-//! which finishes the same `AppState`-building step on success. Only when
-//! no recovery slot exists at all does this still hard-error, same as
-//! before this phase.
+//! There is **no silent unlock**. `detect` classifies a launch into one of
+//! four frontend-gated states (`no_password` → straight in with no
+//! encryption, `needs_password` → create, `needs_unlock` → enter,
+//! `needs_recovery` → a legacy pre-password install whose OS keychain can't
+//! produce the old DEK), and `AppState` is not built until
+//! `start_without_password`/`create_password`/`unlock_with_password`/
+//! `attempt_recovery_unlock` calls `state::finish_unlock`.
+//!
+//! ## Existing installs (the one-time migration)
+//!
+//! A pre-password install has `keychain.wrap` (and optionally
+//! `recovery.wrap`) but no `password.wrap`, so its first post-upgrade launch
+//! falls into `CreatePassword`. The create-password run then **adopts the
+//! existing DEK as the items key** rather than minting a new one — that is
+//! what keeps every old `recovery.wrap` code working untouched, and what
+//! lets the app open the already-SQLCipher-keyed `app.sqlite` unchanged.
+//! `password.wrap` is written *last* in that run, after the data migration
+//! (plaintext→keyed for legacy portable, plaintext→envelope per-conversation
+//! rows) has succeeded — its existence is the install's "migrated" marker.
+//! See `commands.rs`'s `create_password` and `openpal_core::app_db::
+//! encrypt_legacy_plaintext`/`openpal_core::store::
+//! rewrite_rows_as_envelopes`.
 
 use openpal_core::crypto::key::DataKey;
 use openpal_core::crypto::keychain;
 use openpal_core::crypto::lookup::KeyLookup;
 use openpal_core::crypto::secret_store::SecretStore;
-use openpal_core::crypto::wrap::{self, WrapHeader};
+use openpal_core::crypto::vault::{self, VaultError};
+use openpal_core::crypto::wrap;
 use std::path::Path;
 
 #[derive(Debug, thiserror::Error)]
 pub enum BootstrapError {
     #[error("couldn't reach the OS keychain: {0}")]
     Keychain(String),
-    #[error("the master key file exists, but the OS keychain no longer has the key to open it")]
+    #[error("a password has already been created for this install")]
+    AlreadyHasPassword,
+    #[error("the pre-password master key file exists, but the OS keychain no longer has the key to open it")]
     KeychainEntryGone,
+    #[error("no `password.wrap` exists for this install — create a password first")]
+    NoPasswordFile,
+    #[error("the password can't be empty")]
+    EmptyPassword,
+    #[error("{0}")]
+    Vault(#[from] VaultError),
     #[error("{0}")]
     Wrap(#[from] wrap::WrapError),
 }
 
-#[derive(Debug)]
-pub enum KeyStatus {
-    /// The DEK is available (freshly minted, or unlocked via the keychain).
-    Ready(DataKey),
-    /// The keychain couldn't produce the KEK, but a recovery slot exists to
-    /// fall back to — the caller should surface this to the user rather
-    /// than treating it as fatal.
-    NeedsRecovery,
+/// Which of the four boot gates a launch is behind — computed once at boot
+/// (`state::BootState::initialize`) and surfaced to the frontend via
+/// `commands::get_app_info`'s `password_set`/`needs_password`/
+/// `needs_unlock`/`needs_recovery`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BootstrapStatus {
+    /// The `keys/nopass.marker` exists and no `password.wrap` does: an
+    /// install that explicitly chose "continue without a password". Nothing
+    /// is encrypted at rest — the database, per-conversation rows, logs,
+    /// backups and exports are all plaintext. The frontend goes straight
+    /// in (no gate).
+    NoPassword,
+    /// No `password.wrap` yet: a genuinely first-ever run, or a pre-password
+    /// install's first post-upgrade launch (its migration happens inside the
+    /// create-password run). The frontend shows the create-password screen.
+    CreatePassword,
+    /// `password.wrap` exists: a normal launch. The frontend shows the
+    /// enter-password screen (recovery is the fallback from there).
+    EnterPassword,
+    /// Legacy migration window: a pre-password install whose `keychain.wrap`
+    /// the OS keychain can no longer open, but which has `recovery.wrap` to
+    /// fall back to — the exact case the old `mint_or_unlock` surfaced as
+    /// `NeedsRecovery`. The recovery code proves the old DEK; the recovery
+    /// command then re-mints the keychain slot so the create-password run can
+    /// adopt the DEK (see `commands::attempt_recovery_unlock`).
+    UseRecoveryCode,
 }
 
-pub fn mint_or_unlock(
+/// The marker file whose existence means "this install deliberately runs
+/// with no password (no encryption at rest)". Written by the
+/// continue-without-a-password and remove-password flows; deleted by the
+/// create/change-password flows. Kept as its own file rather than inferred
+/// from `password.wrap`'s absence so that a *pre-password* (un-migrated)
+/// install — which also has no `password.wrap` — is still detected through
+/// the unchanged legacy `keychain.wrap` path.
+pub fn nopass_marker_path(keys_dir: &Path) -> std::path::PathBuf {
+    keys_dir.join("nopass.marker")
+}
+
+/// Record that this install runs with no password. Idempotent.
+pub fn write_no_password_marker(keys_dir: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(keys_dir)?;
+    std::fs::write(
+        nopass_marker_path(keys_dir),
+        b"openpal no-password mode: this install has no password set, so data is stored \
+          unencrypted on this device.\n",
+    )
+}
+
+/// Remove the no-password marker (when a password is created). Missing file
+/// is not an error.
+pub fn remove_no_password_marker(keys_dir: &Path) {
+    let _ = std::fs::remove_file(nopass_marker_path(keys_dir));
+}
+
+/// Classifies what this launch must ask the user for. Never errors — every
+/// state is one the frontend can render. The only side effect is the
+/// keychain read, and only on a pre-password (un-migrated) install: once
+/// `password.wrap` exists the keychain is never consulted at boot again.
+pub fn detect(secret_store: &dyn SecretStore, keys_dir: &Path) -> BootstrapStatus {
+    if vault::password_wrap_path(keys_dir).exists() {
+        return BootstrapStatus::EnterPassword;
+    }
+    // A pre-password install: `keychain.wrap` is still the only holder of
+    // its DEK until the migration writes `password.wrap`, so a keychain
+    // that can't produce the old KEK routes to the recovery-code path
+    // exactly as the old `mint_or_unlock` did. Checked *before* the
+    // no-password marker on purpose: such an install's data is already
+    // encrypted under the keychain-sealed DEK, so the UI never offers (and
+    // never writes a marker for) "continue without a password" on it —
+    // were a stray marker to appear, routing to [`BootstrapStatus::NoPassword`]
+    // would open that keyed database without a key and fail, whereas
+    // create-password's adopt path recovers gracefully.
+    if keys_dir.join("keychain.wrap").exists() {
+        let keychain_ok = matches!(keychain::load(secret_store), KeyLookup::Found(_));
+        if !keychain_ok && keys_dir.join("recovery.wrap").exists() {
+            return BootstrapStatus::UseRecoveryCode;
+        }
+        return BootstrapStatus::CreatePassword;
+    }
+    if nopass_marker_path(keys_dir).exists() {
+        return BootstrapStatus::NoPassword;
+    }
+    BootstrapStatus::CreatePassword
+}
+
+/// The items key a create-password run should adopt: the existing DEK of a
+/// pre-password install (so old recovery codes keep working and the already-
+/// SQLCipher-keyed database opens unchanged), or a freshly minted key for a
+/// genuinely new install. Deliberately does **not** write `password.wrap` —
+/// the caller migrates the database first and only then calls
+/// [`create_password_file`], so a crash mid-migration never leaves a
+/// `password.wrap`-with-unmigrated-data split (its existence is the
+/// migration's completion marker).
+pub fn items_key_for_creation(
     secret_store: &dyn SecretStore,
     keys_dir: &Path,
-) -> Result<KeyStatus, BootstrapError> {
+) -> Result<DataKey, BootstrapError> {
     std::fs::create_dir_all(keys_dir).map_err(wrap::WrapError::from)?;
-    let path = keys_dir.join("keychain.wrap");
-
-    if path.exists() {
-        let keychain_result = match keychain::load(secret_store) {
-            KeyLookup::Found(kek) => wrap::read_wrap(&path, &kek).map_err(BootstrapError::from),
+    if vault::password_wrap_path(keys_dir).exists() {
+        return Err(BootstrapError::AlreadyHasPassword);
+    }
+    if keys_dir.join("keychain.wrap").exists() {
+        match keychain::load(secret_store) {
+            KeyLookup::Found(kek) => {
+                wrap::read_wrap(&keys_dir.join("keychain.wrap"), &kek).map_err(BootstrapError::from)
+            }
             KeyLookup::Absent => Err(BootstrapError::KeychainEntryGone),
             KeyLookup::Unavailable(reason) => Err(BootstrapError::Keychain(reason)),
-        };
-        match keychain_result {
-            Ok(dek) => {
-                tracing::info!("unlocked the master key via the OS keychain");
-                Ok(KeyStatus::Ready(dek))
-            }
-            Err(err) => {
-                if keys_dir.join("recovery.wrap").exists() {
-                    tracing::warn!(
-                        "OS keychain couldn't produce the master key ({err}), but a recovery \
-                         slot exists — falling back to asking the user for their recovery code"
-                    );
-                    Ok(KeyStatus::NeedsRecovery)
-                } else {
-                    Err(err)
-                }
-            }
         }
     } else {
-        let kek = DataKey::random();
-        let dek = DataKey::random();
-        keychain::store(secret_store, &kek).map_err(BootstrapError::Keychain)?;
-        // `m_cost_kib`/`t_cost` of 0: an honest signal that no KDF ran for
-        // this slot — the keychain access itself is the authentication,
-        // per the doc's `kdf_id = 0` framing for this exact slot.
-        let header = WrapHeader {
-            m_cost_kib: 0,
-            t_cost: 0,
-            ..WrapHeader::new([0u8; 16])
-        };
-        wrap::write_wrap(&path, &dek, &kek, &header)?;
-        tracing::info!("minted a new master key, sealed under a keychain-held secret");
-        Ok(KeyStatus::Ready(dek))
+        Ok(DataKey::random())
+    }
+}
+
+/// Writes `<data>/keys/password.wrap`, sealing `items_key` under a root key
+/// derived from `password`. **Must be the very last step of a create-password
+/// run** — the file's existence is what marks the install as migrated.
+/// Re-writeable for a password change (only this key-encryption layer is
+/// touched; the items key and every conversation envelope are re-sealed
+/// under nothing — they're all already sealed under the same items key).
+pub fn create_password_file(
+    keys_dir: &Path,
+    items_key: &DataKey,
+    password: &[u8],
+) -> Result<(), BootstrapError> {
+    if password.is_empty() {
+        return Err(BootstrapError::EmptyPassword);
+    }
+    vault::write_password_file(&vault::password_wrap_path(keys_dir), items_key, password)?;
+    Ok(())
+}
+
+/// Alias of [`create_password_file`] used by the password-change command to
+/// make the "same write, new password" nature of a change explicit. The
+/// caller must already have verified the current password (re-deriving the
+/// items key) before calling this.
+pub fn change_password_file(
+    keys_dir: &Path,
+    items_key: &DataKey,
+    new_password: &[u8],
+) -> Result<(), BootstrapError> {
+    create_password_file(keys_dir, items_key, new_password)
+}
+
+/// Unlocks the items key from `password.wrap` with `password`. A wrong
+/// password lands on `VaultError::Wrap(WrongPassphrase)` (via the wrap
+/// file's own header-recorded salt/parameters) — nothing is decrypted, per
+/// "a wrong password decrypts nothing".
+pub fn unlock_with_password(keys_dir: &Path, password: &[u8]) -> Result<DataKey, BootstrapError> {
+    let password_path = vault::password_wrap_path(keys_dir);
+    if !password_path.exists() {
+        return Err(BootstrapError::NoPasswordFile);
+    }
+    Ok(vault::open_password_file(&password_path, password)?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A `SecretStore` that answers nothing — `detect` only consults it on
+    /// a pre-password (`keychain.wrap`) install, which these tests exercise
+    /// via the file layout alone.
+    struct EmptyStore;
+
+    impl SecretStore for EmptyStore {
+        fn store(&self, _key: &str, _value: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn load(&self, key: &str) -> KeyLookup<String> {
+            let _ = key;
+            KeyLookup::Absent
+        }
+        fn delete(&self, key: &str) -> Result<(), String> {
+            let _ = key;
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn marker_routes_a_launch_to_no_password_mode() {
+        let dir = tempfile::tempdir().unwrap();
+        let keys = dir.path().join("keys");
+        assert_eq!(
+            detect(&EmptyStore, &keys),
+            BootstrapStatus::CreatePassword,
+            "a keys dir that doesn't exist yet is a first-ever run"
+        );
+
+        write_no_password_marker(&keys).unwrap();
+        assert_eq!(detect(&EmptyStore, &keys), BootstrapStatus::NoPassword);
+        assert!(nopass_marker_path(&keys).exists());
+
+        // A password created later overrides the marker.
+        let items_key = DataKey::from_bytes([0x42; 32]);
+        create_password_file(&keys, &items_key, b"hunter2").unwrap();
+        assert_eq!(
+            detect(&EmptyStore, &keys),
+            BootstrapStatus::EnterPassword,
+            "password.wrap wins over the marker once a password exists"
+        );
+
+        // And removing the password restores no-password mode.
+        std::fs::remove_file(vault::password_wrap_path(&keys)).unwrap();
+        assert_eq!(detect(&EmptyStore, &keys), BootstrapStatus::NoPassword);
+    }
+
+    #[test]
+    fn the_marker_leaves_legacy_detection_untouched() {
+        let dir = tempfile::tempdir().unwrap();
+        let keys = dir.path().join("keys");
+        // A pre-password install (keychain.wrap, no password.wrap, no
+        // marker): still classified through the unchanged legacy path.
+        std::fs::create_dir_all(&keys).unwrap();
+        std::fs::write(keys.join("keychain.wrap"), b"legacy").unwrap();
+        std::fs::write(keys.join("recovery.wrap"), b"legacy").unwrap();
+        assert_eq!(
+            detect(&EmptyStore, &keys),
+            BootstrapStatus::UseRecoveryCode,
+            "the marker must not change pre-password install detection"
+        );
+        // Writing a marker on top of a legacy install must not route to
+        // NoPassword — a legacy encrypted store can't be opened plaintext.
+        write_no_password_marker(&keys).unwrap();
+        assert_eq!(
+            detect(&EmptyStore, &keys),
+            BootstrapStatus::UseRecoveryCode,
+            "keychain.wrap detection stays ahead of the marker"
+        );
     }
 }

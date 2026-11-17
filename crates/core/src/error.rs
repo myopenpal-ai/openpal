@@ -114,4 +114,37 @@ pub enum Error {
     /// user. The message must be safe to show to a non-technical user.
     #[error("{0}")]
     Pairing(String),
+
+    /// The per-conversation envelope layer (`crate::crypto::vault` — the
+    /// sealing that protects `conversations.data`) failed to open or seal.
+    /// At the store level this is always a wrong-key or tamper signal; the
+    /// message is `VaultError`'s own and is safe to log (it never contains
+    /// key material).
+    #[error("{0}")]
+    Crypto(String),
+
+    /// Opening or migrating `app_db` failed for something other than the raw
+    /// I/O/SQLite cases above — in practice `app_db::OpenError::
+    /// SchemaVersionMismatch` (a database written by a newer build). The
+    /// message must be safe to show to a non-technical user.
+    #[error("{0}")]
+    Database(String),
+}
+
+impl From<crate::crypto::vault::VaultError> for Error {
+    fn from(e: crate::crypto::vault::VaultError) -> Self {
+        Error::Crypto(e.to_string())
+    }
+}
+
+impl From<crate::app_db::OpenError> for Error {
+    fn from(e: crate::app_db::OpenError) -> Self {
+        match e {
+            crate::app_db::OpenError::Sqlite(e) => Error::Db(e),
+            crate::app_db::OpenError::Io(e) => Error::Io(e),
+            crate::app_db::OpenError::SchemaVersionMismatch { .. } => {
+                Error::Database(e.to_string())
+            }
+        }
+    }
 }

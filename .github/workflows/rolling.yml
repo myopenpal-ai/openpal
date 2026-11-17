@@ -1,0 +1,195 @@
+# Rolling nightly track (docs/RELEASING.md). Mirrors ggml-org/llama.cpp's
+# rolling model: every user-facing merge to `main` auto-creates a monotonic
+# `b{N}` build-number tag — `N = git rev-list --count HEAD` — signed in the
+# runner with the GIT_SIGNING_KEY SSH key (the `v*`/`b*` tag ruleset requires
+# signed tags) and pushed over HTTPS with the RELEASE_PUSH_TOKEN fine-grained
+# PAT, which cascades into `portable.yml`'s `b*` trigger (a tag push made by
+# GITHUB_TOKEN cannot spawn further workflow runs, so a dedicated push
+# credential is required).
+# `portable.yml` then builds the slim canary subset and publishes a
+# **pre-release**.
+#
+# Skips:
+# - merges that only touch release-exempt paths (`docs/`, `*.md`, `.github/`,
+#   `scripts/` — the same set version-bump.yml treats as non-user-facing),
+#   via `paths-ignore`;
+# - a commit whose message contains `[no release]` — the deliberate opt-out.
+#   The check runs against the event payload *before* any checkout, so the
+#   skip is exactly one cheap run.
+#
+# `workflow_dispatch` forces a nightly for current `main` (a missed batch, a
+# re-tag during testing, a runner that was down, …).
+#
+# Safety for batched queue merges: `git rev-list --count HEAD` is monotonic
+# per squash-merge, the workflow concurrency serializes runs (a newer run
+# queues rather than cancels, so no user-facing merge loses its tag), and a
+# tag-exists guard skips — never fails — when `b{N}` already exists, so a
+# rerun or a race between runs that saw the same count can't double-create.
+#
+# This workflow only creates tags; it is not a build or a required check.
+name: rolling-nightly
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - "docs/**"
+      - "*.md"
+      - ".github/**"
+      - "scripts/**"
+  workflow_dispatch:
+
+concurrency:
+  group: rolling-nightly-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  nightly:
+    name: create b{N} nightly tag
+    runs-on: ubuntu-latest
+    steps:
+      # Cheapest possible skip: decide from the event payload before any
+      # checkout. Only `push` carries head_commit; a workflow_dispatch always
+      # runs.
+      - name: Decide whether this merge ships a nightly
+        id: check
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_MESSAGE: ${{ github.event.head_commit.message }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            echo "workflow_dispatch — forcing a nightly for current main"
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+          elif echo "$HEAD_MESSAGE" | grep -q '\[no release\]'; then
+            echo "commit message contains [no release] — skipping the nightly"
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "user-facing merge — creating a nightly tag"
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Checkout with the job's default credentials (persisted) so read-only
+      # git calls still work; the push step below drops those credentials
+      # before pushing so the tag is pushed with the PAT, never GITHUB_TOKEN.
+      - name: Checkout with full history
+        if: steps.check.outputs.should_run == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+        with:
+          fetch-depth: 0
+
+      # The v*/b* tag ruleset requires *signed* tags, so the tag is signed in
+      # the runner with the dedicated GIT_SIGNING_KEY (public half registered
+      # as an SSH signing key on the operator's GitHub account — docs/
+      # RELEASING.md). Fail fast, before any tag work, if it is missing.
+      - name: Import the release signing key
+        if: steps.check.outputs.should_run == 'true'
+        env:
+          GIT_SIGNING_KEY: ${{ secrets.GIT_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${GIT_SIGNING_KEY:-}" ]]; then
+            echo "::error::GIT_SIGNING_KEY secret is not set — register the dedicated release signing key (docs/RELEASING.md)"
+            exit 1
+          fi
+          mkdir -p ~/.ssh
+          umask 077
+          # Paste/secret-UI forms can smuggle in CRLF line endings and stray
+          # whitespace, which break OpenSSH's parser ("error in libcrypto" /
+          # "invalid format"). Normalize: CRLF→LF, trim both ends, ensure a
+          # trailing newline.
+          printf '%s' "$GIT_SIGNING_KEY" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' > ~/.ssh/id_ed25519_releases
+          printf '\n' >> ~/.ssh/id_ed25519_releases
+          if ! ssh-keygen -y -f ~/.ssh/id_ed25519_releases > ~/.ssh/id_ed25519_releases.pub 2>/dev/null; then
+            echo "::error::GIT_SIGNING_KEY is not a valid OpenSSH private key — re-set the secret from the exact key file content (no CRLF, no stray whitespace)."
+            echo "::error::Expected fingerprint: 256 SHA256:xsh0NLM23Uj6mY/txQ6hor9ZEGej62IQCACAEdeSdsU openpal-actions-release-tag-signing"
+            exit 1
+          fi
+          echo "release signing key: $(ssh-keygen -lf ~/.ssh/id_ed25519_releases.pub -E sha256 | cut -d' ' -f2)"
+          # git's SSH signing treats user.signingkey as the *public* key path
+          # (and finds the private key as its non-.pub sibling).
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config gpg.format ssh
+          git config user.signingkey ~/.ssh/id_ed25519_releases.pub
+
+      - name: Create and push the nightly tag
+        if: steps.check.outputs.should_run == 'true'
+        id: tag
+        env:
+          RELEASE_PUSH_TOKEN: ${{ secrets.RELEASE_PUSH_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${RELEASE_PUSH_TOKEN:-}" ]]; then
+            echo "::error::RELEASE_PUSH_TOKEN secret is not set — create the fine-grained PAT and add it as a repository secret (docs/RELEASING.md)"
+            exit 1
+          fi
+          n="$(git rev-list --count HEAD)"
+          tag="b${n}"
+          echo "build number: ${n} — tag: ${tag}"
+
+          # Tag-exists guard: a rerun of this workflow, a forced dispatch, or
+          # a race between queued merges that resolved the same count must
+          # never fail — if b{N} already exists another run already shipped
+          # it. All tags are present locally (fetch-depth: 0), so the check
+          # also covers what other runs pushed before this one started.
+          if git rev-parse -q --verify "refs/tags/${tag}" >/dev/null 2>&1; then
+            echo "Tag ${tag} already exists — skipping (rerun or racing batch)."
+            echo "tag=$tag" >> "$GITHUB_OUTPUT"
+            echo "created=false" >> "$GITHUB_OUTPUT"
+          else
+            # Drop the checkout action's stored credentials so the push below
+            # authenticates with the PAT and nothing else: a GITHUB_TOKEN
+            # push would succeed but would silently never cascade into
+            # portable.yml. Only GITHUB_TOKEN pushes are exempt from
+            # re-triggering workflows — this push fires them.
+            git config --unset-all http.https://github.com/.extraheader || true
+            # x-access-token is the placeholder username GitHub accepts for a
+            # PAT. The token lives in the runner's .git/config for this job
+            # only and is masked in logs by GitHub Actions.
+            git remote add token-origin "https://x-access-token:${RELEASE_PUSH_TOKEN}@github.com/myopenpal-ai/openpal.git"
+            # Sign the tag with the imported GIT_SIGNING_KEY (the tag ruleset
+            # rejects unsigned v*/b* tags). -s implies an annotated tag object
+            # — that is what carries the signature GitHub verifies.
+            git tag -s -m "Nightly build ${tag}" "${tag}"
+            if ! git push token-origin "${tag}"; then
+              # Lost a race to the wire: the remote already has the tag even
+              # though our local refs hadn't seen it yet. That's the same
+              # "already shipped" outcome, not a failure.
+              if git ls-remote --tags token-origin "$tag" | grep -q "refs/tags/$tag"; then
+                echo "Remote already has ${tag} — treating as created."
+                echo "tag=$tag" >> "$GITHUB_OUTPUT"
+                echo "created=false" >> "$GITHUB_OUTPUT"
+              else
+                echo "::error::failed to push ${tag}"
+                exit 1
+              fi
+            else
+              echo "Created and pushed nightly tag ${tag}"
+              echo "tag=$tag" >> "$GITHUB_OUTPUT"
+              echo "created=true" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+
+      - name: Note the nightly tag
+        if: steps.check.outputs.should_run == 'true'
+        run: |
+          if [[ "${{ steps.tag.outputs.created }}" == "true" ]]; then
+            cat >> "$GITHUB_STEP_SUMMARY" <<'EOF'
+          ## 🛰 Nightly tag ${{ steps.tag.outputs.tag }} pushed
+
+          The `portable` workflow is now running its canary build for this tag,
+          and will publish a **pre-release** (invisible to the auto-updater).
+          EOF
+          else
+            cat >> "$GITHUB_STEP_SUMMARY" <<'EOF'
+          ## Nightly tag ${{ steps.tag.outputs.tag }} already exists
+
+          No new tag was created — this commit's nightly was already shipped by
+          an earlier run.
+          EOF
+          fi

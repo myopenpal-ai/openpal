@@ -16,10 +16,14 @@
 //! manual Full entry can coexist in one file without clobbering each other.
 //!
 //! A release created here (because `tag` doesn't have one yet) is a
-//! **draft** — deliberately: `/releases/latest` never resolves to a draft or
-//! pre-release, so publishing stays inert until a human promotes it
-//! (`gh release edit <tag> --draft=false`), matching the plan's soft-launch
-//! gate for the very first auto-updatable release.
+//! **draft** for `--kind stable` — deliberately: `/releases/latest` never
+//! resolves to a draft or pre-release, so publishing stays inert until a
+//! human promotes it (`gh release edit <tag> --draft=false`), matching the
+//! plan's soft-launch gate for the very first auto-updatable release. A
+//! `--kind nightly` run instead creates a **pre-release** whose manifest
+//! version is `X.Y.Z+b{N}` semver build metadata — the rolling track's
+//! canary builds (`b*` tags), which `/releases/latest` also ignores, so no
+//! installed app ever auto-updates to a nightly.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -44,16 +48,38 @@ const PORTABLE_TARGETS: &[&str] = &[
 
 pub(crate) const REPO: &str = "myopenpal-ai/openpal";
 
-pub fn run(tag: &str, portable_dir: Option<&Path>, notes: Option<&str>) -> anyhow::Result<()> {
+/// Which release track the `manifest` command assembles (docs/RELEASING.md).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+pub enum ManifestKind {
+    /// Deliberate, human-gated cut: created as a **draft**, manifest version
+    /// `X.Y.Z`, promoted only after the per-target smoke gate passes.
+    Stable,
+    /// Rolling canary build for a `b{N}` tag: created as a **pre-release**
+    /// (never seen by `/releases/latest`), manifest version `X.Y.Z+b{N}`.
+    Nightly,
+}
+
+pub fn run(
+    tag: &str,
+    kind: ManifestKind,
+    portable_dir: Option<&Path>,
+    notes: Option<&str>,
+) -> anyhow::Result<()> {
     require_env("TAURI_SIGNING_PRIVATE_KEY")?;
     require_env("TAURI_SIGNING_PRIVATE_KEY_PASSWORD")?;
     ensure_gh()?;
 
+    // The manifest `version` is what the app compares against
+    // CARGO_PKG_VERSION: plain `X.Y.Z` for a stable cut, `X.Y.Z+b{N}` semver
+    // build metadata for a nightly (the `b{N}` half comes from the tag
+    // itself, which rolling.yml names after the build number).
+    let manifest_version = match kind {
+        ManifestKind::Stable => tag.trim_start_matches('v').to_string(),
+        ManifestKind::Nightly => nightly_manifest_version(env!("CARGO_PKG_VERSION"), tag)?,
+    };
+
     let mut manifest = fetch_existing_manifest(tag, "latest.json").unwrap_or_default();
-    manifest.insert(
-        "version".to_string(),
-        Value::String(tag.trim_start_matches('v').to_string()),
-    );
+    manifest.insert("version".to_string(), Value::String(manifest_version));
     manifest.insert("pubDate".to_string(), Value::String(now_utc_rfc3339()?));
     if let Some(notes) = notes {
         manifest.insert("notes".to_string(), Value::String(notes.to_string()));
@@ -89,12 +115,28 @@ pub fn run(tag: &str, portable_dir: Option<&Path>, notes: Option<&str>) -> anyho
     .with_context(|| format!("failed to write {}", manifest_path.display()))?;
     assets.push(manifest_path);
 
-    publish(tag, &assets)?;
+    publish(tag, &assets, kind)?;
     println!(
         "\n✓ Published {} file(s) to release {tag} ({REPO}).",
         assets.len()
     );
     Ok(())
+}
+
+/// The manifest `version` for a nightly `b{N}` tag: the workspace semver
+/// (`CARGO_PKG_VERSION`) plus `+b{N}` build metadata (e.g. `0.2.0+b1234`).
+/// The build number is read from the tag itself, which `rolling.yml` names
+/// after `git rev-list --count HEAD`. Never consumed by the auto-updater
+/// (pre-releases are invisible to `/releases/latest`), but it keeps every
+/// nightly's manifest unique and honest.
+fn nightly_manifest_version(base: &str, tag: &str) -> anyhow::Result<String> {
+    let n = tag
+        .strip_prefix('b')
+        .ok_or_else(|| anyhow!("nightly tag must look like b<N>, got \"{tag}\""))?;
+    if n.is_empty() || !n.chars().all(|c| c.is_ascii_digit()) {
+        bail!("nightly tag must look like b<N> with a numeric build number, got \"{tag}\"");
+    }
+    Ok(format!("{base}+{tag}"))
 }
 
 /// Scan `dir` for `OpenPal-portable-<target>.{zip,AppImage}` files (one per
@@ -248,26 +290,39 @@ pub(crate) fn fetch_existing_manifest(tag: &str, asset: &str) -> Option<Map<Stri
     }
 }
 
-/// Ensure a release exists for `tag` (creating a draft if not), then upload
-/// `assets`, overwriting any same-named ones already there.
-fn publish(tag: &str, assets: &[PathBuf]) -> anyhow::Result<()> {
+/// Ensure a release exists for `tag` (creating a draft for a stable cut or a
+/// pre-release for a nightly — both invisible to `/releases/latest`), then
+/// upload `assets`, overwriting any same-named ones already there.
+fn publish(tag: &str, assets: &[PathBuf], kind: ManifestKind) -> anyhow::Result<()> {
     let exists = Command::new("gh")
         .args(["release", "view", tag, "-R", REPO])
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false);
     if !exists {
-        println!("No release exists yet for {tag} — creating one as a draft.");
+        let (create_flag, noun, notes) = match kind {
+            ManifestKind::Stable => (
+                "--draft",
+                "draft",
+                "Automated build — not yet promoted for auto-update.",
+            ),
+            ManifestKind::Nightly => (
+                "--prerelease",
+                "pre-release",
+                "Automated nightly canary build — pre-release, invisible to the auto-updater (/releases/latest never resolves to a pre-release).",
+            ),
+        };
+        println!("No release exists yet for {tag} — creating one as a {noun}.");
         let status = Command::new("gh")
             .args([
                 "release",
                 "create",
                 tag,
-                "--draft",
+                create_flag,
                 "--title",
                 tag,
                 "--notes",
-                "Automated build — not yet promoted for auto-update.",
+                notes,
                 "-R",
                 REPO,
             ])
@@ -389,5 +444,26 @@ pPvxUtM3ZOFeC8+YwSui29fEN9fceotapUFSFxZZ8jr/HFUdcB4T+00LnuWy/JmYOd+ghXtLpP+a1eur
             )
         );
         assert_eq!(find_artifact(tmp.path(), "win-vulkan-x64"), None);
+    }
+
+    #[test]
+    fn nightly_manifest_version_appends_build_metadata() {
+        // The exact `X.Y.Z+b{N}` string is the contract rolling.yml's tags
+        // feed into the nightly manifest: the workspace semver plus the
+        // build-number half of the `b{N}` tag as semver build metadata.
+        assert_eq!(
+            nightly_manifest_version("0.1.0", "b45").unwrap(),
+            "0.1.0+b45"
+        );
+        assert_eq!(
+            nightly_manifest_version("0.4.2", "b1234").unwrap(),
+            "0.4.2+b1234"
+        );
+        // Only `b<N>` tags are nightlies; anything else is rejected loudly so
+        // a mistyped tag can never ship a mislabelled pre-release.
+        assert!(nightly_manifest_version("0.1.0", "45").is_err());
+        assert!(nightly_manifest_version("0.1.0", "b").is_err());
+        assert!(nightly_manifest_version("0.1.0", "bfoo").is_err());
+        assert!(nightly_manifest_version("0.1.0", "v0.2.0").is_err());
     }
 }

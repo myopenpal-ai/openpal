@@ -1,29 +1,72 @@
 # Dependency update automation (P0 security hardening — see docs/SECURITY_POSTURE.md).
 # Keep the `time` pin philosophy from AGENTS.md: bump only the dependency you mean to.
+#
+# Batch policy (issue #84): routine version updates coalesce into ONE grouped
+# PR per ecosystem per week (`groups.*` with `applies-to: version-updates`),
+# and the auto-merge workflow (dependabot-automerge.yml) gates every Dependabot
+# PR against .github/dependabot-policy.json. Security-only updates are NOT
+# covered by the groups — `applies-to: version-updates` leaves them individual
+# and prompt, so they keep the fast lane out of the weekly batch.
 version: 2
 updates:
   - package-ecosystem: cargo
     directory: /
     schedule:
       interval: weekly
+    # Dependency PRs roll out at the next release (they can't run the version
+    # bump script), so they carry the `no-release` opt-out the version-bump
+    # gate recognizes from day one. `dependencies` is the triage label.
+    labels:
+      - dependencies
+      - no-release
+    open-pull-requests-limit: 5
+    groups:
+      routine-cargo:
+        applies-to: version-updates
+        patterns:
+          - "*"
 
   - package-ecosystem: npm
     directory: /ui
     schedule:
       interval: weekly
+    labels:
+      - dependencies
+      - no-release
+    open-pull-requests-limit: 5
+    groups:
+      routine-npm:
+        applies-to: version-updates
+        patterns:
+          - "*"
 
   - package-ecosystem: pip
     directory: /plugins/speech
     schedule:
       interval: weekly
+    labels:
+      - dependencies
+      - no-release
+    open-pull-requests-limit: 5
+    groups:
+      routine-pip:
+        applies-to: version-updates
+        patterns:
+          - "*"
 
   # GitHub Actions: bundled into one PR per week so the SHA pins in the
-  # workflows stay bumpable in lockstep (docs/SECURITY_POSTURE.md).
+  # workflows stay bumpable in lockstep (docs/SECURITY_POSTURE.md). Action
+  # updates only touch .github/ (already release-exempt), labels kept for
+  # consistency in triage.
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    labels:
+      - dependencies
+      - no-release
     groups:
       actions:
+        applies-to: version-updates
         patterns:
           - "*"

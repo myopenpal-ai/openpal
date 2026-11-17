@@ -143,11 +143,22 @@ fn unpack(artifact: &Path, work: &Path) -> anyhow::Result<()> {
             use std::os::unix::fs::PermissionsExt;
             let _ = fs::set_permissions(artifact, fs::Permissions::from_mode(0o755));
         }
-        let status = Command::new(artifact)
-            .arg("--appimage-extract")
-            .current_dir(work)
-            .status()
-            .with_context(|| format!("failed to run {}", artifact.display()))?;
+        // Spawn with cwd = work and an ABSOLUTE program path: a spawn resolves
+        // its program against the new cwd (fork → chdir → execvp), so a
+        // relative `target/smoke/…` would fail with ENOENT even though it
+        // exists relative to the process cwd. Use std::path::absolute, not
+        // canonicalize: the artifact path also feeds `unzip` on the Windows
+        // zip leg, and canonicalize's `\\?\` verbatim prefix breaks msys
+        // unzip (exit 9). The AppImage branch only ever runs on Linux, but
+        // keep the artifact path untouched for the zip leg above.
+        let status = Command::new(
+            std::path::absolute(artifact)
+                .with_context(|| format!("failed to resolve {}", artifact.display()))?,
+        )
+        .arg("--appimage-extract")
+        .current_dir(work)
+        .status()
+        .with_context(|| format!("failed to run {}", artifact.display()))?;
         if !status.success() {
             bail!(
                 "`{} --appimage-extract` failed — the AppImage may be malformed",

@@ -504,15 +504,19 @@ phone borrowing a desktop's model instead).
 
 - `models/*.gguf` (+ `.part` for resumable downloads; custom Hugging Face
   models download here as `custom-<slug>.gguf`)
-- `app.sqlite` — the app-wide SQLCipher database (`openpal_core::app_db`),
+- `app.sqlite` — the app-wide database (`openpal_core::app_db`); SQLCipher
   keyed by the data-encryption key minted/unlocked at boot
-  (`crates/app/src/bootstrap.rs`). Holds what used to be separate plaintext
-  files:
+  (`crates/app/src/bootstrap.rs`) when a password is set, or an ordinary
+  plaintext SQLite file on a no-password install (the Standard Notes "no
+  account, no passcode = device database not encrypted" model — nothing is
+  encrypted at rest). Holds what used to be separate plaintext files:
   - `conversations` table — one row per chat; a `data` column (the full
     conversation, pretty-printed JSON, byte-identical to the old per-file
     format) plus `title`/timestamps/`project_id`/etc. as a
     read-optimization cache re-derived on every save (see
-    `openpal_core::store`)
+    `openpal_core::store`). With a password set, the `data` column holds a
+    per-conversation encrypted envelope; without one it stays plaintext
+    JSON.
   - `projects` table — one row per project (name + timestamps only; a
     conversation's own `project_id` field is what actually assigns it —
     see "Search and Projects" below)
@@ -530,7 +534,10 @@ phone borrowing a desktop's model instead).
 - `plugin-data/<id>/` — a plugin's mutable state: `venv/`, downloaded sources
   (e.g. SearXNG), generated config, `setup.log`, `service.log`
 - `logs/openpal.<date>.log` — the app's own `tracing` output, one file per day,
-  newest 14 kept (older auto-deleted). See **Logging** below.
+  newest 14 kept (older auto-deleted). Encrypted per-line frames
+  (`openpal.<date>.enc`) on a password-protected install; plain `.log` text on
+  a no-password one, matching the database's at-rest state. See **Logging**
+  below.
 - `logs/engine.log` — llama-server output, truncated per start (debugging tool
   #1); the prior session is kept as `logs/engine.prev.log`
 - `logs/plugin-chat.log` — chat-plugin sidecar stderr, truncated per turn (its

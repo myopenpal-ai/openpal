@@ -444,9 +444,12 @@ mod tests {
     fn test_manager() -> RemoteAccessManager {
         let dir = tempfile::tempdir().unwrap().keep();
         let app_db = Arc::new(Mutex::new(
-            crate::app_db::open(&dir.join("app.sqlite"), None)
-                .unwrap()
-                .0,
+            crate::app_db::open(
+                &dir.join("app.sqlite"),
+                Some(&crate::crypto::key::DataKey::from_bytes([0x42; 32])),
+            )
+            .unwrap()
+            .0,
         ));
         let engine = Arc::new(EngineManager::new(dir.join("logs")));
         RemoteAccessManager::new(app_db, engine)

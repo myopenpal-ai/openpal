@@ -4,10 +4,11 @@
 // PR, and CI (version-bump.yml) enforces that no releasable PR ships without a
 // bump. This script makes that one reviewable edit — it rewrites every place
 // the version lives — the root Cargo.toml `[workspace.package] version` (the
-// single source all five crates read via `version.workspace = true`), the five
-// built-in plugin manifests (`plugins/*/plugin.json`), the five workspace
-// entries in `Cargo.lock` and `CHANGELOG.md`, then verifies the result. Full
-// runbook: docs/RELEASING.md.
+// single source all five crates read via `version.workspace = true`), the
+// built-in plugin manifests (`plugins/*/plugin.json`, enumerated automatically
+// so a new plugin can never be forgotten), the five workspace entries in
+// `Cargo.lock` and `CHANGELOG.md`, then verifies the result. Full runbook:
+// docs/RELEASING.md.
 //
 //   node scripts/bump-version.mjs --bump patch --notes "Added: …"  # PR author: bump + changelog line
 //   node scripts/bump-version.mjs --bump minor                      # bump without a changelog note
@@ -29,7 +30,7 @@
 // repository.
 
 import { execFileSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -40,15 +41,20 @@ const CARGO_LOCK = resolve(ROOT, "Cargo.lock");
 const CHANGELOG = resolve(ROOT, "CHANGELOG.md");
 const UPDATE_RS = resolve(ROOT, "crates/core/src/update.rs");
 
-// The five built-in plugin manifests — the version field of each must track
-// the workspace version or a release bundle carries a stale plugin version.
-const PLUGIN_MANIFESTS = [
-  "hf-browser",
-  "smart-model-router",
-  "speech",
-  "web-search",
-  "writing-tools",
-].map((id) => resolve(ROOT, "plugins", id, "plugin.json"));
+// The built-in plugin manifests — enumerated from plugins/, the same way the
+// bundler's backstop test does (bundler/src/stage_plugins.rs
+// `builtin_plugin_manifests_carry_the_workspace_version`), so a new plugin is
+// picked up here automatically and can never drift. Each one's version field
+// must track the workspace version or a release bundle carries a stale plugin
+// version.
+function builtinPluginManifests() {
+  return readdirSync(resolve(ROOT, "plugins"), { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => resolve(ROOT, "plugins", entry.name, "plugin.json"))
+    .filter((path) => existsSync(path))
+    .sort();
+}
+const PLUGIN_MANIFESTS = builtinPluginManifests();
 
 // The five workspace crates; Cargo.lock records each one's resolved version.
 const WORKSPACE_CRATES = [
@@ -355,7 +361,7 @@ if (mode !== "finalize") verify(next);
 console.log(
   mode === "finalize"
     ? `\n✓ finalized the changelog for v${current} (${edits} file(s) edited): CHANGELOG.md — version files were already bumped by the PRs`
-    : `\n✓ bumped to v${next} (${edits} file(s) edited): Cargo.toml, Cargo.lock, 5 plugin manifests${notes !== null ? ", CHANGELOG.md" : ""}\n`
+    : `\n✓ bumped to v${next} (${edits} file(s) edited): Cargo.toml, Cargo.lock, ${PLUGIN_MANIFESTS.length} plugin manifests${notes !== null ? ", CHANGELOG.md" : ""}\n`
 );
 
 console.log("Next steps (docs/RELEASING.md):");

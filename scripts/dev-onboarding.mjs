@@ -139,8 +139,11 @@ function resetProfile(dataDir) {
   }
 }
 
-// The app runs the same probe (crates/app/src/state.rs, `is_writable`) and, when
-// it fails, quietly falls back to your REAL data dir while staying portable.
+// The app runs the same probe (crates/app/src/state.rs, `is_writable`) — and,
+// when it fails, fails startup with an explanatory dialog in portable mode
+// (crates/app/src/state.rs, `DataDirError::ReadOnlyMedia`) rather than falling
+// back to the OS app-data dir. This script pre-checks so the dev gets the
+// message before the app window would.
 function assertWritable(dataDir) {
   try {
     fs.mkdirSync(dataDir, { recursive: true });
@@ -148,7 +151,7 @@ function assertWritable(dataDir) {
     fs.writeFileSync(probe, "");
     fs.rmSync(probe);
   } catch (err) {
-    fail(`${dataDir} isn't writable (${err.message}) — OpenPal would fall back to your real data folder.`);
+    fail(`${dataDir} isn't writable (${err.message}) — OpenPal would refuse to start here.`);
   }
 }
 
@@ -195,14 +198,12 @@ console.log("  reset each time you run this (a Rust-triggered relaunch keeps it)
 if (keepingModels) {
   console.log("  kept its downloaded models — pass --wipe-models for a true first run");
 }
-console.log("  portable mode: no recovery-code screen before onboarding (so the PIN offer's");
-console.log("  recovery-code line isn't true here either), and no Plugins tab");
+console.log("  portable mode: same mandatory password + recovery-code flow as an installed");
+console.log("  app (the first launch starts at the create-password screen), no Plugins tab");
 if (!engineStaged) {
   console.log("  no llama-server staged: a downloaded model can't start, so the PIN and ready");
   console.log("  scenes are unreachable — run `cargo run -p openpal-bundler -- fetch-engine`");
 }
-console.log("  NEVER use Settings → Factory reset here: it also deletes the OS-keychain key");
-console.log("  your real OpenPal install shares");
 console.log("  Ctrl+C stops it\n\n> npm run dev   (OPENPAL_PORTABLE=1)\n");
 
 const options = {

@@ -2,10 +2,9 @@
 //! distinct from `parental.rs`'s PIN (which only gates sending chat
 //! messages). This PIN never derives or protects the data-encryption key: a
 //! 4-6 digit PIN is far too weak to safely be a real crypto factor, so the
-//! DEK stays exactly as protected as it is today (the silent OS keychain
-//! path, `bootstrap::mint_or_unlock`, unchanged). It's a pure UI/session
-//! gate, checked only after the DEK has already been unlocked in the
-//! background.
+//! DEK stays protected by the mandatory password — this gate is a pure
+//! UI/session convenience lock on top, checked only after the password gate
+//! has already unlocked the data.
 //!
 //! `AppLockConfig`/`AppLockState` persist as two plain JSON files
 //! (`applock.json`, `applock-state.json`), the same "corrupt or missing

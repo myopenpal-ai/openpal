@@ -258,9 +258,12 @@ mod tests {
 
     fn test_conn() -> Connection {
         let dir = tempfile::tempdir().unwrap().keep();
-        crate::app_db::open(&dir.join("app.sqlite"), None)
-            .unwrap()
-            .0
+        crate::app_db::open(
+            &dir.join("app.sqlite"),
+            Some(&crate::crypto::key::DataKey::from_bytes([0x42; 32])),
+        )
+        .unwrap()
+        .0
     }
 
     #[test]

@@ -100,9 +100,10 @@ impl AppPaths {
 
 /// Managed from the moment `setup()` starts until the process exits —
 /// Phase 1 (pre-unlock, no crypto) builds and manages this; nothing about
-/// it ever changes once minted except `needs_recovery`. Commands that must
-/// work before a key exists (`get_app_info`, `generate_recovery_code`,
-/// `attempt_recovery_unlock`) take `State<'_, BootState>`; everything else
+/// it ever changes once minted except the unlock-state flags below.
+/// Commands that must work before a key exists (`get_app_info`,
+/// `generate_recovery_code`, `attempt_recovery_unlock`, `create_password`,
+/// `unlock_with_password`) take `State<'_, BootState>`; everything else
 /// takes `State<'_, AppState>`, which isn't managed at all until
 /// [`finish_unlock`] succeeds — see `crate::lib`'s `setup()` for why that
 /// alone is enough to keep the other ~93 commands from touching a store
@@ -111,13 +112,22 @@ impl AppPaths {
 /// `T` isn't managed yet, rather than panicking).
 pub struct BootState {
     pub paths: Arc<AppPaths>,
-    /// Set when `bootstrap::mint_or_unlock` returned
-    /// [`crate::bootstrap::KeyStatus::NeedsRecovery`]: the OS keychain
-    /// couldn't produce the master key on this launch, but a recovery slot
-    /// exists to fall back to. Read by `commands::get_app_info` (drives the
-    /// frontend's recovery-code prompt) and cleared by
-    /// `commands::attempt_recovery_unlock` on success. Always `false` in
-    /// portable mode, which never calls `mint_or_unlock` at all.
+    /// Which of the four password-model gates this launch is behind, set
+    /// once by [`BootState::initialize`] from `bootstrap::detect` (mutually
+    /// exclusive; exactly one is true). Read by `commands::get_app_info` to
+    /// drive the frontend's straight-in (no password) / create-password /
+    /// enter-password / recovery-code start, and cleared by
+    /// `commands::start_without_password`/`create_password`/
+    /// `unlock_with_password`/`attempt_recovery_unlock` once
+    /// [`finish_unlock`] succeeds. There is no silent unlock — see
+    /// `crate::bootstrap`'s doc comment.
+    pub no_password: AtomicBool,
+    pub needs_password: AtomicBool,
+    pub needs_unlock: AtomicBool,
+    /// `true` only in the legacy migration window: a pre-password install
+    /// (`keychain.wrap` present, no `password.wrap`) whose OS keychain can't
+    /// produce the old DEK, but which has `recovery.wrap` to fall back to —
+    /// see [`crate::bootstrap::BootstrapStatus::UseRecoveryCode`].
     pub needs_recovery: AtomicBool,
     /// Whether the legacy on-disk `<data>/skills` store existed at boot —
     /// Phase 1 no longer creates this directory (nothing writes skill
@@ -154,7 +164,7 @@ impl BootState {
     /// today's unlogged, unmessaged process death (see `lib.rs`'s `setup()`
     /// for what happens if [`finish_unlock`] fails after this returns).
     pub fn initialize(app: &AppHandle) -> Result<Self, Box<dyn std::error::Error>> {
-        let (data_dir, portable) = resolve_data_dir(&app.path().app_data_dir()?);
+        let (data_dir, portable) = resolve_data_dir(&app.path().app_data_dir()?)?;
         // Before anything else touches this data dir: refuse to run a
         // second instance against it. `acquire` creates `data_dir` itself
         // if needed, so this doesn't have to wait for the directory loop
@@ -191,6 +201,21 @@ impl BootState {
             );
         }
 
+        // Which password-model gate this launch is behind — see
+        // `crate::bootstrap::detect`'s doc comment. This is the *only*
+        // boot-time crypto-touching step in Phase 1, and it only reads the
+        // keychain on an un-migrated (pre-password) install.
+        let (no_password, needs_password, needs_unlock, needs_recovery) =
+            match crate::bootstrap::detect(
+                crate::secret_store::store().as_ref(),
+                &data_dir.join("keys"),
+            ) {
+                crate::bootstrap::BootstrapStatus::NoPassword => (true, false, false, false),
+                crate::bootstrap::BootstrapStatus::CreatePassword => (false, true, false, false),
+                crate::bootstrap::BootstrapStatus::EnterPassword => (false, false, true, false),
+                crate::bootstrap::BootstrapStatus::UseRecoveryCode => (false, false, false, true),
+            };
+
         // A previous launch that crashed or was force-killed never ran its
         // `Child`'s `Drop` (`kill_on_drop` only fires on a clean exit), so
         // its `llama-server` can still be running — sometimes with a full
@@ -217,7 +242,10 @@ impl BootState {
                 engine_updates_dir,
                 bundled_engine_binary,
             }),
-            needs_recovery: AtomicBool::new(false),
+            needs_recovery: AtomicBool::new(needs_recovery),
+            needs_password: AtomicBool::new(needs_password),
+            needs_unlock: AtomicBool::new(needs_unlock),
+            no_password: AtomicBool::new(no_password),
             legacy_skills_dir_existed,
             _log_guard: log_guard,
             log_writer,
@@ -226,16 +254,15 @@ impl BootState {
     }
 }
 
-/// Phase 2, unlock: derive/hold the DEK, load every store, build and manage
-/// `AppState`, and start the tickers that must not run before a store
-/// exists to write into (`idle::run`/`parental::run`). Shared by the
-/// synchronous happy path (`lib.rs`'s `setup()`, when `mint_or_unlock`
-/// returns `Ready` immediately) and `commands::attempt_recovery_unlock`
-/// (when it doesn't) — one code path builds `AppState`, so the two triggers
-/// can't drift apart. `dek` is `None` only in portable mode; the
-/// `NeedsRecovery` case never reaches this function at all — it's handled
-/// entirely by setting `BootState::needs_recovery` and waiting for recovery
-/// to call this instead.
+/// Phase 2, unlock: derive/hold the DEK (when a password is set), load every
+/// store, build and manage `AppState`, and start the tickers that must not
+/// run before a store exists to write into (`idle::run`/`parental::run`).
+/// Shared by `commands::start_without_password` (`dek: None` — the plaintext
+/// "no password = no encryption" layout), and `commands::create_password`/
+/// `unlock_with_password`/`attempt_recovery_unlock` (`dek: Some`), so every
+/// trigger builds `AppState` through the one path and the shapes can't drift
+/// apart. `Some` keys the connection and every encrypted store; `None`
+/// opens a plaintext database with plaintext rows, logs and backups.
 pub fn finish_unlock(
     app: &AppHandle,
     boot: &BootState,
@@ -255,10 +282,9 @@ pub fn finish_unlock(
     let app_db = Arc::new(Mutex::new(app_db_conn));
 
     // Move the app log from the pre-unlock plaintext `boot.log` to its real
-    // backend now that a DEK (or its deliberate absence, in portable mode)
-    // is known — see `crate::logging`'s own doc comment. `dek` is still
-    // borrowable here, strictly before it moves into the `AppState` literal
-    // below.
+    // backend now that the DEK (or its absence) is known — see
+    // `crate::logging`'s own doc comment. `dek` is still borrowable here,
+    // strictly before it moves into the `AppState` literal below.
     crate::logging::upgrade_to_encrypted(&boot.log_writer, &paths.logs_dir, dek.as_ref());
 
     let settings = openpal_core::settings::load(&app_db.lock().unwrap());
@@ -291,7 +317,7 @@ pub fn finish_unlock(
     // why this explicit, persisted, run-once step is required rather than
     // relying on `ChatMessage.id`'s `#[serde(default)]` alone.
     if app_db_version_before < 11 {
-        openpal_core::store::backfill_message_ids(&mut app_db.lock().unwrap())?;
+        openpal_core::store::backfill_message_ids(&mut app_db.lock().unwrap(), dek.as_ref())?;
     }
 
     let parental_config_path = paths.data_dir.join("parental-config.json");
@@ -476,7 +502,7 @@ pub fn finish_unlock(
         hf_details_cache: tokio::sync::Mutex::new(HashMap::new()),
         hf_listing_cache: tokio::sync::Mutex::new(HashMap::new()),
         gguf_meta_cache: tokio::sync::Mutex::new(HashMap::new()),
-        dek,
+        dek: Mutex::new(dek),
         app_db,
         sync_clock,
     });
@@ -636,15 +662,22 @@ pub struct AppState {
     #[allow(clippy::type_complexity)]
     pub gguf_meta_cache:
         tokio::sync::Mutex<HashMap<(String, String, String), (std::time::Instant, GgufMeta)>>,
-    /// The unwrapped data-encryption key, once `bootstrap::mint_or_unlock` (or
-    /// `commands::attempt_recovery_unlock`) has produced one — the only thing
-    /// any SQLCipher connection ever sees, via `PRAGMA key`. `None` only in
-    /// portable mode (which never calls `mint_or_unlock`); `AppState` isn't
-    /// built at all while a key is still outstanding (see `BootState`'s doc
-    /// comment), so there's no "not unlocked yet" case to represent here.
-    /// `DataKey` has no `Clone` by design — every consumer borrows this as
-    /// `state.dek.as_ref()`, never takes ownership.
-    pub dek: Option<DataKey>,
+    /// The unwrapped data-encryption key, produced by `bootstrap::`
+    /// (`create_password`/`unlock_with_password`, or
+    /// `commands::attempt_recovery_unlock`) before `finish_unlock` runs —
+    /// the only thing any SQLCipher connection ever sees, via `PRAGMA key`,
+    /// and the items key every conversation envelope is wrapped under (see
+    /// `openpal_core::crypto::vault`). `Some` on a password-protected
+    /// install, `None` on a no-password one (the plaintext "no encryption at
+    /// rest" layout). Wrapped in a `std::sync::Mutex` so the set-password /
+    /// remove-password flows can swap the live key (and the plaintext↔
+    /// encrypted conversion of the database it keys) in place without a
+    /// restart — every command reads it as
+    /// `state.dek.lock().unwrap().as_ref()` (or `.clone()` when it must hand
+    /// ownership to a spawned task), never `&state.dek` directly. `DataKey`
+    /// has no `Clone` by design — consumers borrow through the lock, never
+    /// take the key without wrapping it in the `Option`.
+    pub dek: Mutex<Option<DataKey>>,
     /// The app-wide SQLCipher database (`<data>/app.sqlite`) — conversations,
     /// projects, artifacts, settings, custom models, and plugin records.
     /// Opened, keyed, and migrated once in `finish_unlock`, before `dek`
@@ -688,31 +721,53 @@ fn wants_classifier(os: &str) -> bool {
     os != "android"
 }
 
+/// Why Portable's data location couldn't be resolved at boot — surfaced as an
+/// explanatory startup error (`crate::lib`'s `fatal_startup_error`), never a
+/// silent fallback: falling back into the OS app-data dir would open the
+/// *installed* app's `app.sqlite` and share a second password root/`keys/`
+/// hierarchy with it, which the mandatory-password model forbids.
+#[derive(Debug, thiserror::Error)]
+pub enum DataDirError {
+    /// The Portable marker (or `OPENPAL_PORTABLE`) is present but the
+    /// sibling `data/` folder can't be written to.
+    #[error("portable mode is on, but the data folder next to the app isn't writable")]
+    ReadOnlyMedia,
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+}
+
 /// Resolve the data directory and whether this is a Portable build. Portable
 /// mode keeps everything (models, conversations, settings, logs, plugin data) in
 /// a `data/` folder next to the executable, so the app leaves no trace on the
 /// host and can run from a USB stick. If that sibling folder isn't writable
-/// (e.g. the build sits in a read-only location), it falls back to the OS
-/// app-data dir for storage but stays `portable = true`, so the UI still
-/// presents the portable experience (no built-in plugins).
-fn resolve_data_dir(app_data: &Path) -> (PathBuf, bool) {
-    let Some(root) = portable_root() else {
-        return (app_data.to_path_buf(), false);
+/// (e.g. the build sits in a read-only location), this is a hard startup error
+/// ([`DataDirError::ReadOnlyMedia`]) rather than the old fallback into the OS
+/// app-data dir — see [`DataDirError`]'s doc comment for why.
+fn resolve_data_dir(app_data: &Path) -> Result<(PathBuf, bool), DataDirError> {
+    resolve_data_dir_with_root(app_data, portable_root())
+}
+
+/// The core of [`resolve_data_dir`] with the portable root supplied by the
+/// caller (which in production is [`portable_root`]) — split out so the
+/// env/exe-dependent root resolution stays out of the unit tests.
+fn resolve_data_dir_with_root(
+    app_data: &Path,
+    root: Option<PathBuf>,
+) -> Result<(PathBuf, bool), DataDirError> {
+    let Some(root) = root else {
+        return Ok((app_data.to_path_buf(), false));
     };
     let triggered =
         std::env::var_os("OPENPAL_PORTABLE").is_some() || root.join(PORTABLE_MARKER).exists();
     if !triggered {
-        return (app_data.to_path_buf(), false);
+        return Ok((app_data.to_path_buf(), false));
     }
     let data = root.join("data");
-    if std::fs::create_dir_all(&data).is_ok() && is_writable(&data) {
-        (data, true)
+    std::fs::create_dir_all(&data)?;
+    if is_writable(&data) {
+        Ok((data, true))
     } else {
-        tracing::warn!(
-            "portable marker found but {} is not writable — keeping data in the app-data dir",
-            data.display()
-        );
-        (app_data.to_path_buf(), true)
+        Err(DataDirError::ReadOnlyMedia)
     }
 }
 
@@ -952,5 +1007,69 @@ mod tests {
             Some(v) => std::env::set_var(OPENPAL_ENGINE_DIR, v),
             None => std::env::remove_var(OPENPAL_ENGINE_DIR),
         }
+    }
+
+    /// A writable Portable `data/` sibling wins, replacing the old
+    /// "falls back into the OS app-data dir" behaviour entirely: the guard
+    /// below (and the ticket's binding portable delta) makes fallback a hard
+    /// error rather than a shared-directory risk.
+    #[test]
+    fn portable_data_dir_is_used_when_writable() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join(PORTABLE_MARKER), "").unwrap();
+        let app_data = root.path().join("unused-app-data");
+        let (data, portable) =
+            resolve_data_dir_with_root(&app_data, Some(root.path().to_path_buf())).unwrap();
+        assert!(portable);
+        assert_eq!(data, root.path().join("data"));
+        assert!(data.is_dir());
+    }
+
+    /// `app_data` is the ordinary home when the marker is absent.
+    #[test]
+    fn non_portable_root_falls_through_to_app_data() {
+        let root = tempfile::tempdir().unwrap();
+        let app_data = root.path().join("app-data");
+        let (data, portable) =
+            resolve_data_dir_with_root(&app_data, Some(root.path().to_path_buf())).unwrap();
+        assert!(!portable);
+        assert_eq!(data, app_data);
+    }
+
+    /// Read-only media is a hard, explanatory error — never the old silent
+    /// fallback into the OS app-data dir (see [`DataDirError`]'s doc
+    /// comment for why sharing that dir with an installed app is forbidden
+    /// under the password model).
+    #[test]
+    #[cfg(unix)]
+    fn portable_read_only_data_dir_is_a_hard_error() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join(PORTABLE_MARKER), "").unwrap();
+        std::fs::create_dir_all(root.path().join("data")).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(
+            root.path().join("data"),
+            std::fs::Permissions::from_mode(0o555),
+        )
+        .unwrap();
+        let app_data = root.path().join("unused-app-data");
+        let err = resolve_data_dir_with_root(&app_data, Some(root.path().to_path_buf()))
+            .expect_err("a read-only portable data dir must be a startup error");
+        assert!(matches!(err, DataDirError::ReadOnlyMedia), "{err}");
+    }
+
+    /// Same guard, deterministic on every platform and user (even root on
+    /// CI, where chmod-based read-only fixtures don't hold): a `data` path
+    /// that can't even be created is an `Io` error from the same guard.
+    #[test]
+    fn portable_uncreatable_data_dir_is_a_hard_error() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join(PORTABLE_MARKER), "").unwrap();
+        // A *file* named `data` blocks `create_dir_all` deterministically.
+        std::fs::write(root.path().join("data"), "not a directory").unwrap();
+        let app_data = root.path().join("unused-app-data");
+        let err = resolve_data_dir_with_root(&app_data, Some(root.path().to_path_buf()))
+            .expect_err("an uncreatable portable data dir must be a startup error");
+        assert!(matches!(err, DataDirError::Io(_)), "{err}");
     }
 }

@@ -9,14 +9,18 @@
 #   matrix from the tag kind: a `b*` nightly builds a slim canary subset
 #   (default `ubuntu-vulkan-x64` + `win-vulkan-x64` — the targets with a
 #   runner in this org today; overridable via the `NIGHTLY_CANARY_TARGETS`
-#   repo variable), while `v*` and `workflow_dispatch` keep the full
-#   five-target matrix.
+#   repo variable), while `v*` and `workflow_dispatch` build the stable set
+#   (default: the stable targets with a runner in this org today; overridable
+#   via the `STABLE_TARGETS` repo variable).
 # - Runner reality: `macos-x64` builds on the org's self-hosted
 #   `macos-15-intel` runner; `macos-arm64` needs an Apple Silicon runner
-#   registered with the `macos-14` label, which this org does not have yet —
-#   that leg is cancelled until one is added (the `prepare` job emits a
-#   warning naming it). Stable cuts stay failing until every target's runner
-#   exists, by design.
+#   registered with the `macos-14` label, which this org does not have yet.
+#   An unregistered leg is cancelled by GitHub — and a cancelled build leg
+#   skips `publish` (it has `needs: build` and no `if: always()`), so the
+#   draft release would never be assembled. `macos-arm64` is therefore left
+#   out of the default stable matrix until a runner exists; register one (or
+#   set `STABLE_TARGETS`) to include it, and `prepare` warns whenever the
+#   stable set omits it, so the omission is never silent.
 # - the UI is compiled once per run (`ui` job → shared `ui-dist` artifact);
 #   matrix jobs restore it and `tauri.portable.conf.json` disables the
 #   per-target `beforeBuildCommand`.
@@ -28,8 +32,9 @@
 #   smoke makes `promote` issue the human promote instructions, a red smoke
 #   makes `discard` delete the draft so nothing stale lingers.
 #
-# Triggers: manual (with optional pre-staged model), a `v*` stable tag, or a
-# `b*` nightly tag.
+# Triggers: manual (with optional pre-staged model), a `v*` stable tag (cut
+# deliberately via the Make Release workflow), or a `b*` nightly tag
+# (auto-created by rolling.yml on every user-facing merge to `main`).
 name: portable
 
 # Least privilege: read-only by default; the `publish`/`discard` jobs re-open
@@ -78,7 +83,7 @@ jobs:
       engine_tag: ${{ steps.engine.outputs.tag }}
       kind: ${{ steps.matrix.outputs.kind }}
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
 
       - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
 
@@ -104,6 +109,7 @@ jobs:
           REF_NAME: ${{ github.ref_name }}
           EVENT_NAME: ${{ github.event_name }}
           NIGHTLY_CANARY: ${{ vars.NIGHTLY_CANARY_TARGETS }}
+          STABLE_TARGETS: ${{ vars.STABLE_TARGETS }}
         run: |
           set -euo pipefail
 
@@ -140,7 +146,14 @@ jobs:
 
           if is_stable; then
             kind="stable"
-            targets="macos-arm64,macos-x64,win-vulkan-x64,ubuntu-vulkan-x64,ubuntu-vulkan-arm64"
+            # Default: the stable targets with a runner in this org today.
+            # macos-arm64 needs an Apple Silicon runner with the `macos-14`
+            # label (not registered yet) — an unregistered leg is cancelled
+            # by GitHub, and a cancelled build leg skips `publish` (a `needs`
+            # job without `if: always()`), so the draft release would never
+            # be assembled. Register the runner, or set the STABLE_TARGETS
+            # repo variable, to include it again.
+            targets="${STABLE_TARGETS:-macos-x64,win-vulkan-x64,ubuntu-vulkan-x64,ubuntu-vulkan-arm64}"
           else
             # Canary default = the targets with a runner today; add
             # macos-arm64 back once a `macos-14` (Apple Silicon) runner exists.
@@ -156,7 +169,7 @@ jobs:
             t="${t//[[:space:]]/}"
             [ -n "$t" ] || continue
             os="$(os_for "$t")" || {
-              echo "::error::unknown target \"$t\" (from NIGHTLY_CANARY_TARGETS) — known targets: macos-arm64, macos-x64, win-vulkan-x64, ubuntu-vulkan-x64, ubuntu-vulkan-arm64"
+              echo "::error::unknown target \"$t\" (from NIGHTLY_CANARY_TARGETS or STABLE_TARGETS) — known targets: macos-arm64, macos-x64, win-vulkan-x64, ubuntu-vulkan-x64, ubuntu-vulkan-arm64"
               exit 1
             }
             warn_if_unregistered "$t" "$os"
@@ -171,15 +184,22 @@ jobs:
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
           echo "matrix [$kind]: $matrix"
 
+          # Fail safe, not fail silent: a stable cut that omits the arm64
+          # bundle is a deliberate maintenance decision — name it in the run
+          # rather than letting the omission pass without a trace.
+          if [[ "$kind" == "stable" && "$targets" != *macos-arm64* ]]; then
+            echo "::warning::stable matrix has no macos-arm64 — this release ships no Apple Silicon bundle (no macos-14 runner registered; register one or set STABLE_TARGETS to include it)"
+          fi
+
   # The UI is byte-identical for every target — build it once per run and
-  # hand `ui/dist` to every matrix job instead of compiling it five times.
+  # hand `ui/dist` to every matrix job instead of compiling it per target.
   ui:
     name: build shared UI
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 20
           cache: npm
@@ -191,7 +211,7 @@ jobs:
       - name: Build the UI once
         run: npm --prefix ui run build
 
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ui-dist
           path: ui/dist
@@ -208,9 +228,9 @@ jobs:
         include: ${{ fromJson(needs.prepare.outputs.matrix) }}
 
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 20
           cache: npm
@@ -290,7 +310,7 @@ jobs:
       # target), so the bundler's own "already staged for this target" fast path
       # skips the GB-scale download; an engine bump is a deliberate one-time miss.
       - name: Restore engine cache (per target + resolved tag)
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: crates/app/resources/llama
           key: portable-engine-${{ matrix.target }}-${{ needs.prepare.outputs.engine_tag }}
@@ -298,7 +318,7 @@ jobs:
       # The UI was built once in the `ui` job; drop its `dist/` in place so the
       # Tauri build finds it and skips its own beforeBuildCommand entirely.
       - name: Restore shared UI build
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: ui-dist
           path: target/ui-dist
@@ -353,7 +373,7 @@ jobs:
             echo "No bare .AppImage (model bundle ships a .tar.gz instead) — skipping."
           fi
 
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: OpenPal-portable-${{ matrix.target }}
           path: |
@@ -363,20 +383,21 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-  # Only on a real `v*` tag push (never workflow_dispatch, which may build a
-  # one-off with a pre-staged model that shouldn't become "the" release for
-  # that tag; nightlies keep their own pre-release path) — signs every Portable
-  # artifact the matrix produced, merges them into the tag's `latest.json` (see
-  # bundler/src/manifest.rs), and publishes/updates the GitHub Release. A
-  # release created here is a draft: OpenPal's updater endpoint reads
-  # `/releases/latest`, which never resolves to a draft, so this stays inert
-  # until a human promotes it — the deliberate soft-launch gate. The promote
-  # instructions themselves are issued by the `promote` job only after the
-  # per-target smoke gate passes.
+  # Only on a tag push (never workflow_dispatch, which may build a one-off
+  # with a pre-staged model that shouldn't become "the" release for that tag)
+  # — signs every Portable artifact the matrix produced, merges them into the
+  # tag's `latest.json` (see bundler/src/manifest.rs), and publishes/updates
+  # the GitHub Release. The release kind comes from the tag prefix: a `b*`
+  # nightly runs the bundler with `--kind nightly` — a **pre-release** whose
+  # manifest version is `X.Y.Z+b{N}` build metadata, invisible to the
+  # auto-updater (`/releases/latest` never resolves to a pre-release) — while
+  # `v*` keeps `--kind stable`, today's draft-plus-human-promote soft-launch
+  # gate. The promote instructions are issued by the `promote` job only after
+  # the per-target smoke gate passes (stable cuts only).
   publish:
     name: publish
     needs: build
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'push' && (startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/tags/b'))
     runs-on: ubuntu-latest
     # Release-signing runs target a protected environment so the signing
     # secrets are scoped to it (docs/SECURITY_POSTURE.md), and they refuse to
@@ -386,7 +407,7 @@ jobs:
       contents: write
       deployments: write
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
           # Full history so the "tag is on main" check below can run.
           fetch-depth: 0
@@ -404,7 +425,7 @@ jobs:
           fi
           echo "${GITHUB_REF_NAME} ($GITHUB_SHA) is an ancestor of main."
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 20
           cache: npm
@@ -418,31 +439,53 @@ jobs:
       - name: Install npm dependencies (root — for the Tauri CLI signer)
         run: npm ci
 
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: OpenPal-portable-*
           path: target/portable-artifacts
           merge-multiple: true
 
-      - name: Publish signed manifest + release (draft)
+      - name: Publish signed manifest + release
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
+          set -euo pipefail
+          if [[ "$TAG" == b* ]]; then
+            KIND="nightly"
+          else
+            KIND="stable"
+          fi
+          echo "Publishing ${TAG} as a ${KIND} release (bundler --kind ${KIND})"
           cargo run -p openpal-bundler -- manifest \
-            --tag "${{ github.ref_name }}" \
+            --tag "$TAG" \
+            --kind "$KIND" \
             --portable-dir target/portable-artifacts
 
-      - name: Draft assembled summary
+      - name: Release summary
+        env:
+          TAG: ${{ github.ref_name }}
         run: |
-          cat >> "$GITHUB_STEP_SUMMARY" <<'EOF'
+          if [[ "$TAG" == b* ]]; then
+            cat >> "$GITHUB_STEP_SUMMARY" <<'EOF'
+          ## Nightly pre-release ${{ github.ref_name }} published
+
+          Canary bundles signed and uploaded as a **pre-release** whose
+          manifest version is `X.Y.Z+b{N}`. `/releases/latest` never resolves
+          to a pre-release, so no installed app auto-updates to it — nightlies
+          are canary targets only, not updater feeds.
+          EOF
+          else
+            cat >> "$GITHUB_STEP_SUMMARY" <<'EOF'
           ## Draft release ${{ github.ref_name }} assembled
 
           Artifacts signed with the updater key and uploaded; `latest.json`
           merged. Inert until a human promotes — the per-target smoke gate
           runs next and decides whether this draft survives.
           EOF
+          fi
 
   # After the draft is signed and assembled, boot each bundle and verify it:
   # the artifact's SHA-256 and updater signature (against latest.json from the
@@ -454,14 +497,18 @@ jobs:
     needs: [prepare, publish]
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ${{ matrix.os }}
+    # Draft releases are invisible to read-only tokens (the API 404s), and
+    # smoke must download the *draft* it is verifying — so write is required
+    # here even though the job only reads. Without it every smoke leg fails
+    # with "release not found" and the draft gets discarded.
     permissions:
-      contents: read
+      contents: write
     strategy:
       fail-fast: false
       matrix:
         include: ${{ fromJson(needs.prepare.outputs.matrix) }}
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
 
       - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
 
