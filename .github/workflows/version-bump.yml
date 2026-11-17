@@ -9,13 +9,28 @@
 # scripts/), or the PR opts out (`[no release]` in the title / `no-release`
 # label), or the workspace version increased since the merge-base — with the
 # `release: patch|minor|major` labels (applied by labeler.yml) the increase
-# must match the declared bucket. A failing run prints the exact bump command.
+# must match the declared bucket.
+#
+# When it would otherwise fail ONLY because the version never increased
+# (check-version-bump.mjs exits 3 — user-facing code changed, no opt-out, no
+# bump), CI fixes it itself on in-repo PR branches: it applies the exact
+# rewrite `node scripts/bump-version.mjs --bump <bucket> --notes "…"` makes — a
+# single commit on the PR head — and pushes it over HTTPS with the
+# RELEASE_PUSH_TOKEN PAT, because only a non-GITHUB_TOKEN push re-triggers the
+# PR's checks (the re-run then passes; the scheme is idempotent — one bump
+# commit, then green). The bucket is the declared `release:` label when one is
+# present, else the suggestion the check would print (the PR title's
+# conventional type); the CHANGELOG.md line is the PR title. Forks and the
+# merge-queue ref (gh-readonly-queue/…, which no one can push to) keep the old
+# behaviour: the run fails naming the bump command and no push is attempted.
 #
 # This is a REQUIRED check on main and deliberately has NO workflow-level
 # `paths` filter (a required check whose workflow is skipped stays "Expected"
 # and blocks the merge queue) — the exempt-path logic lives in the job. It must
 # also fire on `merge_group` or the queue stalls waiting for a check that never
-# runs (AGENTS.md).
+# runs (AGENTS.md). On `merge_group` the check is always read-only: the bump
+# already sits in the PR's history by the time it is queued, so that leg just
+# verifies and passes.
 name: version-bump
 
 on:
@@ -94,5 +109,100 @@ jobs:
             echo "EOF"
           } >> "$GITHUB_ENV"
 
+      # The gate itself. Exit 0 = pass (green, nothing to do). A failure is
+      # normally red with the bump command in the logs — except exit 3, which
+      # means "would fail only because the version never increased", the one
+      # case CI can fix. On `pull_request` this step then records the bump the
+      # check chose (bucket + note) and reports green so the next step can
+      # apply it; on `merge_group` the queue's throwaway ref cannot be pushed
+      # to, so exit 3 must stay a plain red failure there.
       - name: Check the version bump
-        run: node scripts/check-version-bump.mjs --base "$BASE_SHA" --head "$HEAD_SHA" --title "$PR_TITLE" --labels "$PR_LABELS"
+        id: check
+        run: |
+          set +e
+          node scripts/check-version-bump.mjs --base "$BASE_SHA" --head "$HEAD_SHA" \
+            --title "$PR_TITLE" --labels "$PR_LABELS" > /tmp/version-bump.log 2>&1
+          code=$?
+          set -e
+          cat /tmp/version-bump.log
+          if [[ "$code" -eq 3 && "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
+            bucket=$(sed -n 's/^AUTO_BUMP_BUCKET=//p' /tmp/version-bump.log | tail -n 1)
+            note=$(sed -n 's/^AUTO_BUMP_NOTE=//p' /tmp/version-bump.log | tail -n 1)
+            {
+              echo "bump_bucket=${bucket}"
+              echo "bump_note<<NOTE_EOF"
+              printf '%s\n' "$note"
+              echo "NOTE_EOF"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          exit "$code"
+
+      # Apply the automated bump. Runs only when the check said the failure is
+      # auto-fixable (exit 3 on pull_request), and only for in-repo PR branches
+      # — a fork's head lives on a repo CI has no access to. The pushed commit
+      # re-triggers the PR's checks (PAT push, not GITHUB_TOKEN), so the next
+      # run passes with the bump already in history.
+      - name: Apply the automated version bump to the PR head
+        if: github.event_name == 'pull_request' && steps.check.outputs.bump_bucket != ''
+        env:
+          BUMP_BUCKET: ${{ steps.check.outputs.bump_bucket }}
+          BUMP_NOTE: ${{ steps.check.outputs.bump_note }}
+          RELEASE_PUSH_TOKEN: ${{ secrets.RELEASE_PUSH_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          # Fork PRs: the head branch is not writable from here — keep today's
+          # behaviour (the check already printed the bump command; no push).
+          head_repo="${{ github.event.pull_request.head.repo.full_name }}"
+          if [[ "$head_repo" != "${{ github.repository }}" ]]; then
+            echo "::error::fork PR — CI cannot push to the head branch; run the bump command from the check output"
+            exit 1
+          fi
+
+          # The PAT that lets this push re-trigger the PR's workflows is an
+          # operator step (docs/RELEASING.md); without it we must not push.
+          if [[ -z "${RELEASE_PUSH_TOKEN:-}" ]]; then
+            echo "::error::RELEASE_PUSH_TOKEN is not set — auto-bump aborted; run the bump command by hand (docs/RELEASING.md)"
+            exit 1
+          fi
+
+          # The pull_request checkout sits on the ephemeral refs/pull/N/merge;
+          # the bump must be a commit on the PR head's actual tip, from a clean
+          # tree (bump-version.mjs refuses a dirty one by design).
+          git fetch origin "$GITHUB_SHA"
+          git switch --detach "$GITHUB_SHA"
+
+          node scripts/bump-version.mjs --bump "$BUMP_BUCKET" --notes "$BUMP_NOTE"
+
+          head_ref="${{ github.event.pull_request.head.ref }}"
+          new_version=$(node -p 'require("fs").readFileSync("Cargo.toml","utf8").match(/^\[workspace\.package\]\s*\nversion = "([^"]+)"/m)[1]')
+          git add -A
+          git -c user.name="github-actions[bot]" \
+              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit -m "chore(release): auto-bump workspace version to v${new_version}"
+
+          # Prove the gate actually passes on the committed head before pushing
+          # anywhere — a regression in the bump path fails loudly here, locally,
+          # and leaves the PR untouched.
+          new_sha=$(git rev-parse HEAD)
+          node scripts/check-version-bump.mjs --base "$BASE_SHA" --head "$new_sha" \
+            --title "$PR_TITLE" --labels "$PR_LABELS"
+
+          # Drop the checkout action's stored credentials so the push
+          # authenticates with the PAT and nothing else (same trick as
+          # rolling.yml): only a non-GITHUB_TOKEN push re-triggers workflows.
+          git config --unset-all http.https://github.com/.extraheader || true
+          git remote add bump-origin "https://x-access-token:${RELEASE_PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push bump-origin "HEAD:refs/heads/${head_ref}"
+
+          cat >> "$GITHUB_STEP_SUMMARY" <<EOF
+          ## 🤖 CI bumped the workspace version on this PR
+
+          The PR changed user-facing code without a version bump, so CI committed
+          \`node scripts/bump-version.mjs --bump $BUMP_BUCKET --notes "…"\` to the PR
+          head (one commit: Cargo.toml, Cargo.lock, the plugin manifests,
+          CHANGELOG.md) and pushed it; the version-bump check now passes on the
+          re-run. Review it like any other commit — if the bucket is wrong,
+          re-bump or fix the \`release:\` label.
+          EOF
