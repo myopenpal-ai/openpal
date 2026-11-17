@@ -9,7 +9,9 @@ exactly as [docs/RELEASING.md](docs/RELEASING.md) defines it: `fix` → patch,
 
 ## [Unreleased]
 
+
 - Mandatory password encryption: Standard Notes-style per-conversation keys sealed under a password-derived root, a mandatory first-run password on every onboarding path (portable included), and an id-preserving, in-place migration for existing installs.
+- Open the app at launch from the OS keychain without a password: on installed desktop builds a password-protected install unlocks straight in (the OS keychain stands in for the typed password), portable builds still prompt, and a keychain failure always falls back to the password gate.
 
 ## [0.2.0] - 2026-11-16
 
