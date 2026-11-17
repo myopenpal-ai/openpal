@@ -131,18 +131,22 @@ pub fn run() {
                     create_main_window(app)?;
                     app.manage(boot);
 
-                    // Phase 2 happens *now in the frontend*, not here: there
-                    // is no silent unlock anymore. `BootState::initialize`
-                    // classified this launch into one of
-                    // `needs_password`/`needs_unlock`/`needs_recovery` (see
-                    // `crate::bootstrap::detect`), and `commands::get_app_info`
-                    // surfaces it to the frontend. One of
-                    // `commands::create_password`, `commands::
-                    // unlock_with_password` or `commands::attempt_recovery_unlock`
-                    // calls `state::finish_unlock` itself on success — and
-                    // `AppState` isn't managed until that succeeds, which
-                    // alone is what keeps the store-touching commands gated
-                    // (see `BootState`'s doc comment on `State<T>`).
+                    // Phase 2 happens *now in the frontend*, not here — there
+                    // is no silent unlock inside the boot path itself.
+                    // `BootState::initialize` classified this launch into one
+                    // of `needs_password`/`needs_unlock`/`needs_recovery`/
+                    // `unlock_with_keychain` (see `crate::bootstrap::detect`),
+                    // and `commands::get_app_info` surfaces it to the
+                    // frontend. On the keychain happy path the frontend calls
+                    // `commands::unlock_with_keychain` with no user input;
+                    // otherwise one of `commands::create_password`,
+                    // `commands::unlock_with_password` or
+                    // `commands::attempt_recovery_unlock` runs the gate.
+                    // Whichever command it is calls `state::finish_unlock`
+                    // itself on success — and `AppState` isn't managed until
+                    // that succeeds, which alone is what keeps the
+                    // store-touching commands gated (see `BootState`'s doc
+                    // comment on `State<T>`).
                     Ok(())
                 },
             ));
@@ -163,7 +167,8 @@ pub fn run() {
             }
         })
         // Every command below except `get_app_info`, `start_without_password`,
-        // `create_password`, `unlock_with_password`, `set_password`,
+        // `create_password`, `unlock_with_password`, `unlock_with_keychain`,
+        // `set_password`,
         // `remove_password`, `change_password`, `generate_recovery_code`,
         // `attempt_recovery_unlock`, `get_app_lock_status`, `verify_app_lock_pin`,
         // `set_app_lock_pin`, `unlock_app_lock_with_recovery_code`,
@@ -188,6 +193,7 @@ pub fn run() {
             commands::start_without_password,
             commands::create_password,
             commands::unlock_with_password,
+            commands::unlock_with_keychain,
             commands::set_password,
             commands::remove_password,
             commands::get_password_status,

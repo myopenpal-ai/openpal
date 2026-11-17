@@ -1428,10 +1428,18 @@ pub struct AppInfo {
     /// when `can_start_without_password`; mutually exclusive with
     /// `needs_unlock` and `needs_recovery`.
     needs_password: bool,
-    /// Whether the user must enter their password (`password.wrap` exists)
-    /// to unlock — the normal every-launch gate. Mutually exclusive with
-    /// `needs_password` and `needs_recovery`.
+    /// Whether the user must enter their password (`password.wrap` exists
+    /// and the OS keychain can't unlock) — the every-launch gate. Mutually
+    /// exclusive with `needs_password` and `needs_recovery`.
     needs_unlock: bool,
+    /// Whether the OS keychain can silently produce the items key on this
+    /// installed desktop build (`password.wrap` + a usable `launch-key`
+    /// slot): the frontend calls `unlock_with_keychain` instead of showing
+    /// the password gate — "open the app, no password" is the happy path on
+    /// the user's own machine. The PIN gate (`needs_app_unlock`) still
+    /// applies after it, unchanged. A keychain failure here is never a path
+    /// to unencrypted data: get_app_info reports `needs_unlock` instead.
+    can_unlock_with_keychain: bool,
     /// Whether the recovery-code ceremony (`generate_recovery_code` +
     /// `confirm_recovery_code`) still needs to run — only meaningful on a
     /// password-protected install (never true when `password_set` is
@@ -1487,6 +1495,7 @@ pub fn get_app_info(
         no_password: state.no_password.load(Ordering::Relaxed),
         needs_password: state.needs_password.load(Ordering::Relaxed),
         needs_unlock: state.needs_unlock.load(Ordering::Relaxed),
+        can_unlock_with_keychain: state.unlock_with_keychain.load(Ordering::Relaxed),
         // The recovery-code ceremony only exists for password-protected
         // installs — a no-password install has nothing to protect, so no
         // recovery nag.
@@ -4425,15 +4434,20 @@ pub fn create_password(
     bootstrap::remove_no_password_marker(&keys_dir);
 
     // 4. Build `AppState`.
-    crate::state::finish_unlock(&app, &state, Some(items_key)).map_err(|e| {
+    crate::state::finish_unlock(&app, &state, Some(items_key.clone())).map_err(|e| {
         tracing::error!("created the password, but couldn't finish booting: {e}");
         "Your password was created, but OpenPal couldn't finish starting up. Please restart \
          OpenPal."
             .to_string()
     })?;
+    // 5. On an installed desktop build, provision the launch slot — best-
+    //    effort, only once boot succeeded — so the very next launch unlocks
+    //    straight from the OS keychain, no password screen.
+    provision_launch_key_best_effort(state.paths.portable, &keys_dir, &items_key);
     state.no_password.store(false, Ordering::Relaxed);
     state.needs_password.store(false, Ordering::Relaxed);
     state.needs_unlock.store(false, Ordering::Relaxed);
+    state.unlock_with_keychain.store(false, Ordering::Relaxed);
     state.needs_recovery.store(false, Ordering::Relaxed);
     Ok(())
 }
@@ -4467,6 +4481,7 @@ pub fn start_without_password(
     state.no_password.store(false, Ordering::Relaxed);
     state.needs_password.store(false, Ordering::Relaxed);
     state.needs_unlock.store(false, Ordering::Relaxed);
+    state.unlock_with_keychain.store(false, Ordering::Relaxed);
     state.needs_recovery.store(false, Ordering::Relaxed);
     Ok(())
 }
@@ -4475,6 +4490,13 @@ pub fn start_without_password(
 /// wrong password decrypts nothing — the KDF output simply fails the AEAD
 /// open) and, on success, build `AppState`. Idempotent like the other boot
 /// commands.
+///
+/// Also (re-)provisions the launch slot on an installed desktop build, best-
+/// effort: a password just proven is the one moment this launch is sure of
+/// the items key, so it refreshes the OS keychain's "remember me" entry.
+/// The next launch then unlocks with no password. A provision failure is
+/// logged and ignored — the user is already in; the slot just won't exist
+/// next launch, and this command will simply provision it again then.
 #[tauri::command]
 pub fn unlock_with_password(
     app: tauri::AppHandle,
@@ -4492,15 +4514,88 @@ pub fn unlock_with_password(
             // as such rather than leaking whether it was a missing file.
             "Wrong password".to_string()
         })?;
-    crate::state::finish_unlock(&app, &state, Some(items_key)).map_err(|e| {
+    crate::state::finish_unlock(&app, &state, Some(items_key.clone())).map_err(|e| {
         tracing::error!("unlocked, but couldn't finish booting: {e}");
+        "OpenPal couldn't finish starting up. Please restart OpenPal.".to_string()
+    })?;
+    // A password just proven is the one moment this launch is sure of the
+    // items key, so (re-)provision the launch slot — after boot suceeded,
+    // best-effort: the next launch unlocks with no password. A provision
+    // failure is logged and ignored (the user is already in; the slot just
+    // won't exist next launch and this command provisions it again then).
+    provision_launch_key_best_effort(state.paths.portable, &keys_dir, &items_key);
+    state.no_password.store(false, Ordering::Relaxed);
+    state.needs_password.store(false, Ordering::Relaxed);
+    state.needs_unlock.store(false, Ordering::Relaxed);
+    state.unlock_with_keychain.store(false, Ordering::Relaxed);
+    state.needs_recovery.store(false, Ordering::Relaxed);
+    Ok(())
+}
+
+/// The silent every-launch unlock when the OS keychain is the trusted
+/// unlocker (`get_app_info`'s `can_unlock_with_keychain`): reads the
+/// `launch-key` KEK from the OS keychain, opens `launch.wrap`, and builds
+/// `AppState` — no password screen on the happy path. The PIN gate
+/// (`AppLockGate`) still applies after, unchanged, and the password stays
+/// authoritative for change/remove and as the recovery fallback.
+///
+/// On any keychain failure (`Absent`/`Unavailable`/unopenable slot) this
+/// errors — the frontend falls back to the enter-password gate. Nothing is
+/// ever opened unencrypted and nothing falls back to the no-password
+/// layout: at no point does a keychain failure decrypt the database.
+/// Idempotent like the other boot commands.
+#[tauri::command]
+pub fn unlock_with_keychain(
+    app: tauri::AppHandle,
+    state: State<'_, BootState>,
+) -> Result<(), String> {
+    if app.try_state::<AppState>().is_some() {
+        return Ok(());
+    }
+    let keys_dir = state.paths.data_dir.join("keys");
+    let items_key =
+        crate::bootstrap::unlock_with_keychain(crate::secret_store::store().as_ref(), &keys_dir)
+            .map_err(|e| {
+                tracing::warn!("keychain unlock failed: {e}");
+                "The saved key couldn't be read from the OS keychain. Enter your password instead."
+                    .to_string()
+            })?;
+    crate::state::finish_unlock(&app, &state, Some(items_key)).map_err(|e| {
+        tracing::error!("keychain-unlocked, but couldn't finish booting: {e}");
         "OpenPal couldn't finish starting up. Please restart OpenPal.".to_string()
     })?;
     state.no_password.store(false, Ordering::Relaxed);
     state.needs_password.store(false, Ordering::Relaxed);
     state.needs_unlock.store(false, Ordering::Relaxed);
+    state.unlock_with_keychain.store(false, Ordering::Relaxed);
     state.needs_recovery.store(false, Ordering::Relaxed);
     Ok(())
+}
+
+/// Best-effort launch-slot provisioning, shared by every flow that has just
+/// proven the items key. Gated to installed desktop builds — the slot is
+/// scoped there (see `bootstrap::keychain_unlock_supported` + the
+/// `portable` flag), and must never be written by a Portable run against a
+/// shared data dir. Failures are logged and swallowed: the user's request
+/// has already succeeded; the slot simply won't survive to the next launch.
+fn provision_launch_key_best_effort(
+    portable: bool,
+    keys_dir: &std::path::Path,
+    items_key: &openpal_core::crypto::key::DataKey,
+) {
+    if portable || !crate::bootstrap::keychain_unlock_supported() {
+        return;
+    }
+    if let Err(e) = crate::bootstrap::provision_launch_key(
+        crate::secret_store::store().as_ref(),
+        keys_dir,
+        items_key,
+    ) {
+        tracing::warn!(
+            "couldn't save the launch key to the OS keychain — the next launch will ask for the \
+             password again: {e}"
+        );
+    }
 }
 
 /// Change the password (Settings → Security): verifies `current`, then re-
@@ -4541,6 +4636,10 @@ pub fn change_password(
             "Something went wrong saving your new password. Please try again.".to_string()
         },
     )?;
+    // The items key is unchanged by a password change, so the launch slot
+    // stays valid — refresh it best-effort anyway (it re-seals under a
+    // fresh KEK and self-heals a slot that had gone missing).
+    provision_launch_key_best_effort(state.paths.portable, &keys_dir, &current_root);
     Ok(())
 }
 
@@ -4628,10 +4727,13 @@ pub fn set_password(
         .map_err(friendly)?;
     // 4. `password.wrap` LAST, then drop the no-password marker — the wrap
     //    file's existence is the "migrated" marker (same ordering rule as
-    //    `create_password`).
+    //    `create_password`). The launch slot is provisioned here too anyway
+    //    (on installed desktop builds), so the very next launch opens
+    //    straight from the OS keychain.
     bootstrap::create_password_file(&keys_dir, &items_key, password.as_bytes())
         .map_err(bootstrap_friendly)?;
     bootstrap::remove_no_password_marker(&keys_dir);
+    provision_launch_key_best_effort(state.paths.portable, &keys_dir, &items_key);
     // 5. Swap the live DEK, then release the section.
     *dek_guard = Some(items_key.clone());
     drop(dek_guard);
@@ -4686,9 +4788,13 @@ pub fn remove_password(app: tauri::AppHandle, boot: State<'_, BootState>) -> Res
     openpal_core::store::rewrite_rows_as_plaintext(&mut conn_guard, &items_key)
         .map_err(friendly)?;
     // 4. Drop the password slot and the recovery slot (nothing to recover
-    //    without a password), and record the no-password choice.
+    //    without a password), record the no-password choice, and clear the
+    //    launch slot (its wrapper file, its OS keychain entry, and the
+    //    now-meaningless legacy `keychain.wrap`) — after removal the next
+    //    launch skips the gate and no keychain entry is left behind.
     let _ = std::fs::remove_file(keys_dir.join("password.wrap"));
     let _ = std::fs::remove_file(keys_dir.join("recovery.wrap"));
+    bootstrap::remove_launch_key(crate::secret_store::store().as_ref(), &keys_dir);
     bootstrap::write_no_password_marker(&keys_dir).map_err(|e| {
         tracing::error!("couldn't record the no-password choice: {e}");
         "OpenPal couldn't remove your password. Please try again.".to_string()
@@ -4886,14 +4992,19 @@ pub fn attempt_recovery_unlock(
     let password_path = openpal_core::crypto::vault::password_wrap_path(&keys_dir);
     if password_path.exists() {
         // Post-migration forgot-password: build `AppState` with the
-        // recovered items key, same as `unlock_with_password` would.
-        crate::state::finish_unlock(&app, &state, Some(dek)).map_err(|e| {
+        // recovered items key, same as `unlock_with_password` would — then
+        // re-provision the launch slot best-effort (a key that was just
+        // recovered is as proven as a typed password; a broken boot must
+        // not arm a slot that would skip the gate next launch).
+        crate::state::finish_unlock(&app, &state, Some(dek.clone())).map_err(|e| {
             tracing::error!("recovered the items key, but couldn't finish booting: {e}");
             "Your recovery code worked, but OpenPal couldn't finish starting up. Please restart \
              OpenPal."
                 .to_string()
         })?;
+        provision_launch_key_best_effort(state.paths.portable, &keys_dir, &dek);
         state.needs_recovery.store(false, Ordering::Relaxed);
+        state.unlock_with_keychain.store(false, Ordering::Relaxed);
         return Ok(RecoveryUnlockOutcome::Unlocked);
     }
 

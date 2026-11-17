@@ -2066,6 +2066,28 @@ export const useStore = create<Store>()((set, get) => ({
       await get().finishBootAfterUnlock();
       return;
     }
+    if (appInfo.canUnlockWithKeychain) {
+      // The OS keychain is the trusted unlocker on this installed build
+      // (`password.wrap` + a usable `launch-key` slot): unlock silently —
+      // no password screen. This still goes through the backend's normal
+      // unlock command (which builds the store), so a keychain failure can
+      // never boot plaintext: if it rejects, fall back to the password gate
+      // exactly as if the keychain didn't exist.
+      try {
+        await api.unlockWithKeychain();
+      } catch {
+        set({
+          appInfo: { ...appInfo, canUnlockWithKeychain: false, needsUnlock: true },
+          booted: true,
+        });
+        return;
+      }
+      set({ appInfo });
+      // Fall through: the app-lock PIN gate below (and the final
+      // `finishBootAfterUnlock`) run exactly as they would after any other
+      // unlock — the PIN, where enabled, still appears after the keychain
+      // unlock.
+    }
     if (appInfo.needsPassword || appInfo.needsUnlock) {
       // The mandatory-password gate (`PasswordGate`): first-run create, or
       // the every-launch unlock. Stop here and let the gate call
