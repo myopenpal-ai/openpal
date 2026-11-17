@@ -6,7 +6,6 @@ members = ["crates/core", "crates/app", "crates/sync-protocol", "crates/relay", 
 version = "0.3.0"
 edition = "2021"
 license = "MIT"
-authors = ["myopenpal.ai"]
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
