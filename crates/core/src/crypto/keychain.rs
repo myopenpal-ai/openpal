@@ -1,7 +1,21 @@
-//! Stores and loads the keychain slot's KEK — the doc's `keychain.wrap`
+//! Stores and loads keychain slots' KEKs — the doc's `keychain.wrap`
 //! primary on desktop: "a random 32-byte secret in the OS keychain
-//! (`kdf_id = 0`)" (`docs/SPACES_AUTHORING.md` §9). No KDF runs for this
-//! slot; the keychain access itself is the authentication.
+//! (`kdf_id = 0`)" (`docs/SPACES_AUTHORING.md` §9). No KDF runs for these
+//! slots; the keychain access itself is the authentication.
+//!
+//! Two slots share this module:
+//!
+//! - `master-key` ([`store`]/[`load`]/[`delete`]) — the legacy pre-password
+//!   slot: the KEK that opens `keys/keychain.wrap`. Still load-bearing
+//!   today on the create-password migration path (adopting a pre-password
+//!   install's DEK), for legacy recovery re-minting, and as the shared KEK
+//!   behind the sync pairing wrap files (`crate::sync::pairing`).
+//! - `launch-key` ([`store_launch_key`]/[`load_launch_key`]/
+//!   [`delete_launch_key`]) — the password model's "remember me" slot: the
+//!   KEK that opens `keys/launch.wrap`, which seals the same items key as
+//!   `password.wrap`. Its presence is what lets an installed build open
+//!   straight into the app at launch, the OS keychain standing in for the
+//!   typed password (see `crates/app/src/bootstrap.rs`).
 //!
 //! Backed by a [`SecretStore`] (see that module) rather than `keyring`
 //! directly — desktop/iOS and Android need different implementations, and
@@ -18,6 +32,8 @@ use base64::Engine as _;
 use zeroize::Zeroizing;
 
 const KEYCHAIN_KEY: &str = "master-key";
+/// The password model's launch-unlock slot — see the module doc.
+const LAUNCH_KEY: &str = "launch-key";
 
 // Both wrapped in `Zeroizing` — the base64 encoding of the raw KEK is just
 // as sensitive as the KEK itself, and neither `String` nor `Vec<u8>` scrubs
@@ -34,29 +50,76 @@ fn decode(s: &str) -> Option<DataKey> {
     Some(DataKey::from_bytes(bytes))
 }
 
-pub fn store(store: &dyn SecretStore, kek: &DataKey) -> Result<(), String> {
+/// Named-slot core shared by the `master-key` and `launch-key` wrappers
+/// below — each public function is a thin, distinctive-error-message veneer
+/// over it, so the two slots never drift in shape.
+fn store_slot(
+    store: &dyn SecretStore,
+    slot: &str,
+    kek: &DataKey,
+    verb: &str,
+) -> Result<(), String> {
     store
-        .store(KEYCHAIN_KEY, &encode(kek))
-        .map_err(|e| format!("couldn't save the master key to the OS keychain: {e}"))
+        .store(slot, &encode(kek))
+        .map_err(|e| format!("couldn't {verb} to the OS keychain: {e}"))
+}
+
+fn delete_slot(store: &dyn SecretStore, slot: &str, verb: &str) -> Result<(), String> {
+    store
+        .delete(slot)
+        .map_err(|e| format!("couldn't {verb}: {e}"))
+}
+
+fn load_slot(store: &dyn SecretStore, slot: &str, bad_entry: &str) -> KeyLookup<DataKey> {
+    match store.load(slot) {
+        KeyLookup::Found(encoded) => match decode(&Zeroizing::new(encoded)) {
+            Some(kek) => KeyLookup::Found(kek),
+            None => KeyLookup::Unavailable(bad_entry.to_string()),
+        },
+        KeyLookup::Absent => KeyLookup::Absent,
+        KeyLookup::Unavailable(reason) => KeyLookup::Unavailable(reason),
+    }
+}
+
+pub fn store(store: &dyn SecretStore, kek: &DataKey) -> Result<(), String> {
+    store_slot(store, KEYCHAIN_KEY, kek, "save the master key")
 }
 
 /// Removes the keychain entry entirely — factory reset only. Best-effort:
 /// an already-absent entry isn't a failure the caller needs to act on.
 pub fn delete(store: &dyn SecretStore) -> Result<(), String> {
-    store
-        .delete(KEYCHAIN_KEY)
-        .map_err(|e| format!("couldn't remove the saved master key: {e}"))
+    delete_slot(store, KEYCHAIN_KEY, "remove the saved master key")
 }
 
 pub fn load(store: &dyn SecretStore) -> KeyLookup<DataKey> {
-    match store.load(KEYCHAIN_KEY) {
-        KeyLookup::Found(encoded) => match decode(&Zeroizing::new(encoded)) {
-            Some(kek) => KeyLookup::Found(kek),
-            None => KeyLookup::Unavailable("the OS keychain entry was not a valid key".to_string()),
-        },
-        KeyLookup::Absent => KeyLookup::Absent,
-        KeyLookup::Unavailable(reason) => KeyLookup::Unavailable(reason),
-    }
+    load_slot(
+        store,
+        KEYCHAIN_KEY,
+        "the OS keychain entry was not a valid key",
+    )
+}
+
+/// The launch slot is written (or re-written, on the flows that re-verify
+/// the items key: create/set/change password, a typed unlock, a recovery
+/// unlock) and deleted (on remove-password) from `crates/app`. Deliberately
+/// a separate slot from `master-key`: that one is still load-bearing for the
+/// legacy pre-password path and for sync pairing, and must never be
+/// overwritten by the password model's "remember me" key.
+pub fn store_launch_key(store: &dyn SecretStore, kek: &DataKey) -> Result<(), String> {
+    store_slot(store, LAUNCH_KEY, kek, "save the launch key")
+}
+
+/// Best-effort, same shape as [`delete`].
+pub fn delete_launch_key(store: &dyn SecretStore) -> Result<(), String> {
+    delete_slot(store, LAUNCH_KEY, "remove the saved launch key")
+}
+
+pub fn load_launch_key(store: &dyn SecretStore) -> KeyLookup<DataKey> {
+    load_slot(
+        store,
+        LAUNCH_KEY,
+        "the OS keychain entry was not a valid launch key",
+    )
 }
 
 #[cfg(test)]

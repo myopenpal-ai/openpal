@@ -1284,6 +1284,14 @@ export interface AppInfo {
    * exists) to unlock — the normal every-launch gate. Mutually exclusive
    * with `needsPassword` and `needsRecovery`. */
   needsUnlock: boolean;
+  /** Whether the OS keychain can silently produce the encryption key on
+   * this installed desktop build (`password.wrap` + a usable `launch-key`
+   * slot): `boot()` calls `unlockWithKeychain` and opens straight into the
+   * app — no password screen. The app-lock PIN (`needsAppUnlock`), where
+   * enabled, still gates after it, unchanged. A keychain failure here is
+   * never a path to unencrypted data: the backend reports `needsUnlock`
+   * instead. Mutually exclusive with `needsUnlock`. */
+  canUnlockWithKeychain: boolean;
   /** True until the user has seen and acknowledged their one-time data
    * encryption recovery code (`RecoverySetup`) — only ever meaningful on a
    * password-protected install (`passwordSet`): with no password there is
