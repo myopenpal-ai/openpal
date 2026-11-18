@@ -545,6 +545,7 @@ pub fn finish_unlock(
         parental_state_path,
         custom: tokio::sync::Mutex::new(custom),
         downloads: tokio::sync::Mutex::new(HashMap::new()),
+        engine_unsafe_tag: tokio::sync::Mutex::new(None),
         generation: GenerationQueue::default(),
         dictation_stop: tokio::sync::Mutex::new(None),
         audio: AudioPlayer::new(),
@@ -668,6 +669,17 @@ pub struct AppState {
     pub injection: Arc<openpal_core::injection::Detector>,
     /// model_id -> cancel flag for in-flight downloads.
     pub downloads: tokio::sync::Mutex<HashMap<String, Arc<AtomicBool>>>,
+    /// The active engine build's unsafe tag, if the last gate evaluation
+    /// (`commands::get_update_gate`) found it declared unsafe by the engine
+    /// manifest. Defense-in-depth only — the UI is the real gate — but it's
+    /// how `commands::start_engine` refuses to start a build the manifest
+    /// named before a doomed round trip ever begins, mirroring
+    /// `require_entitlement`'s same "prevent the doomed call" posture. `None`
+    /// on Android/however work (that platform has no in-app update path), and
+    /// cleared by a successful `install_engine_update` — the freshly staged
+    /// build is by construction the safe one, and reads of `current_engine_tag`
+    /// already resolve to it.
+    pub engine_unsafe_tag: tokio::sync::Mutex<Option<String>>,
     /// The single queue every request that uses the model waits in — chat
     /// turns, Writing Tools, the Message improver, the safety classifier.
     /// See `crate::generation`.

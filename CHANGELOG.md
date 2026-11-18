@@ -10,8 +10,10 @@ exactly as [docs/RELEASING.md](docs/RELEASING.md) defines it: `fix` → patch,
 ## [Unreleased]
 
 
+
 - Mandatory password encryption: Standard Notes-style per-conversation keys sealed under a password-derived root, a mandatory first-run password on every onboarding path (portable included), and an id-preserving, in-place migration for existing installs.
 - Open the app at launch from the OS keychain without a password: on installed desktop builds a password-protected install unlocks straight in (the OS keychain stands in for the typed password), portable builds still prompt, and a keychain failure always falls back to the password gate.
+- Block the app and engine on unsafe published versions: a manifest-declared minimum supported version and blocked-version list turn the voluntary update dialog into a blocking, non-dismissable gate until a safe version is installed; an unsafe active engine build blocks chat and model usage until the engine is updated.
 
 ## [0.2.0] - 2026-11-16
 

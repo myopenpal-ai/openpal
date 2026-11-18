@@ -290,6 +290,7 @@ pub fn run() {
             commands::factory_reset,
             commands::check_for_update,
             commands::install_update,
+            commands::get_update_gate,
             commands::check_engine_update,
             commands::install_engine_update,
             commands::open_models_folder,

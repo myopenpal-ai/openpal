@@ -11,7 +11,23 @@
 //! Known gap: the manifest is hosted on GitHub Releases for a currently
 //! *private* repo, which real users' installs can't fetch anonymously.
 //! Nothing here works end-to-end for end users until the repo goes public —
-//! see the "Auto-Updater" plan for the accepted rollout gate.
+//! see the "Auto-Updater" plan for the accepted rollout gate. This includes
+//! the unsafe-version gate in [`is_version_unsafe`]: the same fetch that
+//! can't reach a private feed today is what decides whether a version gets
+//! gated, so real users see no gate until the feed is public.
+//!
+//! # The unsafe declaration (fail-open)
+//!
+//! The manifest may declare versions unsafe via `minimum_version` (semver)
+//! and `blocked_versions` (an exact-match list). This is what lets a
+//! published critical flaw *block* an old install instead of just softly
+//! offering a fix. The declaration is load-bearing, so its posture is
+//! explicit: **the gate fails open.** A manifest that cannot be fetched
+//! (offline, outage) or that carries no declaration never gates anyone — a
+//! networking blip must not silently lock a local-first app, and nothing can
+//! stop a determined user of an open-source client anyway, so the gate is a
+//! strong nudge, not DRM. Only a successfully fetched manifest that
+//! positively names the running version as unsafe gates it.
 
 use crate::{Error, Result};
 use semver::Version;
@@ -36,6 +52,16 @@ pub struct Manifest {
     /// `ubuntu-vulkan-x64`, `ubuntu-vulkan-arm64`).
     #[serde(default)]
     pub portable: HashMap<String, PortableEntry>,
+    /// The unsafe declaration: the lowest app version still supported (any
+    /// strictly-lower install is gated), semver. Absent in a manifest
+    /// published before the declaration existed — and that absence means
+    /// "nothing is unsafe" (see the module doc's fail-open posture).
+    #[serde(default)]
+    pub minimum_version: Option<String>,
+    /// The unsafe declaration, blocked list: app versions exact-matched here
+    /// (semver) are gated even when they're at or above `minimum_version`.
+    #[serde(default)]
+    pub blocked_versions: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -104,6 +130,37 @@ pub fn is_update_available(current: &Version, manifest: &Manifest) -> Option<Ava
     })
 }
 
+/// Whether `current` is *declared unsafe* by `manifest`'s unsafe declaration
+/// (see the module doc): an exact match on `blocked_versions`, or a version
+/// strictly below `minimum_version`. Pure and offline, same as
+/// [`is_update_available`] — this is the gate's whole decision, easy to
+/// unit-test against fixtures.
+///
+/// Fails open, on purpose: a manifest with no declaration, an unparseable
+/// `minimum_version`, or an unparseable blocked entry never counts as
+/// "unsafe". A blocked-list match wins even when the version is at or above
+/// `minimum_version` — an explicitly named bad version is bad regardless of
+/// the floor. A `current` that's *ahead* of the declaration (e.g. a local
+/// dev build) is safe, exactly as `is_update_available` treats an
+/// ahead-of-manifest install as "no update".
+pub fn is_version_unsafe(current: &Version, manifest: &Manifest) -> bool {
+    let blocked = manifest.blocked_versions.iter().any(|v| {
+        Version::parse(v.trim_start_matches('v'))
+            .map(|blocked| blocked == *current)
+            .unwrap_or(false)
+    });
+    if blocked {
+        return true;
+    }
+    let Some(minimum) = manifest.minimum_version.as_deref() else {
+        return false;
+    };
+    match Version::parse(minimum.trim_start_matches('v')) {
+        Ok(minimum) => *current < minimum,
+        Err(_) => false,
+    }
+}
+
 /// This machine's key into `Manifest::portable`, matching the bundler's own
 /// `--target` strings (`bundler/src/portable.rs`) — the two vocabularies
 /// must stay in sync by hand, since one is Rust `env::consts` and the other
@@ -136,6 +193,17 @@ mod tests {
             pub_date: "2026-01-01T00:00:00Z".to_string(),
             platforms: HashMap::new(),
             portable: HashMap::new(),
+            minimum_version: None,
+            blocked_versions: Vec::new(),
+        }
+    }
+
+    /// `manifest` with the unsafe declaration filled in.
+    fn unsafe_manifest(minimum_version: Option<&str>, blocked_versions: &[&str]) -> Manifest {
+        Manifest {
+            minimum_version: minimum_version.map(str::to_string),
+            blocked_versions: blocked_versions.iter().map(|v| (*v).to_string()).collect(),
+            ..manifest("9.9.9")
         }
     }
 
@@ -150,6 +218,19 @@ mod tests {
     /// The smallest version that is strictly newer than `current` (patch+1).
     fn next_patch(current: &Version) -> Version {
         Version::new(current.major, current.minor, current.patch + 1)
+    }
+
+    /// The largest version strictly older than `current`, built from a
+    /// `saturating_sub` so it never underflows — if the workspace version is
+    /// ever `0.0.0`, `prev_patch` degenerates to equality, which the safety
+    /// assertions below still hold for (equal-to-minimum is safe, and a
+    /// blocked entry can still be tested independently).
+    fn prev_patch(current: &Version) -> Version {
+        Version::new(
+            current.major,
+            current.minor,
+            current.patch.saturating_sub(1),
+        )
     }
 
     #[test]
@@ -185,6 +266,100 @@ mod tests {
     fn malformed_manifest_version_is_not_available() {
         let current = current();
         assert!(is_update_available(&current, &manifest("not-a-version")).is_none());
+    }
+
+    // -- is_version_unsafe -------------------------------------------------
+
+    #[test]
+    fn version_below_minimum_is_unsafe() {
+        let current = current();
+        // Minimum is current+2 patches: current is below the floor.
+        let minimum = Version::new(current.major, current.minor, current.patch + 2);
+        let manifest = unsafe_manifest(Some(&minimum.to_string()), &[]);
+        assert!(is_version_unsafe(&current, &manifest));
+    }
+
+    #[test]
+    fn version_equal_to_minimum_is_safe() {
+        let current = current();
+        let manifest = unsafe_manifest(Some(&current.to_string()), &[]);
+        assert!(!is_version_unsafe(&current, &manifest));
+    }
+
+    #[test]
+    fn version_above_minimum_is_safe() {
+        // The manifest's floor is one patch below current, so current reads
+        // as ahead-of-manifest — same "installed is fine" answer as a local
+        // dev build newer than anything published.
+        let previous = prev_patch(&current()).to_string();
+        let manifest = unsafe_manifest(Some(&previous), &[]);
+        assert!(!is_version_unsafe(&current(), &manifest));
+    }
+
+    #[test]
+    fn blocked_version_is_unsafe_even_above_minimum() {
+        // The floor is below current (so it would be safe by the floor
+        // alone), but current itself is on the blocked list — the exact list
+        // wins over the minimum.
+        let current = current();
+        let previous = prev_patch(&current).to_string();
+        let manifest = unsafe_manifest(Some(&previous), &[&current.to_string()]);
+        assert!(is_version_unsafe(&current, &manifest));
+    }
+
+    #[test]
+    fn non_blocked_version_is_safe() {
+        let current = current();
+        let manifest = unsafe_manifest(None, &[&next_patch(&current).to_string()]);
+        assert!(!is_version_unsafe(&current, &manifest));
+    }
+
+    #[test]
+    fn no_declaration_is_safe() {
+        // A manifest published before the declaration existed (all fields
+        // serde-default/absent) must never gate anyone — fail open.
+        let current = current();
+        assert!(!is_version_unsafe(
+            &current,
+            &manifest(&current.to_string())
+        ));
+    }
+
+    #[test]
+    fn malformed_minimum_is_safe() {
+        let current = current();
+        let manifest = unsafe_manifest(Some("not-a-version"), &[]);
+        assert!(!is_version_unsafe(&current, &manifest));
+    }
+
+    #[test]
+    fn malformed_blocked_entries_are_ignored() {
+        let current = current();
+        let manifest = unsafe_manifest(None, &["not-a-version"]);
+        assert!(!is_version_unsafe(&current, &manifest));
+    }
+
+    #[test]
+    fn leading_v_is_tolerated_in_the_declaration() {
+        let current = current();
+        let minimum = next_patch(&next_patch(&current));
+        let manifest = unsafe_manifest(Some(&format!("v{minimum}")), &[&format!("v{minimum}")]);
+        assert!(is_version_unsafe(&current, &manifest));
+    }
+
+    #[test]
+    fn version_missing_from_manifest_is_never_auto_blocked() {
+        // A `current` the manifest's `version` field doesn't mention must
+        // still be classifiable by the declaration alone — this pins that the
+        // gate never leans on the "newer" logic: a *blocked* version keeps
+        // reading as unsafe even though `is_update_available` for it would be
+        // a no-op.
+        let current = current();
+        let manifest = unsafe_manifest(
+            Some(&next_patch(&current).to_string()),
+            &[&current.to_string()],
+        );
+        assert!(is_version_unsafe(&current, &manifest));
     }
 
     #[test]

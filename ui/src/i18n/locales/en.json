@@ -300,14 +300,14 @@
       },
       "updates": {
         "label": "OpenPal updates",
-        "hint": "OpenPal {{version}}. When on, OpenPal briefly contacts github.com after each launch to check for a newer version. No other data is sent. Off by default.",
+        "hint": "OpenPal {{version}}. To keep you safe, OpenPal checks the update feed after each launch and blocks versions with a published critical flaw. When on, it also offers newer versions after launch. No other data is sent.",
         "unavailableOnMobile": "Updates for this app come through the Play Store.",
         "checking": "Checking…",
         "checkNow": "Check for updates now"
       },
       "engineUpdates": {
         "label": "AI engine updates",
-        "hint": "The AI engine (llama.cpp) ships more often than OpenPal itself, and updating it can add support for new models. When on, OpenPal briefly contacts github.com after each launch to check for a newer build. No other data is sent. Off by default.",
+        "hint": "The AI engine (llama.cpp) ships more often than OpenPal itself, and updating it can add support for new models. To keep you safe, OpenPal checks the engine update feed after each launch and blocks models from running on a build with a published critical flaw. When on, it also offers newer builds. No other data is sent.",
         "checking": "Checking…",
         "checkNow": "Check for engine updates now",
         "install": "Update to {{tag}}",
@@ -697,6 +697,14 @@
     "installing": "Installing…",
     "tryAgain": "Try again",
     "updateAndRestart": "Update & Restart"
+  },
+  "updateGate": {
+    "title": "This version of OpenPal is no longer supported",
+    "body": "This version is missing a critical fix. Update now to keep using OpenPal.",
+    "updateNow": "Update now",
+    "engineTitle": "The AI engine needs an update",
+    "engineBody": "The engine on this device is outdated and unsafe. Update it to keep using OpenPal.",
+    "updateEngine": "Update engine"
   },
   "plugins": {
     "title": "Plugins",

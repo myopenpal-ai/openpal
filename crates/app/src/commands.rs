@@ -1763,6 +1763,15 @@ pub async fn start_engine(
              Disconnect from Remote inference in Settings to use a model on this computer."
             .to_string());
     }
+    // The engine gate (see `get_update_gate`): when the engine manifest
+    // declared the active build unsafe, refuse to start it. The UI blocks the
+    // user here — this refusal is the doomed-round-trip guard, exactly like
+    // `require_entitlement`. The flag is cleared (in `install_engine_update`)
+    // once a safe build is staged, so the next start goes through normally.
+    if let Some(tag) = state.engine_unsafe_tag.lock().await.clone() {
+        tracing::warn!(%tag, "refusing to start a model on an engine build the manifest declared unsafe");
+        return Err(ENGINE_UNSAFE_MSG.to_string());
+    }
     let spec = resolve_spec(&state, &model_id).await?;
 
     let binary = state.paths.engine_binary().ok_or_else(|| {
@@ -5218,6 +5227,13 @@ const CHECK_FAILED_MSG: &str =
     "Couldn't check for updates. Check your internet connection and try again.";
 const NO_UPDATE_MSG: &str = "No update is available right now.";
 const NOT_CONFIGURED_MSG: &str = "Checking for updates isn't set up yet.";
+/// The active engine build is declared unsafe by the engine manifest (see
+/// `get_update_gate`) — chat stays blocked until the user updates the engine.
+/// Mirrors the `updateGate.engine*` copy the UI shows for the same state;
+/// the Rust side doesn't go through i18n, so its own static sentence lives
+/// here like every other friendly error in this file.
+const ENGINE_UNSAFE_MSG: &str =
+    "The AI engine on this device is outdated and unsafe. Update it to keep using OpenPal.";
 /// `tauri-plugin-updater` compiles and registers fine on Android, but Play
 /// Store policy doesn't want a self-updating APK and its manifest-based
 /// flow isn't the Android update path regardless — see `check_for_update`/
@@ -5659,7 +5675,128 @@ pub async fn install_engine_update(
 
     openpal_core::engine_update::prune_old_engines(&state.paths.engine_updates_dir, &entry.tag);
 
+    // The engine gate's defense-in-depth flag: the freshly staged build is
+    // the safe one (the manifest declared everything older unsafe), so the
+    // soon-to-be-current tag must not keep `start_engine` blocked. The
+    // frontend mirrors this by clearing its own `updateGate` on success.
+    *state.engine_unsafe_tag.lock().await = None;
+
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// The unsafe-version gate — runs at every launch, not on any opt-in.
+// ---------------------------------------------------------------------------
+
+/// The startup gate's verdict, returned by [`get_update_gate`]: which
+/// surfaces the frontend must block on. Both fields are `None` when no gate
+/// applies — including on Android and on *any* fetch/parse/config failure
+/// (the gate fails open; see `openpal_core::update`'s module doc), so a
+/// networking blip neither gates nor un-gates anyone.
+#[derive(serde::Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateGateStatus {
+    /// The running app version, when the app manifest declares it unsafe
+    /// (below `minimum_version` or exact-matched on `blocked_versions`).
+    pub app_blocked_version: Option<String>,
+    /// The active engine build tag, when the engine manifest declares it
+    /// unsafe (below `minimum_engine_tag` or exact-matched on
+    /// `blocked_engine_tags`). `None` when there's no resolvable engine.
+    pub engine_blocked_tag: Option<String>,
+}
+
+/// Evaluation of the unsafe declaration at startup — the gate that replaces
+/// the voluntary "new version available" dialog for versions the manifest
+/// declares unsafe. Unlike `check_for_update`, this runs on every launch
+/// regardless of `settings.auto_check_updates` (enforcement cannot be
+/// optional), and unlike an update *offer* it never errors out loud: any
+/// failure yields an empty (no gate) status rather than an `Err`, keeping
+/// the fail-open posture — see `openpal_core::update`'s module doc. The two
+/// update channels check in together here so the frontend makes one startup
+/// call for both gates.
+///
+/// The app half reads the raw manifest itself on both SKUs: the Full SKU's
+/// `tauri-plugin-updater` parses `platforms`/`version` but doesn't surface
+/// the unsafe declaration, and the Portable half already reads the raw
+/// manifest for its own download — so one raw fetch per launch serves both,
+/// exactly like `install_update_portable`'s. The engine half also caches its
+/// verdict into `state.engine_unsafe_tag`, which `start_engine` reads to
+/// refuse a doomed start without any network call of its own.
+#[tauri::command]
+pub async fn get_update_gate(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<UpdateGateStatus, String> {
+    if cfg!(target_os = "android") {
+        // Updates come from the Play Store on Android (see `check_for_update`),
+        // so there is no in-app update path for a gate to offer — never gate.
+        return Ok(UpdateGateStatus {
+            app_blocked_version: None,
+            engine_blocked_tag: None,
+        });
+    }
+
+    let Ok(client) = update_client() else {
+        tracing::warn!("update gate: no HTTP client available; fail-open");
+        return Ok(UpdateGateStatus {
+            app_blocked_version: None,
+            engine_blocked_tag: None,
+        });
+    };
+
+    // App half: classify the running version against the manifest's declared
+    // minimum / blocked list. Both SKUs read the same raw manifest.
+    let app_blocked_version = match resolve_endpoint(&app) {
+        Ok(endpoint) => match openpal_core::update::fetch_manifest(&client, &endpoint).await {
+            Ok(manifest) => {
+                let current = openpal_core::update::current_version();
+                openpal_core::update::is_version_unsafe(&current, &manifest)
+                    .then(|| current.to_string())
+            }
+            Err(e) => {
+                tracing::warn!("update gate: app manifest unavailable ({e}); fail-open");
+                None
+            }
+        },
+        Err(e) => {
+            tracing::warn!("update gate: no app manifest endpoint ({e}); fail-open");
+            None
+        }
+    };
+
+    // Engine half: classify the active engine build, and cache the verdict for
+    // `start_engine`'s defense-in-depth refusal. `None` from
+    // `current_engine_tag` (a broken install with no resolvable engine) is
+    // not an "unsafe engine" state — nothing to update toward, fail open.
+    let engine_blocked_tag = match current_engine_tag(&state.paths) {
+        None => None,
+        Some(current_tag) => {
+            let Ok(endpoint) = resolve_engine_endpoint(&app) else {
+                tracing::warn!("update gate: no engine manifest endpoint; fail-open");
+                return Ok(UpdateGateStatus {
+                    app_blocked_version,
+                    engine_blocked_tag: None,
+                });
+            };
+            let Ok(manifest) =
+                openpal_core::engine_update::fetch_engine_manifest(&client, &endpoint).await
+            else {
+                tracing::warn!("update gate: engine manifest unavailable; fail-open");
+                return Ok(UpdateGateStatus {
+                    app_blocked_version,
+                    engine_blocked_tag: None,
+                });
+            };
+            openpal_core::engine_update::is_engine_tag_unsafe(&current_tag, &manifest)
+                .then_some(current_tag)
+        }
+    };
+    *state.engine_unsafe_tag.lock().await = engine_blocked_tag.clone();
+
+    Ok(UpdateGateStatus {
+        app_blocked_version,
+        engine_blocked_tag,
+    })
 }
 
 // ---------------------------------------------------------------------------
