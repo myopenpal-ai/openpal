@@ -16,6 +16,7 @@
 //!   cargo run -p openpal-bundler -- release
 //!   cargo run -p openpal-bundler -- manifest --tag v0.2.0 --portable-dir target/portable-artifacts
 //!   cargo run -p openpal-bundler -- manifest --tag b1234 --kind nightly --portable-dir target/portable-artifacts
+//!   cargo run -p openpal-bundler -- manifest --tag v0.2.0 --full-dir target/release/bundle   # macOS Full SKU (installed app) leg
 //!   cargo run -p openpal-bundler -- engine-manifest --target macos-arm64
 //!   cargo run -p openpal-bundler -- resolve-engine-tag
 //!   cargo run -p openpal-bundler -- smoke --target macos-arm64 --artifact target/portable/OpenPal-portable-macos-arm64.zip --manifest latest.json --tag v0.2.0
@@ -164,6 +165,16 @@ enum Command {
         /// the release's manifest are preserved either way.
         #[arg(long)]
         portable_dir: Option<PathBuf>,
+        /// Tauri bundle output root of a local Full-SKU build (e.g.
+        /// `target/release/bundle`, containing `macos/` + `dmg/`), to sign
+        /// into the manifest's `platforms` block and upload: the `.app` is
+        /// archived to `<name>.app.tar.gz`, signed with the updater key, and
+        /// its download URL is derived from the actual file name (so it can
+        /// never drift from what gets uploaded), while the `.dmg` fresh-
+        /// install image is uploaded alongside. Omit when nothing Full was
+        /// built this run — any existing `platforms` entries are preserved.
+        #[arg(long)]
+        full_dir: Option<PathBuf>,
         /// Release track (docs/RELEASING.md): `stable` (default) creates the
         /// draft-plus-human-promote release with manifest version `X.Y.Z`;
         /// `nightly` creates a **pre-release** whose manifest version is the
@@ -278,9 +289,16 @@ fn main() -> anyhow::Result<()> {
         Command::Manifest {
             tag,
             portable_dir,
+            full_dir,
             kind,
             notes,
-        } => manifest::run(&tag, kind, portable_dir.as_deref(), notes.as_deref()),
+        } => manifest::run(
+            &tag,
+            kind,
+            portable_dir.as_deref(),
+            full_dir.as_deref(),
+            notes.as_deref(),
+        ),
         Command::EngineManifest { tag, target } => engine_manifest::run(tag.as_deref(), &target),
         Command::ResolveEngineTag { tag } => {
             let (resolved, _release) = fetch::resolve_tag(&tag, None, true)?;

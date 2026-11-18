@@ -345,6 +345,59 @@ gh release edit vX.Y.Z --draft=false --repo myopenpal-ai/openpal
 
 Done: users' in-app update check now finds `vX.Y.Z`.
 
+### Full SKU (installed app) cuts
+
+The Portable pipeline above builds the no-install bundles in CI. The **Full
+SKU** — the signed/notarized `.app` + `.dmg` a user installs — is built and
+published from a machine (a Mac, per `crates/app/tauri.conf.json`'s
+`["app", "dmg"]` targets), per platform (a macOS Apple Silicon box produces
+the `darwin-aarch64` entry, an Intel one `darwin-x86_64`):
+
+1. Build, sign and notarize locally:
+
+```bash
+cargo run -p openpal-bundler -- release           # build + sign + notarize
+```
+
+   (`bundler release` runs `build` → `sign` → `notarize`; set `SIGNING_IDENTITY`
+   and the Apple notarization credentials to sign/notarize, or run those three
+   commands separately.) The bundle output lands under
+   `target/release/bundle/` (`macos/` + `dmg/`). The manifest command never
+   depends on Tauri's `createUpdaterArtifacts` flag: it archives the *final*
+   signed/notarized `.app` itself, so the shipped artifact is exactly the
+   verified product.
+
+2. Once the tag's draft release exists (the portable pipeline assembled it),
+   add this machine's Full-SKU leg to the same manifest and upload its
+   artifacts — the command signs the archive, derives each platform's
+   download URL from the actual file name, and uploads with `--clobber`, so
+   the manifest's `platforms` URLs always match what the release carries (no
+   hand-editing; this is what keeps in-app install from 404ing). Needs the
+   updater `TAURI_SIGNING_PRIVATE_KEY`/`_PASSWORD` env vars, like any
+   publish run:
+
+```bash
+cargo run -p openpal-bundler -- manifest \
+  --tag vX.Y.Z --full-dir target/release/bundle
+```
+
+   Run this on every machine a Full SKU was built for (arm64 + Intel
+   together produce both macOS entries); each run merges into the draft's
+   `latest.json` rather than overwriting it.
+
+3. Verify end to end on each Full-SKU machine before promoting: install the
+   cut, wait for the 5-second auto-check (or Settings → "Check for updates
+   now"), and confirm the **download and install** step — not just the check —
+   completes and the app relaunches on the new version, with no `404` /
+   `update install failed` in the log.
+
+4. Promote the draft with the same command as the Portable cut (step 5
+   above) — one release carries both SKUs' artifacts and manifest blocks.
+
+Nightly (`b*`) cuts never go through this path: `--full-dir` is only ever
+run by a human against a `v*` cut, and pre-releases are invisible to the
+auto-updater anyway.
+
 ## After a release
 
 - **Hotfixes**: branch from the tag/release branch, PR back into that release
