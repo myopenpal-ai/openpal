@@ -66,6 +66,7 @@ import type {
   SystemReport,
   TaskType,
   ToolGrant,
+  UpdateGateStatus,
   VoiceInfo,
   WolStatus,
 } from "./types";
@@ -626,6 +627,11 @@ export const api = {
     channel.onmessage = onEvent;
     return invoke<void>("install_update", { onEvent: channel });
   },
+  /** The unsafe-version gate's startup verdict: which surfaces (if any) the
+   * app must block on. Runs at every launch regardless of
+   * `autoCheckUpdates`; always resolves to a status, never rejects (the gate
+   * fails open — offline never gates). */
+  getUpdateGate: () => invoke<UpdateGateStatus>("get_update_gate"),
 
   // Engine (llama.cpp) updates — a separate channel from app updates above.
   /** Whether a newer AI engine build is published — no download. */

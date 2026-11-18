@@ -16,6 +16,18 @@
 //! llama.cpp release tags (`b10107`, `b10516`, ...) are plain incrementing
 //! build numbers, not semver — [`is_engine_update_available`] compares them
 //! as such rather than reusing [`crate::update`]'s `semver`-based logic.
+//!
+//! # The unsafe declaration (fail-open)
+//!
+//! The manifest may declare engine builds unsafe via `minimum_engine_tag`
+//! and `blocked_engine_tags` (both `b<N>` tags, see
+//! [`is_engine_tag_unsafe`]). Same load-bearing posture as the app's own
+//! declaration in [`crate::update::is_version_unsafe`]: **the engine gate
+//! fails open.** A manifest that can't be fetched, or that carries no
+//! declaration, never blocks chat — a networking blip must not lock a
+//! local-first app, and the gate is a strong nudge in an open-source client,
+//! not DRM. Only a successfully fetched manifest that positively names the
+//! active build as unsafe gates it.
 
 use crate::download;
 use crate::types::DownloadEvent;
@@ -68,6 +80,17 @@ pub struct EngineManifest {
     /// initial rollout) parses as empty rather than failing outright.
     #[serde(default)]
     pub engine: HashMap<String, EngineEntry>,
+    /// The unsafe declaration: the lowest engine build still supported (any
+    /// older active build is gated), as a llama.cpp `b<N>` tag. Absent in a
+    /// manifest published before the declaration existed — and that absence
+    /// means "nothing is unsafe" (see the module doc's fail-open posture).
+    #[serde(default)]
+    pub minimum_engine_tag: Option<String>,
+    /// The unsafe declaration, blocked list: engine build tags exact-matched
+    /// here (as parsed `b<N>` build numbers) are gated even when they're at
+    /// or above `minimum_engine_tag`.
+    #[serde(default)]
+    pub blocked_engine_tags: Vec<String>,
 }
 
 /// The `current.json` pointer written by [`extract_and_install`] on success,
@@ -108,6 +131,33 @@ pub async fn fetch_engine_manifest(
 pub fn is_engine_update_available(current_tag: &str, candidate_tag: &str) -> bool {
     match (parse_tag(current_tag), parse_tag(candidate_tag)) {
         (Some(current), Some(candidate)) => candidate > current,
+        _ => false,
+    }
+}
+
+/// Whether `current_tag` (the active engine build, a llama.cpp `b<N>` tag) is
+/// *declared unsafe* by `manifest`'s unsafe declaration: an exact match on
+/// `blocked_engine_tags`, or a build strictly below `minimum_engine_tag`.
+/// Pure and offline, same as [`is_engine_update_available`] — this is the
+/// engine gate's whole decision.
+///
+/// Fails open, on purpose (mirrors [`crate::update::is_version_unsafe`]): a
+/// manifest with no declaration, an unparseable `minimum_engine_tag`, or an
+/// unparseable blocked entry never counts as "unsafe". A blocked-list match
+/// wins even when the build is at or above the floor.
+pub fn is_engine_tag_unsafe(current_tag: &str, manifest: &EngineManifest) -> bool {
+    let blocked = manifest
+        .blocked_engine_tags
+        .iter()
+        .any(|blocked| parse_tag(blocked) == parse_tag(current_tag));
+    if blocked {
+        return true;
+    }
+    let Some(minimum) = manifest.minimum_engine_tag.as_deref() else {
+        return false;
+    };
+    match (parse_tag(minimum), parse_tag(current_tag)) {
+        (Some(minimum), Some(current)) => current < minimum,
         _ => false,
     }
 }
@@ -343,12 +393,120 @@ mod tests {
         assert!(is_engine_update_available("B10107", "B10516"));
     }
 
+    // -- is_engine_tag_unsafe ------------------------------------------------
+
+    #[test]
+    fn tag_below_minimum_is_unsafe() {
+        let manifest = EngineManifest {
+            engine: HashMap::new(),
+            minimum_engine_tag: Some("b10516".to_string()),
+            blocked_engine_tags: Vec::new(),
+        };
+        assert!(is_engine_tag_unsafe("b10107", &manifest));
+    }
+
+    #[test]
+    fn tag_equal_to_minimum_is_safe() {
+        let manifest = EngineManifest {
+            engine: HashMap::new(),
+            minimum_engine_tag: Some("b10516".to_string()),
+            blocked_engine_tags: Vec::new(),
+        };
+        assert!(!is_engine_tag_unsafe("b10516", &manifest));
+    }
+
+    #[test]
+    fn tag_above_minimum_is_safe() {
+        let manifest = EngineManifest {
+            engine: HashMap::new(),
+            minimum_engine_tag: Some("b10107".to_string()),
+            blocked_engine_tags: Vec::new(),
+        };
+        assert!(!is_engine_tag_unsafe("b10516", &manifest));
+    }
+
+    #[test]
+    fn blocked_tag_is_unsafe_even_above_minimum() {
+        let manifest = EngineManifest {
+            engine: HashMap::new(),
+            minimum_engine_tag: Some("b10107".to_string()),
+            blocked_engine_tags: vec!["b10516".to_string()],
+        };
+        // b10516 is above the floor but explicitly named — the list wins.
+        assert!(is_engine_tag_unsafe("b10516", &manifest));
+    }
+
+    #[test]
+    fn non_blocked_tag_is_safe() {
+        let manifest = EngineManifest {
+            engine: HashMap::new(),
+            minimum_engine_tag: None,
+            blocked_engine_tags: vec!["b10516".to_string()],
+        };
+        assert!(!is_engine_tag_unsafe("b10107", &manifest));
+    }
+
+    #[test]
+    fn missing_engine_declaration_is_safe() {
+        let manifest = EngineManifest {
+            engine: HashMap::new(),
+            minimum_engine_tag: None,
+            blocked_engine_tags: Vec::new(),
+        };
+        assert!(!is_engine_tag_unsafe("b10107", &manifest));
+    }
+
+    #[test]
+    fn blocked_uppercase_b_is_tolerated() {
+        let manifest = EngineManifest {
+            engine: HashMap::new(),
+            minimum_engine_tag: None,
+            blocked_engine_tags: vec!["B10516".to_string()],
+        };
+        assert!(is_engine_tag_unsafe("b10516", &manifest));
+    }
+
+    #[test]
+    fn malformed_minimum_tag_is_safe() {
+        let manifest = EngineManifest {
+            engine: HashMap::new(),
+            minimum_engine_tag: Some("not-a-tag".to_string()),
+            blocked_engine_tags: Vec::new(),
+        };
+        // Fail open, mirroring `is_engine_update_available`'s fail-closed
+        // choice for unreadable current tags being the *only* closed case:
+        // here the declaration itself is unreadable, so nothing is unsafe.
+        assert!(!is_engine_tag_unsafe("b10107", &manifest));
+    }
+
+    #[test]
+    fn malformed_current_tag_is_safe() {
+        let manifest = EngineManifest {
+            engine: HashMap::new(),
+            minimum_engine_tag: Some("b10516".to_string()),
+            blocked_engine_tags: Vec::new(),
+        };
+        assert!(!is_engine_tag_unsafe("not-a-tag", &manifest));
+    }
+
     // -- EngineManifest -------------------------------------------------
 
     #[test]
     fn engine_manifest_missing_engine_key_parses_as_empty() {
         let manifest: EngineManifest = serde_json::from_str("{}").unwrap();
         assert!(manifest.engine.is_empty());
+        assert_eq!(manifest.minimum_engine_tag, None);
+        assert!(manifest.blocked_engine_tags.is_empty());
+    }
+
+    #[test]
+    fn engine_manifest_unsafe_declaration_parses() {
+        let manifest: EngineManifest = serde_json::from_str(
+            r#"{"minimum_engine_tag":"b10107","blocked_engine_tags":["b10001"]}"#,
+        )
+        .unwrap();
+        assert_eq!(manifest.minimum_engine_tag.as_deref(), Some("b10107"));
+        assert_eq!(manifest.blocked_engine_tags, vec!["b10001".to_string()]);
     }
 
     // -- resolve_current_engine ----------------------------------------

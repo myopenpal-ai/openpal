@@ -52,6 +52,7 @@ import {
   type SystemReport,
   type Theme,
   type ToolCallDecision,
+  type UpdateGateStatus,
 } from "../lib/types";
 
 /** Sidebar column width bounds, in px — narrow enough that "New chat" and
@@ -536,6 +537,17 @@ interface Store {
   updateProgress: DownloadProgress | null;
   updateError: string | null;
 
+  /** The unsafe-version gate, from `checkUpdateGate` (which runs at every
+   * launch, regardless of `autoCheckUpdates` — enforcement can't be optional).
+   * Distinct from the voluntary `updateStatus` surface: a gated version shows
+   * *only* the gate, with no skip or dismiss, and `skipUpdateVersion` never
+   * touches it. The engine half blocks chat/model usage while the app stays
+   * otherwise usable. */
+  updateGate: UpdateGateStatus;
+  /** Resolved once `checkUpdateGate` has run (success or fail-open), so
+   * `useModel` can delay auto-start until the engine gate has landed. */
+  updateGateSettled: boolean;
+
   /** AI engine update check/install state — see `checkForEngineUpdate`/
    * `startEngineUpdateInstall`. Independent of `updateStatus` above. */
   engineUpdateStatus: EngineUpdateStatus;
@@ -777,6 +789,12 @@ interface Store {
   skipUpdateVersion: () => Promise<void>;
   /** "Later": close the dialog without persisting anything. */
   dismissUpdate: () => void;
+
+  /** Evaluate the unsafe-version gate (`get_update_gate`): sets `updateGate`
+   * and marks it settled. Runs unconditionally at every launch (enforcement
+   * can't be optional), and never rejects or surfaces an error — the gate
+   * fails open, so an offline/outage status is simply "no gate". */
+  checkUpdateGate: () => Promise<void>;
 
   /** Check for a newer AI engine build, on its own channel independent of
    * `checkForUpdate`. Same `manual` semantics. */
@@ -2037,6 +2055,9 @@ export const useStore = create<Store>()((set, get) => ({
   updateProgress: null,
   updateError: null,
 
+  updateGate: { appBlockedVersion: null, engineBlockedTag: null },
+  updateGateSettled: false,
+
   engineUpdateStatus: "idle",
   availableEngineUpdate: null,
   engineUpdateProgress: null,
@@ -2198,6 +2219,14 @@ export const useStore = create<Store>()((set, get) => ({
       }
     }
 
+    // The unsafe-version gate: runs unconditionally (enforcement can't be
+    // optional), after first paint, so a gated launch shows the normal UI
+    // for a moment before `App.tsx` swaps in the blocking surface. Never
+    // rejects and never nags — a failed manifest fetch is "no gate" (see
+    // `checkUpdateGate`). Kept as a promise here so the auto-start below
+    // can wait for the engine verdict before starting the engine.
+    const gateCheck = get().checkUpdateGate();
+
     // Models + report + plugins can land after first paint.
     const modelsReady = get().refreshModels();
     // Silent, fire-and-forget backfill for custom models added before OpenPal
@@ -2226,10 +2255,18 @@ export const useStore = create<Store>()((set, get) => ({
     // in Settings) wins when set; otherwise fall back to `selectedModelId`,
     // i.e. resume whatever was last used — the original behavior, unchanged
     // for anyone who hasn't opted into a fixed default.
-    void modelsReady.then(() => {
+    void modelsReady.then(async () => {
       if (!settings.onboardingCompleted || !settings.autoLoadOnStartup || get().engine.type !== "stopped") {
         return;
       }
+
+      // Wait for the engine-gate verdict before starting the engine: a model
+      // must not slip through on the narrow window before `checkUpdateGate`
+      // resolves (the gate is normally done well before models here, but the
+      // startup auto-load would otherwise race it). `useModel` guards anyway
+      // once `updateGateSettled`, but this closes the race before it fires.
+      await gateCheck;
+      if (!settings.autoLoadOnStartup || get().engine.type !== "stopped") return;
 
       const isInstalled = (id: string) =>
         get().models.find((m) => m.spec.id === id)?.status.type === "installed";
@@ -2250,6 +2287,11 @@ export const useStore = create<Store>()((set, get) => ({
       startupModelId ??= settings.selectedModelId;
 
       if (startupModelId && isInstalled(startupModelId)) {
+        // `useModel` itself refuses while the engine is gated — after the
+        // `await gateCheck` above, that only fires if the gate changed
+        // between this check and the model starting, which is the right
+        // moment to respect anyway.
+        if (get().updateGate.engineBlockedTag) return;
         void get().useModel(startupModelId);
       }
     });
@@ -2493,6 +2535,14 @@ export const useStore = create<Store>()((set, get) => ({
   },
 
   useModel: async (modelId, contextLength) => {
+    // The engine gate: when the active engine build is declared unsafe,
+    // refuse to start — chat and model usage are blocked until the engine is
+    // updated. The gate surfaces this with its own message + update button
+    // (see ChatView's engine-gate banner), so an alert here would be noise on
+    // top of a visible explanation; honoring it silently is what keeps a
+    // direct click on a sidebar model from starting anyway. The same check
+    // runs in `start_engine` on the Rust side.
+    if (get().updateGate.engineBlockedTag) return;
     // Only the exact load already on its way is a no-op (a double click on
     // the picker must not restart it from zero). Any other call — another
     // model while this one loads, a load during a stop — supersedes what is
@@ -3648,6 +3698,24 @@ export const useStore = create<Store>()((set, get) => ({
     }
   },
 
+  checkUpdateGate: async () => {
+    // Idempotent per launch: boot calls this exactly once (and the startup
+    // auto-load awaits its promise), re-entry would only re-fetch a verdict
+    // that cannot have changed mid-session.
+    if (get().updateGateSettled) return;
+    const emptyGate: UpdateGateStatus = { appBlockedVersion: null, engineBlockedTag: null };
+    try {
+      const gate = await api.getUpdateGate();
+      set({ updateGate: gate ?? emptyGate, updateGateSettled: true });
+    } catch (err: unknown) {
+      // The gate fails open: a failed fetch must never gate (or un-gate)
+      // anyone, and must never surface an error of its own at launch.
+      // `get_update_gate` itself never rejects — this guard is for a broken
+      // IPC bridge rather than a network blip.
+      set({ updateGate: emptyGate, updateGateSettled: true });
+    }
+  },
+
   startUpdateInstall: async () => {
     if (get().updateStatus === "downloading") return;
     updateRestarting = false;
@@ -3746,6 +3814,16 @@ export const useStore = create<Store>()((set, get) => ({
         }
       });
       set({ engineUpdateStatus: "installed", availableEngineUpdate: null });
+      // A successful install clears the engine gate too: the freshly staged
+      // build is the safe one, so chat/model usage may resume — the new build
+      // takes effect on the next engine start, exactly as engine updates
+      // already work today. (`install_engine_update` mirrors this on the Rust
+      // side, clearing its own `engine_unsafe_tag`.)
+      if (get().updateGate.engineBlockedTag) {
+        set((s) => ({
+          updateGate: { ...s.updateGate, engineBlockedTag: null },
+        }));
+      }
     } catch (err: unknown) {
       set({ engineUpdateStatus: "error", engineUpdateError: String(err) });
     }

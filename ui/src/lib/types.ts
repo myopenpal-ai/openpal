@@ -1363,6 +1363,20 @@ export interface EngineUpdateInfo {
   tag: string;
 }
 
+/**
+ * The unsafe-version gate's startup verdict, from `getUpdateGate`. Each field
+ * is `null` when no gate applies — on Android, when the respective manifest
+ * couldn't be fetched (the gate fails open: offline never gates), or when the
+ * running version/build simply isn't declared unsafe. Mirrors the
+ * `UpdateGateStatus` struct in `crates/app/src/commands.rs`.
+ */
+export interface UpdateGateStatus {
+  /** The running app version when the app manifest declares it unsafe. */
+  appBlockedVersion: string | null;
+  /** The active engine build tag when the engine manifest declares it unsafe. */
+  engineBlockedTag: string | null;
+}
+
 /** A selectable Piper voice from the Voice plugin's catalog (see `listVoices`).
  * `installed` is true once its model is downloaded; not-yet-installed voices can
  * be fetched on demand with `downloadVoice`. */

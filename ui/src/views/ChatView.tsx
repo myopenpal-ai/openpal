@@ -26,6 +26,7 @@ import {
 import { useComposerGlide } from "../components/useComposerGlide";
 import { useDialogFocus } from "../components/useDialogFocus";
 import { useStickToBottom } from "../components/useStickToBottom";
+import ProgressBar from "../components/ProgressBar";
 import { api } from "../lib/api";
 import { copyText } from "../lib/clipboard";
 import {
@@ -1855,6 +1856,7 @@ export default function ChatView() {
           composer as a unit and keep the composer exactly centred. */}
       <div className="chat-banners">
         <EngineBanner />
+        <EngineGateBanner />
         <ParentalLockBanner status={parental} />
         <SafetyBanner
           visible={isSafetyAlertVisible(safetyAlertEntry)}
@@ -1936,6 +1938,64 @@ function EngineBanner() {
         >
           {t("chatView.engineBanner.dismiss")}
         </button>
+      </div>
+    </div>
+  );
+}
+
+/** The engine-gate banner: while the engine manifest declares the active
+ * engine build unsafe, chat and model usage are blocked — this explains why
+ * and offers the one way out ("Update engine"). The app itself stays
+ * otherwise usable, so unlike the full-screen `UpdateGate` (the app-version
+ * gate) this is an inline banner, not a replacement surface. No dismiss: the
+ * only way past is a successful engine update, which the store turns into
+ * `updateGate.engineBlockedTag: null` (and the new build takes effect on the
+ * next engine start, as engine updates already work). Stacks like
+ * `SafetyBanner` (title/body over an actions row) so the install progress
+ * and failure text have room to breathe. */
+function EngineGateBanner() {
+  const { t } = useTranslation();
+  const blockedTag = useStore((s) => s.updateGate.engineBlockedTag);
+  const status = useStore((s) => s.engineUpdateStatus);
+  const progress = useStore((s) => s.engineUpdateProgress);
+  const error = useStore((s) => s.engineUpdateError);
+  const startEngineUpdateInstall = useStore((s) => s.startEngineUpdateInstall);
+
+  if (!blockedTag) return null;
+  const installing = status === "downloading";
+
+  return (
+    <div
+      className="engine-banner engine-banner-info engine-banner-inline"
+      role="alert"
+    >
+      <div className="engine-banner-inner safety-banner-inner">
+        <div className="engine-banner-text">
+          <strong>{t("updateGate.engineTitle")}</strong>
+          <p>{t("updateGate.engineBody")}</p>
+        </div>
+        {installing && progress && (
+          <ProgressBar
+            className="model-progress"
+            barClassName="model-progress-bar"
+            value={progress.totalBytes > 0 ? progress.receivedBytes / progress.totalBytes : 0}
+            label={t("updateDialog.progressAriaLabel")}
+          />
+        )}
+        {status === "error" && error && (
+          <p className="engine-banner-text" role="alert">
+            {error}
+          </p>
+        )}
+        <div className="safety-banner-actions">
+          <button
+            className="btn-quiet btn-warn-quiet"
+            disabled={installing}
+            onClick={() => void startEngineUpdateInstall()}
+          >
+            {installing ? t("updateDialog.installing") : t("updateGate.updateEngine")}
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -2276,6 +2336,9 @@ function Composer({ locked }: { locked: boolean }) {
   const models = useStore((s) => s.models);
   const settings = useStore((s) => s.settings);
   const setNotice = useStore((s) => s.setNotice);
+  // The engine gate: while the active engine build is declared unsafe, chat
+  // and model usage are blocked (see `engineBlockedTag` in `finishBoot`).
+  const engineGateBlocked = useStore((s) => s.updateGate.engineBlockedTag) !== null;
   const skills = useStore((s) => s.skills);
   const isAndroid = useStore((s) => s.appInfo?.isAndroid ?? false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -2429,15 +2492,17 @@ function Composer({ locked }: { locked: boolean }) {
 
   const placeholder = locked
     ? t("chatView.parentalLock.placeholder")
-    : state === "cloud" || state === "running"
-      ? webSearchOn
-        ? t("chatView.composer.placeholderWebSearch")
-        : t("chatView.composer.placeholderDefault")
-      : state === "startingSlow"
-        ? t("chatView.composer.startingSlow")
-        : state === "startingNormal"
-          ? t("chatView.composer.startingNormal")
-          : t("chatView.composer.placeholderStopped");
+    : engineGateBlocked
+      ? t("updateGate.engineBody")
+      : state === "cloud" || state === "running"
+        ? webSearchOn
+          ? t("chatView.composer.placeholderWebSearch")
+          : t("chatView.composer.placeholderDefault")
+        : state === "startingSlow"
+          ? t("chatView.composer.startingSlow")
+          : state === "startingNormal"
+            ? t("chatView.composer.startingNormal")
+            : t("chatView.composer.placeholderStopped");
 
   // Replaces the old static "Private by design" note — surfaces the same
   // loading state the placeholder describes, but as a persistent line that
@@ -2512,6 +2577,7 @@ function Composer({ locked }: { locked: boolean }) {
   const canSend =
     !remoteDown &&
     !locked &&
+    !engineGateBlocked &&
     !replyRequest &&
     !improving &&
     (draft.trim() !== "" || attachments.length > 0);
@@ -2838,7 +2904,7 @@ function Composer({ locked }: { locked: boolean }) {
               aria-label={t("chatView.composer.textareaLabel")}
               rows={1}
               value={draft}
-              disabled={locked}
+              disabled={locked || engineGateBlocked}
               readOnly={improving}
               aria-busy={improving || undefined}
               className={improving ? "is-improving" : undefined}

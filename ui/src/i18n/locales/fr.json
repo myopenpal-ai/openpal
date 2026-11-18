@@ -300,14 +300,14 @@
       },
       "updates": {
         "label": "Mises à jour d'OpenPal",
-        "hint": "OpenPal {{version}}. Une fois activé, OpenPal contacte brièvement github.com après chaque lancement pour vérifier une nouvelle version. Aucune autre donnée n'est envoyée. Désactivé par défaut.",
+        "hint": "OpenPal {{version}}. Pour votre sécurité, OpenPal vérifie le flux de mises à jour après chaque lancement et bloque les versions présentant une faille critique publiée. Lorsqu'il est activé, il propose aussi les versions plus récentes après le lancement. Aucune autre donnée n'est envoyée.",
         "unavailableOnMobile": "Les mises à jour de cette application passent par le Play Store.",
         "checking": "Vérification…",
         "checkNow": "Vérifier les mises à jour maintenant"
       },
       "engineUpdates": {
         "label": "Mises à jour du moteur IA",
-        "hint": "Le moteur IA (llama.cpp) est mis à jour plus souvent qu'OpenPal lui-même, et le mettre à jour peut ajouter la prise en charge de nouveaux modèles. Une fois activé, OpenPal contacte brièvement github.com après chaque lancement pour vérifier une nouvelle version. Aucune autre donnée n'est envoyée. Désactivé par défaut.",
+        "hint": "Le moteur IA (llama.cpp) est mis à jour plus souvent qu'OpenPal lui-même, et le mettre à jour peut ajouter la prise en charge de nouveaux modèles. Pour votre sécurité, OpenPal vérifie le flux de mises à jour du moteur après chaque lancement et bloque les modèles sur une version présentant une faille critique publiée. Lorsqu'il est activé, il propose aussi les versions plus récentes. Aucune autre donnée n'est envoyée.",
         "checking": "Vérification…",
         "checkNow": "Vérifier les mises à jour du moteur maintenant",
         "install": "Mettre à jour vers {{tag}}",
@@ -697,6 +697,14 @@
     "installing": "Installation…",
     "tryAgain": "Réessayer",
     "updateAndRestart": "Mettre à jour et redémarrer"
+  },
+  "updateGate": {
+    "title": "Cette version d'OpenPal n'est plus prise en charge",
+    "body": "Cette version manque un correctif important. Mettez-la à jour pour continuer à utiliser OpenPal.",
+    "updateNow": "Mettre à jour maintenant",
+    "engineTitle": "Le moteur d'IA a besoin d'une mise à jour",
+    "engineBody": "Le moteur de cet appareil est obsolète et représente un risque. Mettez-le à jour pour continuer à utiliser OpenPal.",
+    "updateEngine": "Mettre à jour le moteur"
   },
   "plugins": {
     "title": "Modules",

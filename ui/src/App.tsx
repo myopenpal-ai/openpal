@@ -15,6 +15,7 @@ import Sidebar from "./views/Sidebar";
 import ChatToolbar from "./views/ChatToolbar";
 import MoreDialog from "./views/MoreDialog";
 import UpdateDialog from "./views/UpdateDialog";
+import UpdateGate from "./views/UpdateGate";
 import SignInDialog from "./views/SignInDialog";
 import AddDeviceDialog from "./views/AddDeviceDialog";
 import JoinGroupDialog from "./views/JoinGroupDialog";
@@ -74,6 +75,7 @@ export default function App() {
   // width and would just be a confusing extra control.
   const isAndroid = useStore((s) => s.appInfo?.isAndroid ?? false);
   const updateStatus = useStore((s) => s.updateStatus);
+  const appBlockedVersion = useStore((s) => s.updateGate.appBlockedVersion);
   const signInOpen = useStore((s) => s.signInOpen);
   const addDeviceOpen = useStore((s) => s.addDeviceOpen);
   const joinGroupOpen = useStore((s) => s.joinGroupOpen);
@@ -175,6 +177,21 @@ export default function App() {
 
   if (!settings) {
     return <header className="titlebar" data-tauri-drag-region />;
+  }
+
+  // The unsafe-version gate: when the manifest declared the running version
+  // unsafe, it replaces the normal UI entirely — no skip, no "Later", no
+  // dismiss; the only action installs the safe version (see `UpdateGate`).
+  // Checked here, ahead of recovery-setup/onboarding, so it also interrupts
+  // their very next launch. The pre-unlock gates above keep priority: the
+  // gate's verdict isn't available until `finishBootAfterUnlock` runs anyway.
+  if (appBlockedVersion) {
+    return (
+      <>
+        <header className="titlebar" data-tauri-drag-region />
+        <UpdateGate />
+      </>
+    );
   }
 
   // Checked independently of onboarding — and ahead of it — since this must
