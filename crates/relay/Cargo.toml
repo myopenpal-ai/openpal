@@ -18,7 +18,7 @@ base64 = { workspace = true }
 # opaque-blob mailbox table (never the app's encrypted `app.sqlite`), so it
 # does not need the SQLCipher build `crates/core` links. `bundled` vendors
 # SQLite itself so the relay has no system-library dependency.
-rusqlite = { version = "0.40", features = ["bundled"] }
+rusqlite = { version = "0.43", features = ["bundled"] }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
