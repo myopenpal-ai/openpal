@@ -1,5 +1,6 @@
 import {
   createContext,
+  memo,
   useContext,
   useDeferredValue,
   useEffect,
@@ -678,8 +679,22 @@ function ForkOriginNote({ origin }: { origin: ForkOrigin }) {
  * token — deferring it lets React coalesce the expensive markdown+syntax-
  * highlight re-parse of the whole message under a fast token stream instead
  * of running it synchronously on every single one.
+ *
+ * Wrapped in `memo` because the whole message list re-renders on every store
+ * change (one per token), and only the live reply's `content` prop actually
+ * changes: without it, every earlier, settled reply on screen re-parses its
+ * full markdown through GFM/math/highlight/katex on every token arriving —
+ * the cost scales with how much is already on screen and stalls the live
+ * one. Memoizing alongside `Markdown` (which is itself memoized) means a
+ * token update re-renders just the one message it grew.
  */
-function AssistantBody({ content, isStreamingReply }: { content: string; isStreamingReply: boolean }) {
+export const AssistantBody = memo(function AssistantBody({
+  content,
+  isStreamingReply,
+}: {
+  content: string;
+  isStreamingReply: boolean;
+}) {
   const deferredContent = useDeferredValue(content);
   return (
     <>
@@ -687,7 +702,7 @@ function AssistantBody({ content, isStreamingReply }: { content: string; isStrea
       {isStreamingReply && <span className="caret" />}
     </>
   );
-}
+});
 
 const PlusIcon = () => (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2"
