@@ -1,0 +1,207 @@
+# Nightly refresh of the rolling engine-update feed (`engine-latest`), the
+# channel the in-app engine updater (crates/core/src/engine_update.rs)
+# downloads from for its own signed engine updates — independent of full
+# OpenPal releases and their `latest.json`. Keeps the fleet's engine feed
+# fresh alongside the app nightlies without any full-app build.
+#
+# Why one job, not a matrix: `bundler engine-manifest` fetch-and-merges the
+# *existing* engine-manifest.json (download → merge one target's entry →
+# upload the whole file), so concurrent legs would race — each leg's upload
+# would overwrite the others' merges and drop their entries. One job loops
+# the targets sequentially, each iteration re-downloading the manifest, so
+# every target's entry lands in the same merged file. Each iteration is
+# atomic per target: `fetch-engine --target <t>` clears the shared staging
+# dir (crates/app/resources/llama/) and stages just that target, then
+# `engine-manifest --target <t>` packages, signs, merges, and `--clobber`-
+# uploads that target's archive plus the merged manifest (other targets'
+# entries are left byte-for-byte untouched). `fetch-engine` only smoke-tests
+# when the host can execute the target, so one ubuntu-latest runner
+# legitimately handles every target.
+#
+# Runner reality (same inventory portable.yml's stable matrix uses): the org
+# has a self-hosted `macos-15-intel` runner (`macos-x64`) but no Apple
+# Silicon runner with the `macos-14` label (`macos-arm64`) — so macos-arm64
+# is left OUT of the default target set until that runner exists, and its
+# manifest entry stays stale-but-valid until then (exactly portable.yml's
+# stable-matrix posture). The feed never *requires* a mac runner — the loop
+# runs entirely on ubuntu-latest — and the set is overridable with the
+# `ENGINE_TARGETS` repo variable; `prepare` warns whenever macos-arm64 is
+# omitted so the omission is never silent.
+#
+# Signing + trust: the feed is signed with the updater key, so this job
+# targets the `production-release` environment where TAURI_SIGNING_* live
+# (docs/SECURITY_POSTURE.md) and refuses to run from any branch but main.
+# The first successful run also creates the `engine-latest` release itself
+# (`engine-manifest` publishes non-draft), so no manual bootstrap is needed
+# once the signing secrets are on the environment. A mid-loop failure aborts
+# the run and leaves the feed partially refreshed — merged targets keep
+# their new entries, the rest stay valid at their previous ones, and the
+# next scheduled run retries — rather than publishing a half-merged file.
+#
+# Triggers: nightly schedule (llama.cpp itself ships nightlies), or manual
+# via `workflow_dispatch` (a missed batch, or a force-refresh after
+# registering a new runner / changing ENGINE_TARGETS).
+name: engine-update
+
+on:
+  schedule:
+    # 03:17 UTC nightly — deliberately a non-round minute (off the top-of-
+    # hour scheduling herd), and a few minutes before feed-health.yml's
+    # 03:23 check, which alarms if this feed ever vanishes.
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+# A fresh manual run supersedes a stale scheduled one. An interrupted run
+# leaves a valid (partially refreshed) manifest; the next run repairs it.
+concurrency:
+  group: engine-update
+  cancel-in-progress: true
+
+# Least privilege: read-only by default; the publish job re-opens
+# `contents: write` (+ `deployments: write` under the release environment)
+# where publishing needs it (docs/SECURITY_POSTURE.md).
+permissions:
+  contents: read
+
+env:
+  # Authenticates the bundler's GitHub API / `gh` calls (llama.cpp release
+  # resolution, engine-latest manifest fetch/upload) instead of the anonymous
+  # rate limit shared runner IPs exhaust (HTTP 403).
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  # Resolve the llama.cpp build tag once and decide which targets this run
+  # refreshes. The tag must be resolved exactly once, up front: every fetch
+  # passes the same resolved tag, so a llama.cpp release appearing mid-run
+  # can't split the feed across two tags.
+  prepare:
+    name: prepare (engine tag + targets)
+    runs-on: ubuntu-latest
+    outputs:
+      engine_tag: ${{ steps.engine.outputs.tag }}
+      targets: ${{ steps.targets.outputs.targets }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          key: engine-update-prepare
+
+      - name: Resolve llama.cpp engine tag
+        id: engine
+        run: |
+          set -euo pipefail
+          tag="$(cargo run -p openpal-bundler -- resolve-engine-tag)"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "Resolved engine tag: $tag"
+
+      - name: Compute target list
+        id: targets
+        env:
+          ENGINE_TARGETS: ${{ vars.ENGINE_TARGETS }}
+        run: |
+          set -euo pipefail
+
+          # Default: every target with a runner in this org today (same
+          # inventory portable.yml's stable matrix uses). macos-arm64 needs
+          # an Apple Silicon runner with the `macos-14` label (not registered
+          # yet), so it is left out and its engine-latest entry stays
+          # stale-but-valid until one exists — register the runner, or set
+          # the ENGINE_TARGETS repo variable, to include it again.
+          targets="${ENGINE_TARGETS:-macos-x64,win-vulkan-x64,ubuntu-vulkan-x64,ubuntu-vulkan-arm64}"
+
+          known="macos-arm64 macos-x64 win-vulkan-x64 ubuntu-vulkan-x64 ubuntu-vulkan-arm64"
+          list=""
+          IFS=,
+          for t in $targets; do
+            # Tolerate spaces/hanging commas in ENGINE_TARGETS
+            # (e.g. "ubuntu-vulkan-x64, win-vulkan-x64").
+            t="${t//[[:space:]]/}"
+            [ -n "$t" ] || continue
+            case " $known " in
+              *" $t "*) ;;
+              *) echo "::error::unknown target \"$t\" (from ENGINE_TARGETS) — known targets: $known"; exit 1 ;;
+            esac
+            list="$list $t"
+          done
+          unset IFS
+          list="${list# }"
+          echo "targets=$list" >> "$GITHUB_OUTPUT"
+          echo "Engine targets: $list"
+
+          # Fail safe, not fail silent: an engine feed without the Apple
+          # Silicon entry is a deliberate maintenance decision — name it in
+          # the run rather than letting the omission pass without a trace.
+          if [[ "$list" != *macos-arm64* ]]; then
+            echo "::warning::engine feed has no macos-arm64 — Apple Silicon installs keep their last published engine (no macos-14 runner registered; register one or set ENGINE_TARGETS to include it)"
+          fi
+
+  # The signing half, on the protected environment. One sequential loop, one
+  # merged manifest (see the header comment for why a matrix would race).
+  publish:
+    name: publish engine feed
+    needs: prepare
+    runs-on: ubuntu-latest
+    # Release-signing runs target a protected environment so the signing
+    # secrets are scoped to it (docs/SECURITY_POSTURE.md).
+    environment: production-release
+    permissions:
+      contents: write
+      deployments: write
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          key: engine-update-publish
+
+      - name: Install npm dependencies (root — for the Tauri CLI signer)
+        run: npm ci
+
+      - name: Refuse to publish from anything but main
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "::error::engine-update publishes the signed engine feed to the rolling engine-latest release — refusing to run from ${{ github.ref }}. schedule always runs main; dispatch workflow_dispatch on main."
+          exit 1
+
+      - name: Fetch and publish every target
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGETS: ${{ needs.prepare.outputs.targets }}
+          ENGINE_TAG: ${{ needs.prepare.outputs.engine_tag }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          for t in $TARGETS; do
+            echo "::group::engine $t"
+            echo "Fetching llama.cpp ${ENGINE_TAG} for ${t}…"
+            cargo run -p openpal-bundler -- fetch-engine --tag "$ENGINE_TAG" --target "$t"
+            echo "Packaging, signing and merging ${t} into engine-latest…"
+            cargo run -p openpal-bundler -- engine-manifest --target "$t"
+            echo "::endgroup::"
+          done
+
+      - name: Summary
+        env:
+          TARGETS: ${{ needs.prepare.outputs.targets }}
+          ENGINE_TAG: ${{ needs.prepare.outputs.engine_tag }}
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<EOF
+          ## Engine feed refreshed (llama.cpp ${ENGINE_TAG})
+
+          Targets published to \`engine-latest\`:
+          $(for t in $TARGETS; do echo "  - \`$t\`"; done)
+
+          Feed URL: https://github.com/myopenpal-ai/openpal/releases/download/engine-latest/engine-manifest.json
+          EOF

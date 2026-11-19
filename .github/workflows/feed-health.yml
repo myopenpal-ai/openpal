@@ -1,0 +1,77 @@
+# The only alarm a vanished update feed has. The app's update gate
+# (crates/core/src/update.rs and engine_update.rs) FAILS OPEN — an
+# unfetchable manifest simply means no update is ever offered — so a dead
+# feed (a 404 where /releases/latest/download/latest.json or the
+# engine-latest engine-manifest.json should resolve) is otherwise invisible
+# to every user and dev: nothing in the running app ever says a word.
+# This workflow asserts the two feed URLs the app is configured with
+# (crates/app/tauri.conf.json → the app feed; crates/core/src/engine_update.rs
+# → the engine feed) return 200, naming the dead feed when one doesn't.
+#
+# Deliberately NOT a PR gate — no pull_request / merge_group triggers, so it
+# can never block the merge queue; it runs nightly and on demand only.
+#
+# It will FAIL until the feeds are actually published, and that red is the
+# point, not a bug: the app feed resolves only once a stable `v*` cut is
+# promoted (drafts and `b*` nightly pre-releases are invisible to
+# /releases/latest), and the engine feed only once the `engine-latest`
+# release exists. Fix the feed (docs/RELEASING.md) — do not silence the
+# check.
+name: feed-health
+
+on:
+  schedule:
+    # 03:23 UTC nightly — a few minutes after engine-update.yml's 03:17
+    # refresh, so the alarm sees the fresh engine feed, and off the
+    # top-of-hour scheduling herd.
+    - cron: "23 3 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: feed-health
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: check update feeds
+    runs-on: ubuntu-latest
+    steps:
+      - name: App feed (latest.json)
+        env:
+          URL: https://github.com/myopenpal-ai/openpal/releases/latest/download/latest.json
+        run: |
+          set -euo pipefail
+          if curl -fsSL --max-time 30 -A "openpal-feed-health" "$URL" -o /dev/null; then
+            echo "OK: $URL"
+          else
+            echo "::error::app update feed is DOWN: $URL"
+            echo "::error::No stable release is promoted (or it was deleted) — /releases/latest/download/latest.json must resolve for in-app updates (docs/RELEASING.md). The update gate fails open, so this check is the only alarm users and devs have."
+            exit 1
+          fi
+
+      - name: Engine feed (engine-manifest.json)
+        if: always()
+        env:
+          URL: https://github.com/myopenpal-ai/openpal/releases/download/engine-latest/engine-manifest.json
+        run: |
+          set -euo pipefail
+          if curl -fsSL --max-time 30 -A "openpal-feed-health" "$URL" -o /dev/null; then
+            echo "OK: $URL"
+          else
+            echo "::error::engine update feed is DOWN: $URL"
+            echo "::error::The engine-latest release does not exist (or was deleted) — run the engine-update workflow or the bundler's engine-manifest command to (re)create it (docs/RELEASING.md). The update gate fails open, so this check is the only alarm users and devs have."
+            exit 1
+          fi
+
+      - name: Summary
+        if: success()
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<'EOF'
+          ## Update feeds: both healthy
+
+          - app feed: https://github.com/myopenpal-ai/openpal/releases/latest/download/latest.json
+          - engine feed: https://github.com/myopenpal-ai/openpal/releases/download/engine-latest/engine-manifest.json
+          EOF

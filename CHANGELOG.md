@@ -20,6 +20,7 @@ exactly as [docs/RELEASING.md](docs/RELEASING.md) defines it: `fix` → patch,
 - Streaming replies no longer freeze after the first words and dump the rest at once — per-token updates re-render only the live message's markdown, so reply growth stays smooth even in long conversations.
 - In-app update install on the Full (installed-app) SKU no longer fails with a 404: the bundler's manifest --full-dir now archives/signs/uploads the Full SKU's updater artifacts and writes their real download URLs into latest.json, replacing the hand-edited platforms block that used to drift from the release's assets.
 - Surface the failing feed endpoint in update logs and document the engine-update feed bootstrap
+- Automate the engine-update feed: a nightly `engine-update.yml` publishes the rolling `engine-latest` channel (one sequential fetch-and-merge loop, feed created on first run), and a `feed-health.yml` alarm fails loudly if either configured update feed stops resolving — the update gate fails open, so a vanished feed is otherwise invisible to every user and dev.
 
 ## [0.2.0] - 2026-11-16
 
