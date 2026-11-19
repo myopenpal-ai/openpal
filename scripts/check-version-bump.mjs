@@ -15,8 +15,19 @@
 //     patch|minor|major` labels are declared, the actual delta must match the
 //     declared bucket; unlabeled PRs pass on any increase.
 //
-// Anything else fails and prints the exact bump command to run. This is a
-// REQUIRED check on main, so a failing run blocks the merge queue.
+// Exit codes:
+//   0  pass.
+//   1  fail — the author must act (a declared `release:` label contradicts an
+//      actual bump, release labels conflict, …): prints the exact bump command.
+//   3  fail *only* because the version never increased since the merge-base
+//      while user-facing code changed with no `[no release]` opt-out — the one
+//      case CI can fix on its own (issue #111). Still prints the human
+//      guidance (for forks and the merge-queue ref, which no one can push to,
+//      that is the whole story), plus an `AUTO_BUMP_BUCKET=`/`AUTO_BUMP_NOTE=`
+//      payload; version-bump.yml applies that exact bump as a commit on in-repo
+//      PR head branches and pushes it, so the gate re-runs green.
+//
+// This is a REQUIRED check on main, so a failing run blocks the merge queue.
 //
 //   node scripts/check-version-bump.mjs --base <sha> --head <sha> \
 //       [--title "…"] [--labels "release: minor type/chore"]
@@ -116,14 +127,42 @@ if (declaredBucket.size > 1) {
   die(`conflicting release labels: ${[...declaredBucket].map((b) => BUCKET_LABEL[b]).join(" and ")} — keep exactly one`);
 }
 
+// autoBump(bucket, reason): reached only when the gate would otherwise fail
+// because the version never increased — the one case CI can fix on its own
+// (issue #111). Prints the same human guidance as before (on a fork or the
+// merge-queue ref that guidance is still the whole story), then the
+// machine-readable payload version-bump.yml reads, and exits 3. The note is
+// the PR title: bump-version.mjs strips the Conventional-Commits `type(scope):`
+// prefix from it when it becomes the [Unreleased] bullet. The bucket honours a
+// declared `release:` label when present, else the title's conventional type.
+function autoBump(bucket, reason) {
+  console.error(
+    `\n✗ version-bump: ${reason}\n` +
+      `  Run this in the PR:\n      ${bumpCommand(bucket, `suggested ${bucket} from the PR title / declared release: label`)}\n` +
+      `  or, if this genuinely should not ship in a release, add "[no release]" to the PR title ` +
+      `or set the no-release label.\n`
+  );
+  console.log(`AUTO_BUMP_BUCKET=${bucket}`);
+  console.log(`AUTO_BUMP_NOTE=${title.replace(/\s*\n\s*/g, " ").trim()}`);
+  process.exit(3);
+}
+
 if (declaredBucket.size === 1) {
   const [bucket] = declaredBucket;
   if (delta === bucket) {
     pass(`declared ${BUCKET_LABEL[bucket]} matches the bump ${baseVersion} → ${headVersion}`);
   }
+  if (delta === "none") {
+    // Declared a bucket but never actually bumped: the bucket is unambiguous,
+    // so CI applies exactly that bucket.
+    autoBump(
+      bucket,
+      `declared ${BUCKET_LABEL[bucket]} but the workspace version never increased (still ${headVersion} on the PR head)`
+    );
+  }
   die(
     `declared ${BUCKET_LABEL[bucket]} but the workspace version went ${baseVersion} → ${headVersion} ` +
-      `(${delta === "none" ? "no increase" : `${delta} bump`}) since the merge-base.\n` +
+      `(${delta} bump) since the merge-base.\n` +
       `  Fix one side — re-bump to match the label:\n      ${bumpCommand(bucket, `to match the ${BUCKET_LABEL[bucket]} label`)}\n` +
       `  or correct the label on the PR.`
   );
@@ -134,15 +173,13 @@ if (delta !== "none") {
 }
 
 // ---------------------------------------------------------------------------
-// 4. Unlabeled and not bumped → fail with the command to run.
+// 4. Unlabeled and not bumped → the same auto-bumpable outcome.
 
 const titleType = (title.match(/^([a-z][\w-]*)/i) || [])[1]?.toLowerCase();
 const suggested = titleType === "feat" ? "minor" : titleType === "fix" ? "patch" : "patch";
-die(
+autoBump(
+  suggested,
   `${nonExempt.length} user-facing path(s) changed (${nonExempt.map((f) => `\`${f}\``).join(", ")}) ` +
-    `but the workspace version is still ${headVersion} on the PR head — no bump since the merge-base ` +
-    `(base was ${baseVersion}).\n` +
-    `  Run this in the PR:\n      ${bumpCommand(suggested, `suggested ${suggested} from the PR ${titleType ? `title (${titleType})` : "conventional type"}`)}\n` +
-    `  or, if this genuinely should not ship in a release, add "[no release]" to the PR title ` +
-    `or set the no-release label.`
+    `but the workspace version never increased since the merge-base ` +
+    `(${baseVersion} → ${headVersion})`
 );

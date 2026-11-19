@@ -66,6 +66,7 @@ import type {
   SystemReport,
   TaskType,
   ToolGrant,
+  UpdateGateStatus,
   VoiceInfo,
   WolStatus,
 } from "./types";
@@ -88,6 +89,13 @@ export const api = {
    * with the exact string `"Wrong password"` — `PasswordGate` renders the
    * locale's `auth.password.wrong` key for that. */
   unlockWithPassword: (password: string) => invoke<void>("unlock_with_password", { password }),
+  /** The keychain-backed every-launch unlock (`AppInfo.canUnlockWithKeychain`):
+   * the OS keychain is the trusted unlocker on this machine, so there's no
+   * password screen — the items key comes from the `launch-key` slot and the
+   * backend finishes its boot. Rejects (and the caller falls back to the
+   * password gate) if the keychain is absent, unreachable, or holds nothing
+   * usable — never a path to unencrypted data. */
+  unlockWithKeychain: () => invoke<void>("unlock_with_keychain"),
   /** The no-password choice (`AppInfo.noPassword`, or the "continue without a
    * password" skip on the create gate): records the choice in
    * `keys/nopass.marker` and boots with no encryption key — a plaintext
@@ -619,6 +627,11 @@ export const api = {
     channel.onmessage = onEvent;
     return invoke<void>("install_update", { onEvent: channel });
   },
+  /** The unsafe-version gate's startup verdict: which surfaces (if any) the
+   * app must block on. Runs at every launch regardless of
+   * `autoCheckUpdates`; always resolves to a status, never rejects (the gate
+   * fails open — offline never gates). */
+  getUpdateGate: () => invoke<UpdateGateStatus>("get_update_gate"),
 
   // Engine (llama.cpp) updates — a separate channel from app updates above.
   /** Whether a newer AI engine build is published — no download. */

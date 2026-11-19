@@ -124,6 +124,15 @@ pub struct BootState {
     pub no_password: AtomicBool,
     pub needs_password: AtomicBool,
     pub needs_unlock: AtomicBool,
+    /// `true` when the OS keychain's `launch-key` slot opens `launch.wrap`
+    /// to the items key (see [`crate::bootstrap::BootstrapStatus::
+    /// UnlockWithKeychain`]): an installed desktop build whose keychain is
+    /// the trusted unlocker — `commands::get_app_info` surfaces it to the
+    /// frontend as `canUnlockWithKeychain`, which calls
+    /// `commands::unlock_with_keychain` instead of showing the password
+    /// gate. Mutually exclusive with `needs_unlock` (the keychain-unusable
+    /// password-protected launch).
+    pub unlock_with_keychain: AtomicBool,
     /// `true` only in the legacy migration window: a pre-password install
     /// (`keychain.wrap` present, no `password.wrap`) whose OS keychain can't
     /// produce the old DEK, but which has `recovery.wrap` to fall back to —
@@ -203,17 +212,58 @@ impl BootState {
 
         // Which password-model gate this launch is behind — see
         // `crate::bootstrap::detect`'s doc comment. This is the *only*
-        // boot-time crypto-touching step in Phase 1, and it only reads the
-        // keychain on an un-migrated (pre-password) install.
-        let (no_password, needs_password, needs_unlock, needs_recovery) =
-            match crate::bootstrap::detect(
+        // boot-time crypto-touching step in Phase 1; it reads the keychain
+        // (the `launch-key` slot on a password-protected installed build,
+        // the `master-key` slot on an un-migrated pre-password install) but
+        // writes nothing itself, and never unlocks anything.
+        //
+        // The keychain launch unlock is scoped to installed desktop builds:
+        // a Portable build promises to leave no trace on the host, so it
+        // must keep prompting for the password even against a data dir that
+        // has a launch slot, and mobile's unlock UX is a separate ticket.
+        let keychain_launch = !portable && crate::bootstrap::keychain_unlock_supported();
+        let keys_dir = data_dir.join("keys");
+        let mut status = crate::bootstrap::detect(
+            crate::secret_store::store().as_ref(),
+            &keys_dir,
+            keychain_launch,
+        );
+
+        // One-time, invisible migration for installs that set their password
+        // before the launch slot existed: adopt the still-present
+        // pre-password `keychain.wrap` + `master-key` duo when it verifies
+        // against the database, so an existing install stops asking on the
+        // very first launch after this lands (see
+        // `bootstrap::adopt_legacy_launch_key` — it refuses stale material,
+        // and a refusal just leaves the launch on the password gate). Newer
+        // installs reach the same state lazily: any typed/recovery unlock
+        // re-provisions the slot, so nothing has to be re-entered or re-set.
+        if status == crate::bootstrap::BootstrapStatus::EnterPassword
+            && keychain_launch
+            && crate::bootstrap::adopt_legacy_launch_key(
                 crate::secret_store::store().as_ref(),
-                &data_dir.join("keys"),
-            ) {
-                crate::bootstrap::BootstrapStatus::NoPassword => (true, false, false, false),
-                crate::bootstrap::BootstrapStatus::CreatePassword => (false, true, false, false),
-                crate::bootstrap::BootstrapStatus::EnterPassword => (false, false, true, false),
-                crate::bootstrap::BootstrapStatus::UseRecoveryCode => (false, false, false, true),
+                &keys_dir,
+            )
+            .is_some()
+        {
+            status = crate::bootstrap::BootstrapStatus::UnlockWithKeychain;
+        }
+
+        let (no_password, needs_password, needs_unlock, unlock_with_keychain, needs_recovery) =
+            match status {
+                crate::bootstrap::BootstrapStatus::NoPassword => (true, false, false, false, false),
+                crate::bootstrap::BootstrapStatus::CreatePassword => {
+                    (false, true, false, false, false)
+                }
+                crate::bootstrap::BootstrapStatus::EnterPassword => {
+                    (false, false, true, false, false)
+                }
+                crate::bootstrap::BootstrapStatus::UnlockWithKeychain => {
+                    (false, false, false, true, false)
+                }
+                crate::bootstrap::BootstrapStatus::UseRecoveryCode => {
+                    (false, false, false, false, true)
+                }
             };
 
         // A previous launch that crashed or was force-killed never ran its
@@ -245,6 +295,7 @@ impl BootState {
             needs_recovery: AtomicBool::new(needs_recovery),
             needs_password: AtomicBool::new(needs_password),
             needs_unlock: AtomicBool::new(needs_unlock),
+            unlock_with_keychain: AtomicBool::new(unlock_with_keychain),
             no_password: AtomicBool::new(no_password),
             legacy_skills_dir_existed,
             _log_guard: log_guard,
@@ -494,6 +545,7 @@ pub fn finish_unlock(
         parental_state_path,
         custom: tokio::sync::Mutex::new(custom),
         downloads: tokio::sync::Mutex::new(HashMap::new()),
+        engine_unsafe_tag: tokio::sync::Mutex::new(None),
         generation: GenerationQueue::default(),
         dictation_stop: tokio::sync::Mutex::new(None),
         audio: AudioPlayer::new(),
@@ -617,6 +669,17 @@ pub struct AppState {
     pub injection: Arc<openpal_core::injection::Detector>,
     /// model_id -> cancel flag for in-flight downloads.
     pub downloads: tokio::sync::Mutex<HashMap<String, Arc<AtomicBool>>>,
+    /// The active engine build's unsafe tag, if the last gate evaluation
+    /// (`commands::get_update_gate`) found it declared unsafe by the engine
+    /// manifest. Defense-in-depth only — the UI is the real gate — but it's
+    /// how `commands::start_engine` refuses to start a build the manifest
+    /// named before a doomed round trip ever begins, mirroring
+    /// `require_entitlement`'s same "prevent the doomed call" posture. `None`
+    /// on Android/however work (that platform has no in-app update path), and
+    /// cleared by a successful `install_engine_update` — the freshly staged
+    /// build is by construction the safe one, and reads of `current_engine_tag`
+    /// already resolve to it.
+    pub engine_unsafe_tag: tokio::sync::Mutex<Option<String>>,
     /// The single queue every request that uses the model waits in — chat
     /// turns, Writing Tools, the Message improver, the safety classifier.
     /// See `crate::generation`.

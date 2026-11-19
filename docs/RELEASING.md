@@ -49,10 +49,13 @@ from git history at cut time. Two mechanisms keep it honest:
 - `.github/workflows/labeler.yml` mirrors the PR title's Conventional-Commits
   type as a `release: patch|minor|major` label, so the declared bucket is
   visible on the PR.
-- `version-bump.yml` is a **required check**: it compares the workspace version
-  on the PR head with the merge-base and fails (naming the bump command) when
-  user-facing code changed with no increase, or when the increase contradicts
-  the declared `release:` label.
+- `version-bump.yml` is a **required check** (runs on `pull_request` and
+  `merge_group`): it compares the workspace version on the PR head with the
+  merge-base and fails when user-facing code changed with no increase, or when
+  the increase contradicts a declared `release:` label. When the only problem
+  is a forgotten bump on an in-repo branch, CI applies the bump itself as a
+  commit on the PR head (["If you forgot to bump"](#if-you-forgot-to-bump-ci-does-it-for-you-in-repo-prs)
+  below); fork PRs still get the failure naming the exact bump command.
 
 The bump has no effect until a tag is pushed — the app's reported version
 (`CARGO_PKG_VERSION`) only changes when `portable.yml` runs on `vX.Y.Z`.
@@ -86,6 +89,30 @@ node scripts/bump-version.mjs --bump <patch|minor|major> --notes "One curated li
   previews the plan, `--force` overrides the dirty-tree guard; **do not** pass
   `--force` and hand-edit afterwards — the whole point is one clean, scripted,
   verified diff.
+
+### If you forgot to bump: CI does it for you (in-repo PRs)
+
+The gate distinguishes "no bump at all" from an author decision (a wrong bucket
+or conflicting `release:` labels get guidance, never a silent override). When a
+PR changes user-facing code, carries no `[no release]` opt-out, and the
+workspace version did **not** increase since the merge-base, `version-bump.yml`
+bumps it itself: one commit pushed to the PR head —
+`chore(release): auto-bump workspace version to vX.Y.Z` — performing the exact
+rewrite `node scripts/bump-version.mjs --bump <bucket> --notes "<PR title>"`
+would (same `Cargo.toml` / `Cargo.lock` / `plugins/*/plugin.json` /
+`CHANGELOG.md` touch-points, same verification). The check passes on the
+re-run. The bucket is the declared `release: patch|minor|major` label when one
+is present, otherwise the same suggestion the check prints (`feat` → minor,
+anything else → patch); the `## [Unreleased]` line is the PR title with its
+Conventional-Commits `type(scope):` prefix stripped. The scheme is idempotent:
+once the bump commit is in the PR's history the check passes, and the
+merge-queue run needs no further action.
+
+This is a convenience, not a licence to ignore the table — review the bot's
+commit like any other, and the automation only fires for the "forgot to bump"
+case above. It never pushes to a fork's head branch: a **fork PR** keeps the
+old behaviour, the check fails naming the exact bump command and the author
+runs it by hand.
 
 ### The `[no release]` convention
 
@@ -148,9 +175,12 @@ Everything below is the whole job; there are no unrecorded steps.
 
 - `git` on PATH, `gh` installed and authenticated.
 - The **`RELEASE_PUSH_TOKEN` fine-grained Personal Access Token** — an
-  operator step, not code. Because tags pushed by `GITHUB_TOKEN` cannot spawn
-  further workflow runs, both tag-pushing workflows (`rolling.yml` and
-  `make-release.yml`) push the tag over HTTPS authenticated with this token:
+  operator step, not code. Because pushes made by `GITHUB_TOKEN` never spawn
+  further workflow runs, every workflow that pushes over HTTPS authenticates
+  with this token: the tag-pushing workflows (`rolling.yml` and
+  `make-release.yml`) push `b*`/`v*` tags, and `version-bump.yml` pushes its
+  automated PR-head bump commit (a `GITHUB_TOKEN` push could not re-trigger the
+  PR's checks, so the gate would never re-run green):
   - create it at GitHub → Settings → Developer settings → Personal access
     tokens → **Fine-grained tokens**, owner `myopenpal-ai`, repository access
     **Only select repositories** → `openpal`, repository permission
@@ -158,8 +188,10 @@ Everything below is the whole job; there are no unrecorded steps.
   - store it as the `RELEASE_PUSH_TOKEN` **Actions secret** on this repo
     (Settings → Secrets and variables → Actions; it is shown only once at
     creation, so set it immediately).
-  Without it, the `b*`/`v*` tag cascade into `portable.yml` never fires and
-  the workflows fail at the push step.
+  Without it, the `b*`/`v*` tag cascade into `portable.yml` never fires, the
+  auto-bump never lands, and the workflows fail at their push steps — the
+  version-bump gate instead fails red naming the bump command, exactly as it
+  did before the automation.
 - The **`GIT_SIGNING_KEY` SSH private key** — the `v*`/`b*` tag ruleset
   requires **signed tags**, so both tag-pushing workflows sign the tag in the
   runner with this key:
@@ -313,6 +345,59 @@ gh release edit vX.Y.Z --draft=false --repo myopenpal-ai/openpal
 
 Done: users' in-app update check now finds `vX.Y.Z`.
 
+### Full SKU (installed app) cuts
+
+The Portable pipeline above builds the no-install bundles in CI. The **Full
+SKU** — the signed/notarized `.app` + `.dmg` a user installs — is built and
+published from a machine (a Mac, per `crates/app/tauri.conf.json`'s
+`["app", "dmg"]` targets), per platform (a macOS Apple Silicon box produces
+the `darwin-aarch64` entry, an Intel one `darwin-x86_64`):
+
+1. Build, sign and notarize locally:
+
+```bash
+cargo run -p openpal-bundler -- release           # build + sign + notarize
+```
+
+   (`bundler release` runs `build` → `sign` → `notarize`; set `SIGNING_IDENTITY`
+   and the Apple notarization credentials to sign/notarize, or run those three
+   commands separately.) The bundle output lands under
+   `target/release/bundle/` (`macos/` + `dmg/`). The manifest command never
+   depends on Tauri's `createUpdaterArtifacts` flag: it archives the *final*
+   signed/notarized `.app` itself, so the shipped artifact is exactly the
+   verified product.
+
+2. Once the tag's draft release exists (the portable pipeline assembled it),
+   add this machine's Full-SKU leg to the same manifest and upload its
+   artifacts — the command signs the archive, derives each platform's
+   download URL from the actual file name, and uploads with `--clobber`, so
+   the manifest's `platforms` URLs always match what the release carries (no
+   hand-editing; this is what keeps in-app install from 404ing). Needs the
+   updater `TAURI_SIGNING_PRIVATE_KEY`/`_PASSWORD` env vars, like any
+   publish run:
+
+```bash
+cargo run -p openpal-bundler -- manifest \
+  --tag vX.Y.Z --full-dir target/release/bundle
+```
+
+   Run this on every machine a Full SKU was built for (arm64 + Intel
+   together produce both macOS entries); each run merges into the draft's
+   `latest.json` rather than overwriting it.
+
+3. Verify end to end on each Full-SKU machine before promoting: install the
+   cut, wait for the 5-second auto-check (or Settings → "Check for updates
+   now"), and confirm the **download and install** step — not just the check —
+   completes and the app relaunches on the new version, with no `404` /
+   `update install failed` in the log.
+
+4. Promote the draft with the same command as the Portable cut (step 5
+   above) — one release carries both SKUs' artifacts and manifest blocks.
+
+Nightly (`b*`) cuts never go through this path: `--full-dir` is only ever
+run by a human against a `v*` cut, and pre-releases are invisible to the
+auto-updater anyway.
+
 ## After a release
 
 - **Hotfixes**: branch from the tag/release branch, PR back into that release
@@ -329,8 +414,12 @@ Done: users' in-app update check now finds `vX.Y.Z`.
 ## Gotchas
 
 - **`version-bump.yml` gates `main`** (required check, runs on `pull_request`
-  and `merge_group`). If a PR is removed from the merge queue for failing it,
-  the bump belongs in that PR — bump and re-queue, then merge.
+  and `merge_group`). For in-repo PRs the gate fixes the one "forgot to bump"
+  failure itself — a commit on the PR head — so a PR removed from the merge
+  queue for failing it needs a human only when the automation could not or
+  should not act: a fork PR, conflicting `release:` labels, a declared bucket
+  contradicted by an actual bump, or a bump that still has not landed. Fix the
+  cause, then re-queue.
 - The `release: patch|minor|major` and `no-release` labels are created by
   `scripts/ensure-labels.sh` (owner-level, before the labeler and gate go
   live); the labeler keeps the `release:` one in sync with the title.

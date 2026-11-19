@@ -1284,6 +1284,14 @@ export interface AppInfo {
    * exists) to unlock — the normal every-launch gate. Mutually exclusive
    * with `needsPassword` and `needsRecovery`. */
   needsUnlock: boolean;
+  /** Whether the OS keychain can silently produce the encryption key on
+   * this installed desktop build (`password.wrap` + a usable `launch-key`
+   * slot): `boot()` calls `unlockWithKeychain` and opens straight into the
+   * app — no password screen. The app-lock PIN (`needsAppUnlock`), where
+   * enabled, still gates after it, unchanged. A keychain failure here is
+   * never a path to unencrypted data: the backend reports `needsUnlock`
+   * instead. Mutually exclusive with `needsUnlock`. */
+  canUnlockWithKeychain: boolean;
   /** True until the user has seen and acknowledged their one-time data
    * encryption recovery code (`RecoverySetup`) — only ever meaningful on a
    * password-protected install (`passwordSet`): with no password there is
@@ -1353,6 +1361,20 @@ export interface AvailableUpdate {
 export interface EngineUpdateInfo {
   currentTag: string;
   tag: string;
+}
+
+/**
+ * The unsafe-version gate's startup verdict, from `getUpdateGate`. Each field
+ * is `null` when no gate applies — on Android, when the respective manifest
+ * couldn't be fetched (the gate fails open: offline never gates), or when the
+ * running version/build simply isn't declared unsafe. Mirrors the
+ * `UpdateGateStatus` struct in `crates/app/src/commands.rs`.
+ */
+export interface UpdateGateStatus {
+  /** The running app version when the app manifest declares it unsafe. */
+  appBlockedVersion: string | null;
+  /** The active engine build tag when the engine manifest declares it unsafe. */
+  engineBlockedTag: string | null;
 }
 
 /** A selectable Piper voice from the Voice plugin's catalog (see `listVoices`).

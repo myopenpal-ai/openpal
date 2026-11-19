@@ -1,5 +1,14 @@
-import { createContext, isValidElement, useCallback, useContext, useState, type ReactNode } from "react";
+import {
+  createContext,
+  isValidElement,
+  memo,
+  useCallback,
+  useContext,
+  useState,
+  type ReactNode,
+} from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
+import type { PluggableList } from "unified";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeHighlight from "rehype-highlight";
@@ -211,12 +220,24 @@ const TableWrap: Components["table"] = ({ children, node: _node, ...rest }) => {
 
 const components: Components = { pre: CodeBlock, a: Anchor, img: Image, table: TableWrap };
 
+// Hoisted to module scope so every render hands `ReactMarkdown` the same
+// array identities — a fresh literal each render is enough for it to treat
+// the plugin list as changed, re-running the whole GFM/math/highlight/katex
+// pipeline setup even when the text is unchanged.
+const remarkPlugins: PluggableList = [remarkGfm, remarkMath];
+const rehypePlugins: PluggableList = [[rehypeHighlight, { detect: false }], rehypeKatex];
+
 /**
  * Assistant replies, rendered like a well-set page rather than raw text.
  * `confirmLinks` (on by default) asks before a web link opens; turn it off
  * only for text OpenPal itself wrote, such as update notes.
+ *
+ * Memoized because it sits under a message list that re-renders once per
+ * streamed token: a settled reply's `children` never changes, so it must not
+ * re-parse and re-syntax-highlight — only the reply actually streaming (whose
+ * `children` grows) may. See `AssistantBody` in ChatView.tsx.
  */
-export default function Markdown({
+export default memo(function Markdown({
   children,
   confirmLinks = true,
 }: {
@@ -237,8 +258,8 @@ export default function Markdown({
     <div className="md">
       <OpenWebLink.Provider value={openWebLink}>
         <ReactMarkdown
-          remarkPlugins={[remarkGfm, remarkMath]}
-          rehypePlugins={[[rehypeHighlight, { detect: false }], rehypeKatex]}
+          remarkPlugins={remarkPlugins}
+          rehypePlugins={rehypePlugins}
           components={components}
         >
           {promoteStandaloneDisplayMath(children)}
@@ -256,4 +277,4 @@ export default function Markdown({
       )}
     </div>
   );
-}
+});

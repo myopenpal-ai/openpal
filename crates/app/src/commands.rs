@@ -1428,10 +1428,18 @@ pub struct AppInfo {
     /// when `can_start_without_password`; mutually exclusive with
     /// `needs_unlock` and `needs_recovery`.
     needs_password: bool,
-    /// Whether the user must enter their password (`password.wrap` exists)
-    /// to unlock — the normal every-launch gate. Mutually exclusive with
-    /// `needs_password` and `needs_recovery`.
+    /// Whether the user must enter their password (`password.wrap` exists
+    /// and the OS keychain can't unlock) — the every-launch gate. Mutually
+    /// exclusive with `needs_password` and `needs_recovery`.
     needs_unlock: bool,
+    /// Whether the OS keychain can silently produce the items key on this
+    /// installed desktop build (`password.wrap` + a usable `launch-key`
+    /// slot): the frontend calls `unlock_with_keychain` instead of showing
+    /// the password gate — "open the app, no password" is the happy path on
+    /// the user's own machine. The PIN gate (`needs_app_unlock`) still
+    /// applies after it, unchanged. A keychain failure here is never a path
+    /// to unencrypted data: get_app_info reports `needs_unlock` instead.
+    can_unlock_with_keychain: bool,
     /// Whether the recovery-code ceremony (`generate_recovery_code` +
     /// `confirm_recovery_code`) still needs to run — only meaningful on a
     /// password-protected install (never true when `password_set` is
@@ -1487,6 +1495,7 @@ pub fn get_app_info(
         no_password: state.no_password.load(Ordering::Relaxed),
         needs_password: state.needs_password.load(Ordering::Relaxed),
         needs_unlock: state.needs_unlock.load(Ordering::Relaxed),
+        can_unlock_with_keychain: state.unlock_with_keychain.load(Ordering::Relaxed),
         // The recovery-code ceremony only exists for password-protected
         // installs — a no-password install has nothing to protect, so no
         // recovery nag.
@@ -1753,6 +1762,15 @@ pub async fn start_engine(
         return Err("You're chatting through another device's model right now. \
              Disconnect from Remote inference in Settings to use a model on this computer."
             .to_string());
+    }
+    // The engine gate (see `get_update_gate`): when the engine manifest
+    // declared the active build unsafe, refuse to start it. The UI blocks the
+    // user here — this refusal is the doomed-round-trip guard, exactly like
+    // `require_entitlement`. The flag is cleared (in `install_engine_update`)
+    // once a safe build is staged, so the next start goes through normally.
+    if let Some(tag) = state.engine_unsafe_tag.lock().await.clone() {
+        tracing::warn!(%tag, "refusing to start a model on an engine build the manifest declared unsafe");
+        return Err(ENGINE_UNSAFE_MSG.to_string());
     }
     let spec = resolve_spec(&state, &model_id).await?;
 
@@ -4425,15 +4443,20 @@ pub fn create_password(
     bootstrap::remove_no_password_marker(&keys_dir);
 
     // 4. Build `AppState`.
-    crate::state::finish_unlock(&app, &state, Some(items_key)).map_err(|e| {
+    crate::state::finish_unlock(&app, &state, Some(items_key.clone())).map_err(|e| {
         tracing::error!("created the password, but couldn't finish booting: {e}");
         "Your password was created, but OpenPal couldn't finish starting up. Please restart \
          OpenPal."
             .to_string()
     })?;
+    // 5. On an installed desktop build, provision the launch slot — best-
+    //    effort, only once boot succeeded — so the very next launch unlocks
+    //    straight from the OS keychain, no password screen.
+    provision_launch_key_best_effort(state.paths.portable, &keys_dir, &items_key);
     state.no_password.store(false, Ordering::Relaxed);
     state.needs_password.store(false, Ordering::Relaxed);
     state.needs_unlock.store(false, Ordering::Relaxed);
+    state.unlock_with_keychain.store(false, Ordering::Relaxed);
     state.needs_recovery.store(false, Ordering::Relaxed);
     Ok(())
 }
@@ -4467,6 +4490,7 @@ pub fn start_without_password(
     state.no_password.store(false, Ordering::Relaxed);
     state.needs_password.store(false, Ordering::Relaxed);
     state.needs_unlock.store(false, Ordering::Relaxed);
+    state.unlock_with_keychain.store(false, Ordering::Relaxed);
     state.needs_recovery.store(false, Ordering::Relaxed);
     Ok(())
 }
@@ -4475,6 +4499,13 @@ pub fn start_without_password(
 /// wrong password decrypts nothing — the KDF output simply fails the AEAD
 /// open) and, on success, build `AppState`. Idempotent like the other boot
 /// commands.
+///
+/// Also (re-)provisions the launch slot on an installed desktop build, best-
+/// effort: a password just proven is the one moment this launch is sure of
+/// the items key, so it refreshes the OS keychain's "remember me" entry.
+/// The next launch then unlocks with no password. A provision failure is
+/// logged and ignored — the user is already in; the slot just won't exist
+/// next launch, and this command will simply provision it again then.
 #[tauri::command]
 pub fn unlock_with_password(
     app: tauri::AppHandle,
@@ -4492,15 +4523,88 @@ pub fn unlock_with_password(
             // as such rather than leaking whether it was a missing file.
             "Wrong password".to_string()
         })?;
-    crate::state::finish_unlock(&app, &state, Some(items_key)).map_err(|e| {
+    crate::state::finish_unlock(&app, &state, Some(items_key.clone())).map_err(|e| {
         tracing::error!("unlocked, but couldn't finish booting: {e}");
+        "OpenPal couldn't finish starting up. Please restart OpenPal.".to_string()
+    })?;
+    // A password just proven is the one moment this launch is sure of the
+    // items key, so (re-)provision the launch slot — after boot suceeded,
+    // best-effort: the next launch unlocks with no password. A provision
+    // failure is logged and ignored (the user is already in; the slot just
+    // won't exist next launch and this command provisions it again then).
+    provision_launch_key_best_effort(state.paths.portable, &keys_dir, &items_key);
+    state.no_password.store(false, Ordering::Relaxed);
+    state.needs_password.store(false, Ordering::Relaxed);
+    state.needs_unlock.store(false, Ordering::Relaxed);
+    state.unlock_with_keychain.store(false, Ordering::Relaxed);
+    state.needs_recovery.store(false, Ordering::Relaxed);
+    Ok(())
+}
+
+/// The silent every-launch unlock when the OS keychain is the trusted
+/// unlocker (`get_app_info`'s `can_unlock_with_keychain`): reads the
+/// `launch-key` KEK from the OS keychain, opens `launch.wrap`, and builds
+/// `AppState` — no password screen on the happy path. The PIN gate
+/// (`AppLockGate`) still applies after, unchanged, and the password stays
+/// authoritative for change/remove and as the recovery fallback.
+///
+/// On any keychain failure (`Absent`/`Unavailable`/unopenable slot) this
+/// errors — the frontend falls back to the enter-password gate. Nothing is
+/// ever opened unencrypted and nothing falls back to the no-password
+/// layout: at no point does a keychain failure decrypt the database.
+/// Idempotent like the other boot commands.
+#[tauri::command]
+pub fn unlock_with_keychain(
+    app: tauri::AppHandle,
+    state: State<'_, BootState>,
+) -> Result<(), String> {
+    if app.try_state::<AppState>().is_some() {
+        return Ok(());
+    }
+    let keys_dir = state.paths.data_dir.join("keys");
+    let items_key =
+        crate::bootstrap::unlock_with_keychain(crate::secret_store::store().as_ref(), &keys_dir)
+            .map_err(|e| {
+                tracing::warn!("keychain unlock failed: {e}");
+                "The saved key couldn't be read from the OS keychain. Enter your password instead."
+                    .to_string()
+            })?;
+    crate::state::finish_unlock(&app, &state, Some(items_key)).map_err(|e| {
+        tracing::error!("keychain-unlocked, but couldn't finish booting: {e}");
         "OpenPal couldn't finish starting up. Please restart OpenPal.".to_string()
     })?;
     state.no_password.store(false, Ordering::Relaxed);
     state.needs_password.store(false, Ordering::Relaxed);
     state.needs_unlock.store(false, Ordering::Relaxed);
+    state.unlock_with_keychain.store(false, Ordering::Relaxed);
     state.needs_recovery.store(false, Ordering::Relaxed);
     Ok(())
+}
+
+/// Best-effort launch-slot provisioning, shared by every flow that has just
+/// proven the items key. Gated to installed desktop builds — the slot is
+/// scoped there (see `bootstrap::keychain_unlock_supported` + the
+/// `portable` flag), and must never be written by a Portable run against a
+/// shared data dir. Failures are logged and swallowed: the user's request
+/// has already succeeded; the slot simply won't survive to the next launch.
+fn provision_launch_key_best_effort(
+    portable: bool,
+    keys_dir: &std::path::Path,
+    items_key: &openpal_core::crypto::key::DataKey,
+) {
+    if portable || !crate::bootstrap::keychain_unlock_supported() {
+        return;
+    }
+    if let Err(e) = crate::bootstrap::provision_launch_key(
+        crate::secret_store::store().as_ref(),
+        keys_dir,
+        items_key,
+    ) {
+        tracing::warn!(
+            "couldn't save the launch key to the OS keychain — the next launch will ask for the \
+             password again: {e}"
+        );
+    }
 }
 
 /// Change the password (Settings → Security): verifies `current`, then re-
@@ -4541,6 +4645,10 @@ pub fn change_password(
             "Something went wrong saving your new password. Please try again.".to_string()
         },
     )?;
+    // The items key is unchanged by a password change, so the launch slot
+    // stays valid — refresh it best-effort anyway (it re-seals under a
+    // fresh KEK and self-heals a slot that had gone missing).
+    provision_launch_key_best_effort(state.paths.portable, &keys_dir, &current_root);
     Ok(())
 }
 
@@ -4628,10 +4736,13 @@ pub fn set_password(
         .map_err(friendly)?;
     // 4. `password.wrap` LAST, then drop the no-password marker — the wrap
     //    file's existence is the "migrated" marker (same ordering rule as
-    //    `create_password`).
+    //    `create_password`). The launch slot is provisioned here too anyway
+    //    (on installed desktop builds), so the very next launch opens
+    //    straight from the OS keychain.
     bootstrap::create_password_file(&keys_dir, &items_key, password.as_bytes())
         .map_err(bootstrap_friendly)?;
     bootstrap::remove_no_password_marker(&keys_dir);
+    provision_launch_key_best_effort(state.paths.portable, &keys_dir, &items_key);
     // 5. Swap the live DEK, then release the section.
     *dek_guard = Some(items_key.clone());
     drop(dek_guard);
@@ -4686,9 +4797,13 @@ pub fn remove_password(app: tauri::AppHandle, boot: State<'_, BootState>) -> Res
     openpal_core::store::rewrite_rows_as_plaintext(&mut conn_guard, &items_key)
         .map_err(friendly)?;
     // 4. Drop the password slot and the recovery slot (nothing to recover
-    //    without a password), and record the no-password choice.
+    //    without a password), record the no-password choice, and clear the
+    //    launch slot (its wrapper file, its OS keychain entry, and the
+    //    now-meaningless legacy `keychain.wrap`) — after removal the next
+    //    launch skips the gate and no keychain entry is left behind.
     let _ = std::fs::remove_file(keys_dir.join("password.wrap"));
     let _ = std::fs::remove_file(keys_dir.join("recovery.wrap"));
+    bootstrap::remove_launch_key(crate::secret_store::store().as_ref(), &keys_dir);
     bootstrap::write_no_password_marker(&keys_dir).map_err(|e| {
         tracing::error!("couldn't record the no-password choice: {e}");
         "OpenPal couldn't remove your password. Please try again.".to_string()
@@ -4886,14 +5001,19 @@ pub fn attempt_recovery_unlock(
     let password_path = openpal_core::crypto::vault::password_wrap_path(&keys_dir);
     if password_path.exists() {
         // Post-migration forgot-password: build `AppState` with the
-        // recovered items key, same as `unlock_with_password` would.
-        crate::state::finish_unlock(&app, &state, Some(dek)).map_err(|e| {
+        // recovered items key, same as `unlock_with_password` would — then
+        // re-provision the launch slot best-effort (a key that was just
+        // recovered is as proven as a typed password; a broken boot must
+        // not arm a slot that would skip the gate next launch).
+        crate::state::finish_unlock(&app, &state, Some(dek.clone())).map_err(|e| {
             tracing::error!("recovered the items key, but couldn't finish booting: {e}");
             "Your recovery code worked, but OpenPal couldn't finish starting up. Please restart \
              OpenPal."
                 .to_string()
         })?;
+        provision_launch_key_best_effort(state.paths.portable, &keys_dir, &dek);
         state.needs_recovery.store(false, Ordering::Relaxed);
+        state.unlock_with_keychain.store(false, Ordering::Relaxed);
         return Ok(RecoveryUnlockOutcome::Unlocked);
     }
 
@@ -5107,6 +5227,13 @@ const CHECK_FAILED_MSG: &str =
     "Couldn't check for updates. Check your internet connection and try again.";
 const NO_UPDATE_MSG: &str = "No update is available right now.";
 const NOT_CONFIGURED_MSG: &str = "Checking for updates isn't set up yet.";
+/// The active engine build is declared unsafe by the engine manifest (see
+/// `get_update_gate`) — chat stays blocked until the user updates the engine.
+/// Mirrors the `updateGate.engine*` copy the UI shows for the same state;
+/// the Rust side doesn't go through i18n, so its own static sentence lives
+/// here like every other friendly error in this file.
+const ENGINE_UNSAFE_MSG: &str =
+    "The AI engine on this device is outdated and unsafe. Update it to keep using OpenPal.";
 /// `tauri-plugin-updater` compiles and registers fine on Android, but Play
 /// Store policy doesn't want a self-updating APK and its manifest-based
 /// flow isn't the Android update path regardless — see `check_for_update`/
@@ -5548,7 +5675,128 @@ pub async fn install_engine_update(
 
     openpal_core::engine_update::prune_old_engines(&state.paths.engine_updates_dir, &entry.tag);
 
+    // The engine gate's defense-in-depth flag: the freshly staged build is
+    // the safe one (the manifest declared everything older unsafe), so the
+    // soon-to-be-current tag must not keep `start_engine` blocked. The
+    // frontend mirrors this by clearing its own `updateGate` on success.
+    *state.engine_unsafe_tag.lock().await = None;
+
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// The unsafe-version gate — runs at every launch, not on any opt-in.
+// ---------------------------------------------------------------------------
+
+/// The startup gate's verdict, returned by [`get_update_gate`]: which
+/// surfaces the frontend must block on. Both fields are `None` when no gate
+/// applies — including on Android and on *any* fetch/parse/config failure
+/// (the gate fails open; see `openpal_core::update`'s module doc), so a
+/// networking blip neither gates nor un-gates anyone.
+#[derive(serde::Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateGateStatus {
+    /// The running app version, when the app manifest declares it unsafe
+    /// (below `minimum_version` or exact-matched on `blocked_versions`).
+    pub app_blocked_version: Option<String>,
+    /// The active engine build tag, when the engine manifest declares it
+    /// unsafe (below `minimum_engine_tag` or exact-matched on
+    /// `blocked_engine_tags`). `None` when there's no resolvable engine.
+    pub engine_blocked_tag: Option<String>,
+}
+
+/// Evaluation of the unsafe declaration at startup — the gate that replaces
+/// the voluntary "new version available" dialog for versions the manifest
+/// declares unsafe. Unlike `check_for_update`, this runs on every launch
+/// regardless of `settings.auto_check_updates` (enforcement cannot be
+/// optional), and unlike an update *offer* it never errors out loud: any
+/// failure yields an empty (no gate) status rather than an `Err`, keeping
+/// the fail-open posture — see `openpal_core::update`'s module doc. The two
+/// update channels check in together here so the frontend makes one startup
+/// call for both gates.
+///
+/// The app half reads the raw manifest itself on both SKUs: the Full SKU's
+/// `tauri-plugin-updater` parses `platforms`/`version` but doesn't surface
+/// the unsafe declaration, and the Portable half already reads the raw
+/// manifest for its own download — so one raw fetch per launch serves both,
+/// exactly like `install_update_portable`'s. The engine half also caches its
+/// verdict into `state.engine_unsafe_tag`, which `start_engine` reads to
+/// refuse a doomed start without any network call of its own.
+#[tauri::command]
+pub async fn get_update_gate(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<UpdateGateStatus, String> {
+    if cfg!(target_os = "android") {
+        // Updates come from the Play Store on Android (see `check_for_update`),
+        // so there is no in-app update path for a gate to offer — never gate.
+        return Ok(UpdateGateStatus {
+            app_blocked_version: None,
+            engine_blocked_tag: None,
+        });
+    }
+
+    let Ok(client) = update_client() else {
+        tracing::warn!("update gate: no HTTP client available; fail-open");
+        return Ok(UpdateGateStatus {
+            app_blocked_version: None,
+            engine_blocked_tag: None,
+        });
+    };
+
+    // App half: classify the running version against the manifest's declared
+    // minimum / blocked list. Both SKUs read the same raw manifest.
+    let app_blocked_version = match resolve_endpoint(&app) {
+        Ok(endpoint) => match openpal_core::update::fetch_manifest(&client, &endpoint).await {
+            Ok(manifest) => {
+                let current = openpal_core::update::current_version();
+                openpal_core::update::is_version_unsafe(&current, &manifest)
+                    .then(|| current.to_string())
+            }
+            Err(e) => {
+                tracing::warn!("update gate: app manifest unavailable ({e}); fail-open");
+                None
+            }
+        },
+        Err(e) => {
+            tracing::warn!("update gate: no app manifest endpoint ({e}); fail-open");
+            None
+        }
+    };
+
+    // Engine half: classify the active engine build, and cache the verdict for
+    // `start_engine`'s defense-in-depth refusal. `None` from
+    // `current_engine_tag` (a broken install with no resolvable engine) is
+    // not an "unsafe engine" state — nothing to update toward, fail open.
+    let engine_blocked_tag = match current_engine_tag(&state.paths) {
+        None => None,
+        Some(current_tag) => {
+            let Ok(endpoint) = resolve_engine_endpoint(&app) else {
+                tracing::warn!("update gate: no engine manifest endpoint; fail-open");
+                return Ok(UpdateGateStatus {
+                    app_blocked_version,
+                    engine_blocked_tag: None,
+                });
+            };
+            let Ok(manifest) =
+                openpal_core::engine_update::fetch_engine_manifest(&client, &endpoint).await
+            else {
+                tracing::warn!("update gate: engine manifest unavailable; fail-open");
+                return Ok(UpdateGateStatus {
+                    app_blocked_version,
+                    engine_blocked_tag: None,
+                });
+            };
+            openpal_core::engine_update::is_engine_tag_unsafe(&current_tag, &manifest)
+                .then_some(current_tag)
+        }
+    };
+    *state.engine_unsafe_tag.lock().await = engine_blocked_tag.clone();
+
+    Ok(UpdateGateStatus {
+        app_blocked_version,
+        engine_blocked_tag,
+    })
 }
 
 // ---------------------------------------------------------------------------

@@ -95,7 +95,9 @@ was skipped or couldn't run.
 
 If your PR changes user-facing code, the `version-bump` check requires the
 version bump in this same PR (`node scripts/bump-version.mjs --bump …` — see
-[Releasing](#releasing)); purely doc/infra PRs are exempt automatically.
+[Releasing](#releasing)); purely doc/infra PRs are exempt automatically. On
+in-repo branches CI applies the bump itself as a commit when you forget; fork
+PRs must run it by hand.
 
 Merging is **squash-only** through the **merge queue**: every PR lands on
 `main` as exactly one commit carrying its Conventional-Commits title, and the
@@ -132,8 +134,9 @@ the result. Purely doc/infra work (`docs/`, `*.md`, `.github/`, `scripts/`)
 needs no bump, and a user-facing PR that deliberately ships no release can
 carry `[no release]` in its title (or the `no-release` label). The
 `version-bump` CI check — required on `main`, run on `pull_request` and
-`merge_group` — enforces all of this on every PR and names the bump command
-when it fails.
+`merge_group` — enforces all of this on every PR; when the only problem is a
+forgotten bump it applies it itself as one commit on in-repo PR head branches
+(fork PRs and the merge-queue run keep the failure naming the bump command).
 
 At cut time a maintainer runs `node scripts/bump-version.mjs finalize` (turns
 the accumulated `[Unreleased]` into a dated `[X.Y.Z]` section and opens a
