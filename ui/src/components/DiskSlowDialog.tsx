@@ -36,7 +36,10 @@ function diskSlowConfirmCopy(
   // `recovery`/`remoteAccess` namespaces) — resolving the full overload set
   // per call is far more work than this helper needs. Mirrors
   // `ToolConsentCard.tsx`'s `dangerFlagText`, which hit the same limit.
-  const t = tFull as (key: string, options?: Record<string, unknown>) => string;
+  // (i18next v27 widened the overload set so the direct structural check no
+  // longer overlaps — the `unknown` hop keeps this an unchecked cast, which
+  // is all the comment above ever claimed.)
+  const t = tFull as unknown as (key: string, options?: Record<string, unknown>) => string;
   const base = t("library.diskSlowConfirm.base");
   if (probe === "checking") return `${base} ${t("library.diskSlowConfirm.checking")}`;
   if (probe === "unknown") return `${base} ${t("library.diskSlowConfirm.stillUnknown")}`;

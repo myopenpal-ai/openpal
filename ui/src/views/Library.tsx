@@ -1157,8 +1157,11 @@ function rowTags(
   // lost. Calling `tFull` directly (its real, heavily overloaded i18next
   // type) six times over hits TS's "type instantiation is excessively deep"
   // limit, same as `DiskSlowDialog`'s `diskSlowConfirmCopy` and
-  // `ToolConsentCard.tsx`'s `dangerFlagText`.
-  const t = tFull as (key: string, options?: Record<string, unknown>) => string;
+  // `ToolConsentCard.tsx`'s `dangerFlagText`. (i18next v27 widened the
+  // overload set so the direct structural check no longer overlaps — the
+  // `unknown` hop keeps this an unchecked cast, which is all the comment
+  // above ever claimed.)
+  const t = tFull as unknown as (key: string, options?: Record<string, unknown>) => string;
   const meta: string[] = [];
   if (model.isRecommended) meta.push(t("library.recommendedFlag"));
   if (st.isStartupDefault) meta.push(t("library.defaultAtStartup"));
