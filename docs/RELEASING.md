@@ -339,6 +339,12 @@ to end rather than assuming the trigger works.
 gh release edit vX.Y.Z --draft=false --repo myopenpal-ai/openpal
 ```
 
+   Or skip the raw command: run the **`publish-update-feeds`** workflow
+   (dispatch-only, no schedule) with `promote_tag = vX.Y.Z`. It refuses
+   non-`v*` tags and pre-releases, treats an already-published tag as a
+   no-op, promotes the draft, then verifies both update feeds resolve — the
+   promote is still a deliberate human action, just scripted.
+
 - If any smoke leg failed, the run instead deletes the draft and its summary
   says **❌ Smoke failed — draft discarded**; **no promote instructions are
   issued**. Investigate the failing leg, fix the build, and re-cut.
@@ -397,6 +403,59 @@ cargo run -p openpal-bundler -- manifest \
 Nightly (`b*`) cuts never go through this path: `--full-dir` is only ever
 run by a human against a `v*` cut, and pre-releases are invisible to the
 auto-updater anyway.
+
+### Engine updates feed (`engine-latest`)
+
+The in-app engine updater (`crates/core/src/engine_update.rs`) reads its own
+rolling channel, independent of full OpenPal releases: a fixed `engine-latest`
+GitHub Release carrying `engine-manifest.json` plus one signed flat zip per
+platform target (`macos-arm64`, `macos-x64`, `win-vulkan-x64`,
+`ubuntu-vulkan-x64`, `ubuntu-vulkan-arm64` — the bundler `--target` strings,
+same vocabulary as `fetch-engine`).
+
+**It is published by CI, nightly** — the `engine-update.yml` workflow loops
+the target set (one sequential job, because `engine-manifest` fetch-and-
+merges the whole manifest file: concurrent legs would race and drop each
+other's entries), running `fetch-engine` + `engine-manifest` per target from
+a single ubuntu-latest runner. The first successful run also creates the
+`engine-latest` release itself (`engine-manifest` publishes **non-draft**,
+unlike a `v*` cut's draft/promote gate), so **no manual bootstrap is
+needed** once the signing secrets live on the `production-release`
+environment (docs/SECURITY_POSTURE.md). The default target set reuses
+`portable.yml`'s stable inventory: `macos-arm64` is left out until an Apple
+Silicon runner with the `macos-14` label is registered — its entry then
+stays stale-but-valid, and the set is overridable with the `ENGINE_TARGETS`
+repo variable. The `feed-health.yml` workflow checks both configured feeds
+return 200 nightly: the only alarm a vanished feed has, because the update
+gate fails open.
+
+The bundler commands remain the manual path (e.g. publishing a target
+outside the scheduled set) — or run the **`publish-update-feeds`** workflow
+(dispatch-only) with `engine_refresh` and optional `engine_targets` /
+`engine_tag` inputs for the guided version, which verifies the feed
+afterward. Each run re-stages the engine dir for that target, then packages,
+signs, and merges its manifest entry while leaving the other targets'
+entries untouched:
+
+```bash
+cargo run -p openpal-bundler -- fetch-engine --target <target>
+cargo run -p openpal-bundler -- engine-manifest --target <target>
+```
+
+The first `engine-manifest` run creates the **non-draft** `engine-latest`
+release; later runs `--clobber`-replace that target's asset alongside the
+merged manifest. Needs `TAURI_SIGNING_PRIVATE_KEY` /
+`TAURI_SIGNING_PRIVATE_KEY_PASSWORD` and an authenticated `gh`. Any OS can
+package any target — `fetch-engine` downloads the upstream llama.cpp asset
+directly and skips its host smoke test for foreign targets.
+
+Until `engine-latest` exists, the configured engine feed 404s and the engine
+update check/gate fail open on every install — verify it resolves before
+relying on in-app engine updates:
+
+```bash
+curl -fsSL https://github.com/myopenpal-ai/openpal/releases/download/engine-latest/engine-manifest.json
+```
 
 ## After a release
 
