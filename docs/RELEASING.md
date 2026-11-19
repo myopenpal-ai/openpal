@@ -398,6 +398,42 @@ Nightly (`b*`) cuts never go through this path: `--full-dir` is only ever
 run by a human against a `v*` cut, and pre-releases are invisible to the
 auto-updater anyway.
 
+### Engine updates feed (`engine-latest`)
+
+The in-app engine updater (`crates/core/src/engine_update.rs`) reads its own
+rolling channel, independent of full OpenPal releases: a fixed `engine-latest`
+GitHub Release carrying `engine-manifest.json` plus one signed flat zip per
+platform target (`macos-arm64`, `macos-x64`, `win-vulkan-x64`,
+`ubuntu-vulkan-x64`, `ubuntu-vulkan-arm64` — the bundler `--target` strings,
+same vocabulary as `fetch-engine`). Unlike the app feed, **nothing in CI
+publishes it** (`engine-latest`/`engine-manifest` appear in no workflow): it
+is created and updated only by hand, and does not exist until bootstrapped.
+
+Stage a fresh engine and publish it, per target (each run re-stages the
+engine dir for that target, then packages, signs, and merges its manifest
+entry while leaving the other targets' entries untouched):
+
+```bash
+cargo run -p openpal-bundler -- fetch-engine --target <target>
+cargo run -p openpal-bundler -- engine-manifest --target <target>
+```
+
+The first `engine-manifest` run creates the **non-draft** `engine-latest`
+release (unlike a `v*` cut, this rolling channel has no draft/promote gate);
+later runs `--clobber`-replace that target's asset. Needs
+`TAURI_SIGNING_PRIVATE_KEY` / `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` and an
+authenticated `gh`. Any OS can package any target — `fetch-engine` downloads
+the upstream llama.cpp asset directly and skips its host smoke test for
+foreign targets.
+
+Until `engine-latest` exists, the configured engine feed 404s and the engine
+update check/gate fail open on every install — verify it resolves before
+relying on in-app engine updates:
+
+```bash
+curl -fsSL https://github.com/myopenpal-ai/openpal/releases/download/engine-latest/engine-manifest.json
+```
+
 ## After a release
 
 - **Hotfixes**: branch from the tag/release branch, PR back into that release

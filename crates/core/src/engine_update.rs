@@ -109,11 +109,14 @@ pub async fn fetch_engine_manifest(
     endpoint: &str,
 ) -> Result<EngineManifest> {
     let resp = client.get(endpoint).send().await.map_err(|e| {
-        tracing::warn!("engine update manifest fetch failed: {e}");
+        tracing::warn!("engine update manifest fetch failed for {endpoint}: {e}");
         Error::Update(OFFLINE_MSG.to_string())
     })?;
     if !resp.status().is_success() {
-        tracing::warn!("engine update manifest fetch returned {}", resp.status());
+        tracing::warn!(
+            "engine update manifest fetch returned {} from {endpoint}",
+            resp.status()
+        );
         return Err(Error::Update(OFFLINE_MSG.to_string()));
     }
     resp.json::<EngineManifest>().await.map_err(|e| {
