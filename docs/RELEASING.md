@@ -339,6 +339,12 @@ to end rather than assuming the trigger works.
 gh release edit vX.Y.Z --draft=false --repo myopenpal-ai/openpal
 ```
 
+   Or skip the raw command: run the **`publish-update-feeds`** workflow
+   (dispatch-only, no schedule) with `promote_tag = vX.Y.Z`. It refuses
+   non-`v*` tags and pre-releases, treats an already-published tag as a
+   no-op, promotes the draft, then verifies both update feeds resolve — the
+   promote is still a deliberate human action, just scripted.
+
 - If any smoke leg failed, the run instead deletes the draft and its summary
   says **❌ Smoke failed — draft discarded**; **no promote instructions are
   issued**. Investigate the failing leg, fix the build, and re-cut.
@@ -423,10 +429,13 @@ repo variable. The `feed-health.yml` workflow checks both configured feeds
 return 200 nightly: the only alarm a vanished feed has, because the update
 gate fails open.
 
-The bundler commands remain the manual/emergency path (e.g. publishing a
-target outside the scheduled set). Each run re-stages the engine dir for
-that target, then packages, signs, and merges its manifest entry while
-leaving the other targets' entries untouched:
+The bundler commands remain the manual path (e.g. publishing a target
+outside the scheduled set) — or run the **`publish-update-feeds`** workflow
+(dispatch-only) with `engine_refresh` and optional `engine_targets` /
+`engine_tag` inputs for the guided version, which verifies the feed
+afterward. Each run re-stages the engine dir for that target, then packages,
+signs, and merges its manifest entry while leaving the other targets'
+entries untouched:
 
 ```bash
 cargo run -p openpal-bundler -- fetch-engine --target <target>

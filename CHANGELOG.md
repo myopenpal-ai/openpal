@@ -21,6 +21,7 @@ exactly as [docs/RELEASING.md](docs/RELEASING.md) defines it: `fix` → patch,
 - In-app update install on the Full (installed-app) SKU no longer fails with a 404: the bundler's manifest --full-dir now archives/signs/uploads the Full SKU's updater artifacts and writes their real download URLs into latest.json, replacing the hand-edited platforms block that used to drift from the release's assets.
 - Surface the failing feed endpoint in update logs and document the engine-update feed bootstrap
 - Automate the engine-update feed: a nightly `engine-update.yml` publishes the rolling `engine-latest` channel (one sequential fetch-and-merge loop, feed created on first run), and a `feed-health.yml` alarm fails loudly if either configured update feed stops resolving — the update gate fails open, so a vanished feed is otherwise invisible to every user and dev.
+- Script the two remaining hand-steps of the update feeds as a dispatch-only `publish-update-feeds` workflow: promote a chosen stable `v*` draft into the live app feed (with feed verification and pre-release/draft guards), and/or refresh the `engine-latest` engine feed on demand (with optional target/tag inputs) — still only ever triggered by a human.
 
 ## [0.2.0] - 2026-11-16
 
