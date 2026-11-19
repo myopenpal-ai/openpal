@@ -11,8 +11,8 @@
 //! a panic payload, an `.unwrap()` on a `Result<_, DataKey>` — can ever
 //! print real key material.
 
-use rand::rngs::OsRng;
-use rand::RngCore;
+use rand::rngs::SysRng;
+use rand::{rand_core::UnwrapErr, Rng};
 use std::fmt;
 use zeroize::Zeroizing;
 
@@ -20,11 +20,11 @@ use zeroize::Zeroizing;
 pub struct DataKey(Zeroizing<[u8; 32]>);
 
 impl DataKey {
-    /// A fresh, random key. `OsRng` per the doc's rule: all randomness in
+    /// A fresh, random key. `SysRng` per the doc's rule: all randomness in
     /// this module comes from the OS CSPRNG, never `thread_rng`.
     pub fn random() -> Self {
         let mut bytes = [0u8; 32];
-        OsRng.fill_bytes(&mut bytes);
+        UnwrapErr(SysRng).fill_bytes(&mut bytes);
         Self::from_bytes(bytes)
     }
 

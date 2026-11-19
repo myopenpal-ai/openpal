@@ -114,7 +114,9 @@ fn process_is_alive(pid: u32) -> bool {
 
     let target = sysinfo::Pid::from_u32(pid);
     let current_exe = std::env::current_exe();
-    let mut sys = sysinfo::System::new();
+    let Ok(mut sys) = sysinfo::System::new() else {
+        return false;
+    };
 
     for attempt in 0..RETRIES {
         sys.refresh_processes(sysinfo::ProcessesToUpdate::Some(&[target]), true);

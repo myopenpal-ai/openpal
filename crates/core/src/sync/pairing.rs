@@ -38,8 +38,8 @@ use crate::sync::mailbox_client::MailboxTransport;
 use crate::sync::roster::{self, RosterEntry};
 use crate::{Error, Result};
 use ed25519_dalek::{Signature as EdSignature, Verifier as _, VerifyingKey};
-use rand::rngs::OsRng;
-use rand::RngCore;
+use rand::rngs::SysRng;
+use rand::{rand_core::UnwrapErr, Rng};
 use ring::aead::{Aad, LessSafeKey, Nonce, UnboundKey, AES_256_GCM, NONCE_LEN};
 use ring::hmac;
 use rusqlite::Connection;
@@ -319,7 +319,7 @@ async fn push_mac_envelope<T: MailboxTransport, M: Serialize>(
 
 // ---------------------------------------------------------------------------
 // AEAD (SyncKey / rotation-key delivery) — mirrors crypto::wrap's exact
-// ring::aead usage (nonce via OsRng, AES-256-GCM, zeroize plaintext buffers
+// ring::aead usage (nonce via SysRng, AES-256-GCM, zeroize plaintext buffers
 // on every exit path).
 // ---------------------------------------------------------------------------
 
@@ -330,7 +330,7 @@ fn aead_seal(key: &DataKey, aad: &[u8], plaintext: &[u8; 32]) -> Vec<u8> {
         .expect("32-byte key is valid for AES-256-GCM");
     let sealing_key = LessSafeKey::new(unbound);
     let mut nonce_bytes = [0u8; NONCE_LEN];
-    OsRng.fill_bytes(&mut nonce_bytes);
+    UnwrapErr(SysRng).fill_bytes(&mut nonce_bytes);
     let nonce = Nonce::assume_unique_for_key(nonce_bytes);
 
     let mut in_out = plaintext.to_vec();
@@ -384,12 +384,12 @@ fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
-/// A random 16-byte request id — `rand::rngs::OsRng`, explicitly, per the
+/// A random 16-byte request id — `rand::rngs::SysRng`, explicitly, per the
 /// protocol doc's fix for replay-race-dos/Fix-4 ("`request_id` is now an
-/// explicit 16-byte `OsRng` value, not just 'random'").
+/// explicit 16-byte `SysRng` value, not just 'random'").
 fn generate_request_id() -> [u8; 16] {
     let mut id = [0u8; 16];
-    OsRng.fill_bytes(&mut id);
+    UnwrapErr(SysRng).fill_bytes(&mut id);
     id
 }
 
@@ -961,7 +961,7 @@ impl<T: MailboxTransport> PairingManager<T> {
 
             let Some(request) = found else { continue };
 
-            let a_eph_secret = EphemeralSecret::random_from_rng(OsRng);
+            let a_eph_secret = EphemeralSecret::random_from_rng(&mut UnwrapErr(SysRng));
             let a_eph_pub = BoxPublicKey::from(&a_eph_secret);
             let b_eph_pub = BoxPublicKey::from(request.b_eph_pub);
             let fp = fingerprint(&a_eph_pub, &b_eph_pub, &control_mailbox_id);
@@ -1176,7 +1176,7 @@ impl<T: MailboxTransport> PairingManager<T> {
         // whichever loop iteration below finds the matching `join_confirm`
         // — `EphemeralSecret::diffie_hellman` consumes `self` by value
         // (intentionally not `Clone`, to enforce single use).
-        let mut b_eph_secret = Some(EphemeralSecret::random_from_rng(OsRng));
+        let mut b_eph_secret = Some(EphemeralSecret::random_from_rng(&mut UnwrapErr(SysRng)));
         let b_eph_pub = BoxPublicKey::from(b_eph_secret.as_ref().unwrap());
         let request_id = generate_request_id();
         let mut request = JoinRequest {
@@ -1869,9 +1869,9 @@ mod tests {
 
     #[test]
     fn fingerprint_is_deterministic_and_scoped_to_the_transcript() {
-        let a = EphemeralSecret::random_from_rng(OsRng);
+        let a = EphemeralSecret::random_from_rng(&mut UnwrapErr(SysRng));
         let a_pub = BoxPublicKey::from(&a);
-        let b = EphemeralSecret::random_from_rng(OsRng);
+        let b = EphemeralSecret::random_from_rng(&mut UnwrapErr(SysRng));
         let b_pub = BoxPublicKey::from(&b);
 
         let control_id = "deadbeef";
@@ -1883,7 +1883,7 @@ mod tests {
 
     #[test]
     fn aead_seal_open_round_trips_and_rejects_wrong_group_secret_binding() {
-        let a_eph = EphemeralSecret::random_from_rng(OsRng);
+        let a_eph = EphemeralSecret::random_from_rng(&mut UnwrapErr(SysRng));
         let b_identity = DeviceIdentity::generate();
         let shared = a_eph.diffie_hellman(&BoxPublicKey::from(b_identity.box_secret()));
 

@@ -9,6 +9,8 @@
     "dev": "cd crates/app && tauri dev",
     "dev:onboarding": "node scripts/dev-onboarding.mjs",
     "build:app": "cd crates/app && tauri build",
+    "test": "cargo test -p openpal-core && cargo test -p openpal-app && cargo test -p openpal-bundler && npm --prefix ui test",
+    "test:e2e": "npm --prefix ui run test:e2e",
     "tauri": "tauri"
   },
   "devDependencies": {

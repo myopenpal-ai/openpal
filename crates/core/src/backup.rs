@@ -47,8 +47,8 @@ use crate::crypto::{kdf, recovery, wrap};
 use crate::export::{ExportCategories, ExportData};
 use crate::import::ImportSummary;
 use crate::{Error, Result};
-use rand::rngs::OsRng;
-use rand::RngCore;
+use rand::rngs::SysRng;
+use rand::{rand_core::UnwrapErr, Rng};
 use ring::aead::{Aad, LessSafeKey, Nonce, UnboundKey, AES_256_GCM, NONCE_LEN};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::fs;
@@ -409,7 +409,7 @@ fn seal(payload: &[u8], recovery_wrap: Option<&[u8]>, dek: Option<&DataKey>) -> 
     let aad_len = out.len();
 
     let mut nonce = [0u8; NONCE_LEN];
-    OsRng.fill_bytes(&mut nonce);
+    UnwrapErr(SysRng).fill_bytes(&mut nonce);
     let mut body = payload.to_vec();
     backup_key(dek)
         .and_then(|key| {

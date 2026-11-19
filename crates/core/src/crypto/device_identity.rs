@@ -26,7 +26,7 @@
 //! `Debug` below rather than relying on either upstream impl.
 
 use ed25519_dalek::{Signature, SignatureError, Signer, SigningKey, VerifyingKey};
-use rand::rngs::OsRng;
+use rand::{rand_core::UnwrapErr, rngs::SysRng};
 use std::fmt;
 use x25519_dalek::{PublicKey as BoxPublicKey, StaticSecret as BoxSecret};
 
@@ -52,13 +52,13 @@ pub struct DeviceIdentityPublic {
 }
 
 impl DeviceIdentity {
-    /// A fresh identity: an `OsRng`-generated Ed25519 signing keypair and an
-    /// `OsRng`-generated X25519 static keypair. Per this crate's rule, all
+    /// A fresh identity: an `SysRng`-generated Ed25519 signing keypair and an
+    /// `SysRng`-generated X25519 static keypair. Per this crate's rule, all
     /// randomness comes from the OS CSPRNG, never `thread_rng`.
     pub fn generate() -> Self {
         Self {
-            signing_key: SigningKey::generate(&mut OsRng),
-            box_key: BoxSecret::random_from_rng(OsRng),
+            signing_key: SigningKey::generate(&mut UnwrapErr(SysRng)),
+            box_key: BoxSecret::random_from_rng(&mut UnwrapErr(SysRng)),
         }
     }
 

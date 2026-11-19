@@ -445,7 +445,7 @@ pub(crate) fn sha256_hex(path: &Path) -> anyhow::Result<String> {
         }
         hasher.update(&buf[..n]);
     }
-    Ok(format!("{:x}", hasher.finalize()))
+    Ok(hex::encode(hasher.finalize()))
 }
 
 /// Download the `tag` release's existing `asset` manifest file, if any —

@@ -186,7 +186,7 @@ pub(crate) fn restore_lines(conn: &Connection, lines: &[String]) -> rusqlite::Re
 fn hash_line(line: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(line.as_bytes());
-    format!("{:x}", hasher.finalize())
+    hex::encode(hasher.finalize())
 }
 
 fn last_line_hash(conn: &Connection) -> Option<String> {

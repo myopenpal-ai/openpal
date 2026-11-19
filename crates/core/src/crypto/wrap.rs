@@ -16,8 +16,8 @@
 //! on *when* to fall back to it. That policy is a later phase's job.
 
 use super::key::DataKey;
-use rand::rngs::OsRng;
-use rand::RngCore;
+use rand::rngs::SysRng;
+use rand::{rand_core::UnwrapErr, Rng};
 use ring::aead::{Aad, LessSafeKey, Nonce, UnboundKey, AES_256_GCM, NONCE_LEN};
 use sha2::{Digest, Sha256};
 use std::ffi::OsString;
@@ -128,7 +128,7 @@ fn seal(dek: &DataKey, kek: &DataKey, header: &WrapHeader) -> Result<Vec<u8>, Wr
         UnboundKey::new(&AES_256_GCM, kek.as_bytes()).map_err(|_| WrapError::Malformed)?;
     let key = LessSafeKey::new(unbound);
     let mut nonce_bytes = [0u8; NONCE_LEN];
-    OsRng.fill_bytes(&mut nonce_bytes);
+    UnwrapErr(SysRng).fill_bytes(&mut nonce_bytes);
     let nonce = Nonce::assume_unique_for_key(nonce_bytes);
 
     // `in_out` briefly holds the raw plaintext DEK (from `to_vec()`) before

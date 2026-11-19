@@ -12,10 +12,14 @@ clap = { version = "4", features = ["derive"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 image = "0.25"
-sha2 = "0.10"
+sha2 = "0.11"
+# digest 0.11 dropped `LowerHex` for digest outputs, so `format!("{:x}", …)`
+# no longer compiles. Same `hex` as `crates/core` uses for its own SHA-256
+# summaries; already in the lock through `serde_with`.
+hex = "0.4"
 # Verifies Portable artifact signatures in `smoke` with the exact same crate
 # (and strictness) as openpal-core's own update verification.
-minisign-verify = "0.2"
+minisign-verify = "0.3"
 
 [dev-dependencies]
 tempfile = "3"

@@ -31,9 +31,9 @@ tracing = { workspace = true }
 thiserror = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
-# `OsRng` for `confirm_recovery_code`'s fresh salt — same version openpal-core
+# `SysRng` for `confirm_recovery_code`'s fresh salt — same version openpal-core
 # already pins for its own crypto module.
-rand = "0.8"
+rand = "0.10"
 # `state.rs`'s `AppState.app_db: Arc<Mutex<Connection>>` needs the
 # `Connection` type name directly. Deliberately featureless: `openpal-core`'s
 # `crates/core/Cargo.toml` is the only place the SQLCipher feature split
@@ -41,7 +41,7 @@ rand = "0.8"
 # across the workspace, so this crate already inherits whichever variant
 # resolves there. A second features list here, even one meant to mirror it,
 # is how vendored OpenSSL could silently land on macOS too.
-rusqlite = "0.40.1"
+rusqlite = "0.43.0"
 # `lib.rs`'s startup crypto-provider install: `openpal-core`'s own `reqwest`
 # (0.12) falls back to `ring` per-client if no process default is installed,
 # but `tauri-plugin-updater`'s `reqwest` (0.13, pulled in transitively) has no
