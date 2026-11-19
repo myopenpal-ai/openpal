@@ -36,8 +36,8 @@ use openpal_core::{
     custom, disk_speed, download, huggingface, projects, prompt_enhancer, selection, skills, store,
     writing_tools, Error as CoreError,
 };
-use rand::rngs::OsRng;
-use rand::RngCore;
+use rand::rngs::SysRng;
+use rand::{rand_core::UnwrapErr, Rng};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -4863,7 +4863,7 @@ pub fn confirm_recovery_code(state: State<'_, AppState>, code: String) -> Result
     let instance_dir = state.paths.data_dir.join("keys");
 
     let mut salt = [0u8; 16];
-    OsRng.fill_bytes(&mut salt);
+    UnwrapErr(SysRng).fill_bytes(&mut salt);
 
     let normalized = recovery::normalize(&code);
     let recovery_kek = kdf::derive(normalized.as_bytes(), &salt, kdf::M_COST_KIB, kdf::T_COST)

@@ -40,7 +40,9 @@ use sysinfo::{ProcessesToUpdate, System};
 /// rest of the sweep. Returns the pids actually killed, purely so the
 /// caller can log a friendly count.
 pub fn kill_orphaned_engines(engine_binary: &Path) -> Vec<u32> {
-    let mut sys = System::new();
+    let Ok(mut sys) = System::new() else {
+        return Vec::new();
+    };
     sys.refresh_processes(ProcessesToUpdate::All, true);
 
     sys.processes()

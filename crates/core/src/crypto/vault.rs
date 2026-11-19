@@ -52,7 +52,7 @@
 //! store carrying these payloads never needs to guess.
 //!
 //! Derived from [`super::wrap`]'s conventions (AES-256-GCM, nonces from
-//! `OsRng`, plaintext buffers zeroized on every exit path, `DataKey` never
+//! `SysRng`, plaintext buffers zeroized on every exit path, `DataKey` never
 //! displayed), but as a small per-use-case seal/open pair rather than a
 //! shared generic function — this crate's established crypto style
 //! (`wrap.rs`/`pairing.rs`/`sync::envelope.rs` each already do this).
@@ -70,8 +70,8 @@ use super::key::DataKey;
 use super::{kdf, wrap};
 use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine as _;
-use rand::rngs::OsRng;
-use rand::RngCore;
+use rand::rngs::SysRng;
+use rand::{rand_core::UnwrapErr, Rng};
 use ring::aead::{Aad, LessSafeKey, Nonce, UnboundKey, AES_256_GCM, NONCE_LEN};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -205,7 +205,7 @@ fn seal_blob(key_material: &DataKey, plaintext: &[u8]) -> Result<Sealed, VaultEr
         .map_err(|_| VaultError::UnusableKey)?;
     let key = LessSafeKey::new(unbound);
     let mut nonce_bytes = [0u8; NONCE_LEN];
-    OsRng.fill_bytes(&mut nonce_bytes);
+    UnwrapErr(SysRng).fill_bytes(&mut nonce_bytes);
     let nonce = Nonce::assume_unique_for_key(nonce_bytes);
 
     // `in_out` briefly holds the raw plaintext before
@@ -271,7 +271,7 @@ pub fn write_password_file(
     password: &[u8],
 ) -> Result<(), VaultError> {
     let mut salt = [0u8; 16];
-    OsRng.fill_bytes(&mut salt);
+    UnwrapErr(SysRng).fill_bytes(&mut salt);
     let (root, _server_half) = derive_root(password, &salt, kdf::M_COST_KIB, kdf::T_COST)?;
     wrap::write_wrap(path, items_key, &root, &wrap::WrapHeader::new(salt))?;
     Ok(())

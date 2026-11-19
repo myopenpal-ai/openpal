@@ -22,8 +22,8 @@
 
 use super::key::DataKey;
 use chrono::Datelike;
-use rand::rngs::OsRng;
-use rand::RngCore;
+use rand::rngs::SysRng;
+use rand::{rand_core::UnwrapErr, Rng};
 use ring::aead::{Aad, LessSafeKey, Nonce, UnboundKey, AES_256_GCM, NONCE_LEN};
 use zeroize::Zeroize;
 
@@ -53,7 +53,7 @@ pub fn seal_frame(key: &DataKey, marker: u64, plaintext: &[u8]) -> Vec<u8> {
         .expect("DataKey is always exactly AES-256-GCM's 32-byte key length");
     let sealing = LessSafeKey::new(unbound);
     let mut nonce_bytes = [0u8; NONCE_LEN];
-    OsRng.fill_bytes(&mut nonce_bytes);
+    UnwrapErr(SysRng).fill_bytes(&mut nonce_bytes);
     let nonce = Nonce::assume_unique_for_key(nonce_bytes);
     let marker_bytes = marker.to_be_bytes();
 

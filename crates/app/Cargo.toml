@@ -31,7 +31,7 @@ tracing = { workspace = true }
 thiserror = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
-# `OsRng` for `confirm_recovery_code`'s fresh salt — same version openpal-core
+# `SysRng` for `confirm_recovery_code`'s fresh salt — same version openpal-core
 # already pins for its own crypto module.
 rand = "0.10"
 # `state.rs`'s `AppState.app_db: Arc<Mutex<Connection>>` needs the

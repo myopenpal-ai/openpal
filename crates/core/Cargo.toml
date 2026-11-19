@@ -17,6 +17,11 @@ base64 = { workspace = true }
 regex = { workspace = true }
 sysinfo = "0.40"
 sha2 = "0.11"
+# digest 0.11 dropped `LowerHex` for digest outputs, so `format!("{:x}", …)`
+# on a `Sha256` output no longer compiles. `hex` is already in the lock
+# transitively, so this only adds an edge — same "promoted from transitive"
+# pattern as `ring`/`zeroize` below.
+hex = "0.4"
 rand = "0.10"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 pdf-extract = "0.12.0"
@@ -38,18 +43,19 @@ ring = "0.17"
 # `DataKey`, the KEK, and the passphrase buffer.
 zeroize = "1"
 # Device identity (docs/SYNC_PAIRING_PROTOCOL.md "Key derivations"): Ed25519
-# signing keypair. Pinned to the 2.x line, NOT the newer 3.0 release line
-# (`cargo info` confirms 3.0.0 is latest-overall) — 3.0 moved to rand_core
-# 0.9, which is incompatible with `rand = "0.8"` (pinned above, and used
-# throughout this crate's "randomness always via OsRng" convention), whose
-# `OsRng` only implements rand_core 0.6's `RngCore`/`CryptoRng`. 2.2.0 (the
-# 2.x line's latest) still depends on rand_core 0.6, so it accepts
-# `rand::rngs::OsRng` directly. The `rand_core` feature is required to pull
-# in `SigningKey::generate`, which needs a `CryptoRngCore` bound.
+# signing keypair. rand 0.10 renamed the OS CSPRNG `OsRng` → `SysRng` and
+# merged `RngCore` into `Rng`; this crate's "randomness always via the OS
+# CSPRNG" convention therefore gates every draw on `UnwrapErr(SysRng)` (a
+# `CryptoRng` that panics if getrandom fails, which is the only sane response
+# when key generation needs OS entropy). All of rand 0.10, `getrandom`'s
+# `SysRng` and these dalek crates resolve on rand_core 0.10, so `SysRng`
+# satisfies their `CryptoRng` bounds directly. The `rand_core` feature is
+# required to pull in `SigningKey::generate`, which needs a `CryptoRng` bound.
 ed25519-dalek = { version = "3.0", features = ["rand_core"] }
 # Device identity: X25519 static ("box") keypair for pairing/rotation ECDH.
-# Same 2.x-not-3.0 pin as ed25519-dalek above, same reason (3.0 is on
-# rand_core 0.9). `static_secrets` enables `StaticSecret` itself — x25519-dalek
+# Same version line as ed25519-dalek above (both on rand_core 0.10, and the
+# `random_from_rng` calls take `&mut UnwrapErr(SysRng)` like everything else).
+# `static_secrets` enables `StaticSecret` itself — x25519-dalek
 # gates it behind a feature deliberately, to make "this secret is reused
 # across multiple ECDH calls" an opt-in rather than the default shape.
 x25519-dalek = { version = "3.0", features = ["static_secrets"] }
@@ -108,7 +114,7 @@ libc = "0.2"
 rusqlite = { version = "0.43.0", features = ["bundled-sqlcipher"] }
 
 [target.'cfg(not(target_vendor = "apple"))'.dependencies]
-rusqlite = { version = "0.40.1", features = ["bundled-sqlcipher-vendored-openssl"] }
+rusqlite = { version = "0.43.0", features = ["bundled-sqlcipher-vendored-openssl"] }
 
 [dev-dependencies]
 http-body-util = "0.1.5"

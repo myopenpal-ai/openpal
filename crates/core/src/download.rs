@@ -253,7 +253,7 @@ pub async fn download_file(
     }
 
     if let (Some(expected), Some(hasher)) = (expected_sha256, hasher) {
-        let digest = format!("{:x}", hasher.finalize());
+        let digest = hex::encode(hasher.finalize());
         if !digest.eq_ignore_ascii_case(expected) {
             tracing::warn!("download sha256 mismatch: got {digest}, expected {expected}");
             let _ = std::fs::remove_file(&part);
