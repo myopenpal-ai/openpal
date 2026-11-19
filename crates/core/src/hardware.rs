@@ -22,7 +22,10 @@ use sysinfo::{Disks, System};
 /// Snapshot the machine. `models_dir` tells us which volume's free space
 /// matters (models are large; this is the number we check before downloads).
 pub fn detect(models_dir: &Path) -> HardwareInfo {
-    let sys = System::new_all();
+    // `System::new_all()` is fallible since sysinfo 0.40; detection must
+    // never panic, so a failed probe just leaves these fields at a safe
+    // fallback instead.
+    let sys = System::new_all().ok();
 
     // Runtime check (not cfg!) so an x86_64 build running under Rosetta on an
     // Apple Silicon Mac still detects the real hardware.
@@ -30,15 +33,15 @@ pub fn detect(models_dir: &Path) -> HardwareInfo {
         command_output("sysctl", &["-n", "hw.optional.arm64"]).is_some_and(|v| v == "1");
 
     let chip = sys
-        .cpus()
-        .first()
+        .as_ref()
+        .and_then(|s| s.cpus().first())
         .map(|c| c.brand().trim().to_string())
         .filter(|b| !b.is_empty())
         .or_else(|| command_output("sysctl", &["-n", "machdep.cpu.brand_string"]))
         .unwrap_or_else(|| "Unknown".to_string());
 
     let cpu_cores = System::physical_core_count()
-        .unwrap_or_else(|| sys.cpus().len())
+        .unwrap_or_else(|_| sys.as_ref().map_or(1, |s| s.cpus().len()))
         .max(1);
 
     let os_version = if cfg!(target_os = "macos") {
@@ -47,8 +50,8 @@ pub fn detect(models_dir: &Path) -> HardwareInfo {
         None
     }
     .or_else(|| match (System::name(), System::os_version()) {
-        (Some(name), Some(version)) => Some(format!("{name} {version}")),
-        (Some(name), None) => Some(name),
+        (Ok(name), Ok(version)) => Some(format!("{name} {version}")),
+        (Ok(name), Err(_)) => Some(name),
         _ => None,
     })
     .unwrap_or_else(|| "Unknown".to_string());
@@ -56,8 +59,8 @@ pub fn detect(models_dir: &Path) -> HardwareInfo {
     HardwareInfo {
         chip,
         is_apple_silicon,
-        total_ram_bytes: sys.total_memory(),
-        available_ram_bytes: sys.available_memory(),
+        total_ram_bytes: sys.as_ref().map_or(0, |s| s.total_memory()),
+        available_ram_bytes: sys.as_ref().map_or(0, |s| s.available_memory()),
         cpu_cores,
         has_metal: is_apple_silicon,
         free_disk_bytes: free_disk_bytes(models_dir),
@@ -88,31 +91,40 @@ fn command_output(program: &str, args: &[&str]) -> Option<String> {
 /// is the longest path-prefix of the (canonicalized) directory, then the
 /// usual macOS data volume, then "/", then the largest disk.
 pub(crate) fn free_disk_bytes(models_dir: &Path) -> u64 {
-    let disks = Disks::new_with_refreshed_list();
+    // Fallible since sysinfo 0.40; a failed probe degrades to 0 free bytes
+    // (the same "unknown" the previous sysinfo treated as a missing disk).
+    let disks = Disks::new_with_refreshed_list().ok();
     let canonical = canonicalize_nearest_existing(models_dir);
 
     let by_prefix = canonical.as_deref().and_then(|dir| {
-        disks
-            .list()
-            .iter()
-            .filter(|d| dir.starts_with(d.mount_point()))
-            .max_by_key(|d| d.mount_point().as_os_str().len())
+        disks.as_ref().and_then(|disks| {
+            disks
+                .into_iter()
+                .filter(|d| dir.starts_with(d.mount_point()))
+                .max_by_key(|d| d.mount_point().as_os_str().len())
+        })
     });
 
     by_prefix
         .or_else(|| {
-            disks
-                .list()
-                .iter()
-                .find(|d| d.mount_point() == Path::new("/System/Volumes/Data"))
+            disks.as_ref().and_then(|disks| {
+                disks
+                    .into_iter()
+                    .find(|d| d.mount_point() == Path::new("/System/Volumes/Data"))
+            })
+        })
+        .or_else(|| {
+            disks.as_ref().and_then(|disks| {
+                disks
+                    .into_iter()
+                    .find(|d| d.mount_point() == Path::new("/"))
+            })
         })
         .or_else(|| {
             disks
-                .list()
-                .iter()
-                .find(|d| d.mount_point() == Path::new("/"))
+                .as_ref()
+                .and_then(|disks| disks.into_iter().max_by_key(|d| d.total_space()))
         })
-        .or_else(|| disks.list().iter().max_by_key(|d| d.total_space()))
         .map(|d| d.available_space())
         .unwrap_or(0)
 }

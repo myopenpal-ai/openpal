@@ -36,7 +36,7 @@ pub(super) fn hash_grant_key(tool_id: &str, parts: &[&str]) -> String {
         hasher.update(b"\0");
         hasher.update(p.as_bytes());
     }
-    format!("{:x}", hasher.finalize())
+    hex::encode(hasher.finalize())
 }
 
 /// Write `content` to `path` as a private (`0600`) file, creating or

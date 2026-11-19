@@ -189,7 +189,7 @@ impl Tool for FsWriteTool {
         // python3 run.py" + "always allow rewriting run.py").
         let mut hasher = Sha256::new();
         hasher.update(content.as_bytes());
-        let content_hash = format!("{:x}", hasher.finalize());
+        let content_hash = hex::encode(hasher.finalize());
         hash_grant_key("write_file", &[&canonical, mode, &content_hash])
     }
 

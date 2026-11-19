@@ -15,8 +15,8 @@
 //! small, self-contained utility like this one (see `docs/SPACES_AUTHORING.md`'s
 //! own dependency table, which makes the same call for comparable cases).
 
-use rand::rngs::OsRng;
-use rand::RngCore;
+use rand::rngs::SysRng;
+use rand::{rand_core::UnwrapErr, Rng};
 
 const ALPHABET: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 
@@ -26,15 +26,15 @@ const CODE_BYTES: usize = 16;
 /// Characters per hyphen-separated group in the formatted code.
 const GROUP_LEN: usize = 5;
 
-/// 16 random bytes (`rand::rngs::OsRng` — this crate's established "all
-/// randomness via OsRng, never `thread_rng`" rule, see
+/// 16 random bytes (`rand::rngs::SysRng` — this crate's established "all
+/// randomness via SysRng, never `thread_rng`" rule, see
 /// `super::key::DataKey::random` for the precedent) encoded as 26 Crockford
 /// Base32 characters, formatted in hyphen-separated groups of 5 for
 /// readability (e.g. `"XXXXX-XXXXX-XXXXX-XXXXX-XXXXX-X"` — 5 full groups
 /// plus a 1-character remainder for 26 characters total).
 pub fn generate() -> String {
     let mut bytes = [0u8; CODE_BYTES];
-    OsRng.fill_bytes(&mut bytes);
+    UnwrapErr(SysRng).fill_bytes(&mut bytes);
     group(&encode(&bytes))
 }
 

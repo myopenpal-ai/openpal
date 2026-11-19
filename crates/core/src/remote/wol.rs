@@ -98,10 +98,11 @@ pub struct NetworkInterfaceInfo {
 /// virtual interfaces with an all-zero MAC are skipped — nothing a remote
 /// client could ever usefully target.
 pub fn list_interfaces() -> Vec<NetworkInterfaceInfo> {
-    let networks = sysinfo::Networks::new_with_refreshed_list();
-    networks
-        .list()
-        .iter()
+    let Ok(networks) = sysinfo::Networks::new_with_refreshed_list() else {
+        return Vec::new();
+    };
+    (&networks)
+        .into_iter()
         .filter_map(|(name, data)| {
             let mac = data.mac_address();
             if mac.is_unspecified() {
@@ -116,7 +117,7 @@ pub fn list_interfaces() -> Vec<NetworkInterfaceInfo> {
                 })
                 .collect();
             Some(NetworkInterfaceInfo {
-                name: name.clone(),
+                name: name.to_string_lossy().into_owned(),
                 mac: MacAddress(mac.0),
                 ipv4_addrs,
             })

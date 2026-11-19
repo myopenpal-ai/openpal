@@ -8,13 +8,18 @@
 //! `portable` block itself and [`crate::update_portable`] does the
 //! download/verify/apply.
 //!
-//! Known gap: the manifest is hosted on GitHub Releases for a currently
-//! *private* repo, which real users' installs can't fetch anonymously.
-//! Nothing here works end-to-end for end users until the repo goes public —
-//! see the "Auto-Updater" plan for the accepted rollout gate. This includes
-//! the unsafe-version gate in [`is_version_unsafe`]: the same fetch that
-//! can't reach a private feed today is what decides whether a version gets
-//! gated, so real users see no gate until the feed is public.
+//! Known gap: the feeds are only reachable once they are actually
+//! *published*, and nothing in this crate can force that. The repo is public,
+//! but GitHub resolves `/releases/latest` from the newest non-draft,
+//! non-pre-release release: a `v*` cut still sitting as a draft, or a `b*`
+//! nightly pre-release, is invisible to it — so
+//! `/releases/latest/download/latest.json` 404s until the first stable cut is
+//! built and promoted (docs/RELEASING.md). The engine feed at
+//! `engine-latest/engine-manifest.json` is its own rolling channel and only
+//! exists after the bundler's `engine-manifest` command has run at least once.
+//! Until both feeds resolve, every update check fails with a 404 — fail-open,
+//! so nothing breaks (below), but no update is ever offered and the
+//! unsafe-version gate in [`is_version_unsafe`] never fires for anyone.
 //!
 //! # The unsafe declaration (fail-open)
 //!
@@ -101,11 +106,14 @@ pub fn current_version() -> Version {
 /// messages safe to show a non-technical user.
 pub async fn fetch_manifest(client: &reqwest::Client, endpoint: &str) -> Result<Manifest> {
     let resp = client.get(endpoint).send().await.map_err(|e| {
-        tracing::warn!("update manifest fetch failed: {e}");
+        tracing::warn!("update manifest fetch failed for {endpoint}: {e}");
         Error::Update(OFFLINE_MSG.to_string())
     })?;
     if !resp.status().is_success() {
-        tracing::warn!("update manifest fetch returned {}", resp.status());
+        tracing::warn!(
+            "update manifest fetch returned {} from {endpoint}",
+            resp.status()
+        );
         return Err(Error::Update(OFFLINE_MSG.to_string()));
     }
     resp.json::<Manifest>().await.map_err(|e| {

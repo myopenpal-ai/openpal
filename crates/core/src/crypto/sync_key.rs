@@ -1,7 +1,7 @@
 //! `SyncKey` — the shared secret every device in a sync group holds a copy
 //! of once paired (`docs/SYNC_PAIRING_PROTOCOL.md`'s "Key derivations" and
 //! "Group creation" sections). Constructed exactly like
-//! [`super::key::DataKey`] (32 random `OsRng` bytes) but kept as a distinct
+//! [`super::key::DataKey`] (32 random `SysRng` bytes) but kept as a distinct
 //! newtype rather than a type alias, so a `SyncKey` can never be handed to
 //! code expecting a local data-encryption key by accident — the two secrets
 //! protect different things (one device's local store vs. a whole sync
@@ -13,8 +13,8 @@
 //! always print `"<redacted>"`, never derived from `Zeroizing`, which still
 //! derives a real (leaky) `Debug` on its own.
 
-use rand::rngs::OsRng;
-use rand::RngCore;
+use rand::rngs::SysRng;
+use rand::{rand_core::UnwrapErr, Rng};
 use std::fmt;
 use zeroize::Zeroizing;
 
@@ -22,11 +22,11 @@ use zeroize::Zeroizing;
 pub struct SyncKey(Zeroizing<[u8; 32]>);
 
 impl SyncKey {
-    /// A fresh, random key. `OsRng` per this crate's rule: all randomness
+    /// A fresh, random key. `SysRng` per this crate's rule: all randomness
     /// in `crate::crypto` comes from the OS CSPRNG, never `thread_rng`.
     pub fn random() -> Self {
         let mut bytes = [0u8; 32];
-        OsRng.fill_bytes(&mut bytes);
+        UnwrapErr(SysRng).fill_bytes(&mut bytes);
         Self::from_bytes(bytes)
     }
 

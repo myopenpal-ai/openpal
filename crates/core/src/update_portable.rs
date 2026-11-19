@@ -353,7 +353,11 @@ fn wait_for_pid_exit(pid: u32, timeout: Duration) {
     let target = sysinfo::Pid::from_u32(pid);
     let deadline = std::time::Instant::now() + timeout;
     loop {
-        let mut sys = sysinfo::System::new_all();
+        let Ok(mut sys) = sysinfo::System::new_all() else {
+            // Can't query the process table: treat the target as gone so the
+            // update applies (what the timeout branch below would do anyway).
+            return;
+        };
         sys.refresh_all();
         if sys.process(target).is_none() {
             return;

@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/core", "crates/app", "crates/sync-protocol", "crates/relay", "bundler"]
 
 [workspace.package]
-version = "0.5.2"
+version = "0.5.3"
 edition = "2021"
 license = "MIT"
 
@@ -15,7 +15,7 @@ tokio = { version = "1", features = ["full"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls", "gzip"] }
 futures-util = "0.3"
 tracing = "0.1"
-base64 = "0.22"
+base64 = "0.23"
 regex = "1"
 axum = "0.8"
 

@@ -7,7 +7,7 @@
 //! `docs/SYNC_PAIRING_PROTOCOL.md` already established for pairing.
 //!
 //! AEAD construction mirrors `crate::crypto::wrap`'s and
-//! `crate::sync::pairing`'s exactly (nonce via `OsRng`, AES-256-GCM,
+//! `crate::sync::pairing`'s exactly (nonce via `SysRng`, AES-256-GCM,
 //! zeroize plaintext buffers on every exit path) — this project's existing
 //! convention is a small, local seal/open pair per use case rather than one
 //! shared generic function (`wrap.rs` and `pairing.rs` each already do
@@ -18,8 +18,8 @@ use crate::crypto::sync_key::SyncKey;
 use crate::sync::hlc::Hlc;
 use crate::types::{ChatMessage, Conversation, ModelSpec, Project};
 use crate::{Error, Result};
-use rand::rngs::OsRng;
-use rand::RngCore;
+use rand::rngs::SysRng;
+use rand::{rand_core::UnwrapErr, Rng};
 use ring::aead::{Aad, LessSafeKey, Nonce, UnboundKey, AES_256_GCM, NONCE_LEN};
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize;
@@ -130,7 +130,7 @@ pub fn encrypt(sync_key: &SyncKey, envelope: &ChangeEnvelope) -> Result<Vec<u8>>
         .map_err(|_| Error::Pairing("couldn't prepare this device's sync key".into()))?;
     let key = LessSafeKey::new(unbound);
     let mut nonce_bytes = [0u8; NONCE_LEN];
-    OsRng.fill_bytes(&mut nonce_bytes);
+    UnwrapErr(SysRng).fill_bytes(&mut nonce_bytes);
     let nonce = Nonce::assume_unique_for_key(nonce_bytes);
 
     let mut in_out = plaintext;

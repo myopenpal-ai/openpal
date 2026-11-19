@@ -292,7 +292,7 @@ impl EngineBackend for SubprocessBackend {
                 .flatten()
                 .map(|m| m.len())
                 .filter(|&len| len > 0);
-            let mut progress_sys = sysinfo::System::new();
+            let mut progress_sys = sysinfo::System::new().ok();
             // Ratchets forward only — RSS can wobble slightly from one 300ms
             // sample to the next, and a progress indicator visibly ticking
             // backward reads as broken even though the underlying number is
@@ -362,21 +362,19 @@ impl EngineBackend for SubprocessBackend {
                         return Err(Error::Engine(message));
                     }
 
-                    if let Some(total_len) = load_progress_denominator {
-                        if let Some(pid) = child.id() {
-                            let sys_pid = sysinfo::Pid::from_u32(pid);
-                            progress_sys.refresh_processes(
-                                sysinfo::ProcessesToUpdate::Some(&[sys_pid]),
-                                true,
-                            );
-                            if let Some(proc) = progress_sys.process(sys_pid) {
-                                let sampled = (proc.memory() * 100 / total_len).min(99) as u8;
-                                best_progress_percent = best_progress_percent.max(sampled);
-                                inner.status = EngineStatus::Starting {
-                                    model_id: model_id.to_string(),
-                                    progress_percent: Some(best_progress_percent),
-                                };
-                            }
+                    if let (Some(total_len), Some(pid), Some(progress_sys)) =
+                        (load_progress_denominator, child.id(), progress_sys.as_mut())
+                    {
+                        let sys_pid = sysinfo::Pid::from_u32(pid);
+                        progress_sys
+                            .refresh_processes(sysinfo::ProcessesToUpdate::Some(&[sys_pid]), true);
+                        if let Some(proc) = progress_sys.process(sys_pid) {
+                            let sampled = (proc.memory() * 100 / total_len).min(99) as u8;
+                            best_progress_percent = best_progress_percent.max(sampled);
+                            inner.status = EngineStatus::Starting {
+                                model_id: model_id.to_string(),
+                                progress_percent: Some(best_progress_percent),
+                            };
                         }
                     }
                 }
@@ -917,7 +915,10 @@ fn oom_hint(exit: &std::process::ExitStatus) -> String {
     if exit_signal(exit) != Some(9) {
         return String::new();
     }
-    let mut sys = sysinfo::System::new();
+    let Ok(mut sys) = sysinfo::System::new() else {
+        // No system-info surface means no OOM hint to add.
+        return String::new();
+    };
     sys.refresh_memory();
     format!(
         "; signal 9 (SIGKILL) with no captured log output is consistent with the OS \
