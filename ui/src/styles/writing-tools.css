@@ -1,9 +1,11 @@
-/* Translate/Correct screens — two distinct plugin-gated pages sharing one
-   implementation (WritingToolsScreen.tsx) and this stylesheet. Page-shell
-   shape mirrors skills.css (.skills-view/-scroll/-col) exactly; the rest is
-   a two-pane layout for the source/result textareas. Reuses this app's real
-   design tokens and .btn/.btn-ghost/.btn-quiet button classes throughout --
-   no new color values, no button styling here. */
+/* Translate/Correct/Improve screens — three plugin-gated pages sharing one
+   implementation (WritingToolsScreen.tsx for Translate/Correct,
+   ImproveView.tsx for Improve) and this stylesheet. Page-shell shape mirrors
+   skills.css (.skills-view/-scroll/-col) exactly; the rest is a two-pane
+   layout for Translate/Improve, and one marked, in-place editing surface for
+   Correct. Reuses this app's real design tokens and
+   .btn/.btn-ghost/.btn-quiet button classes throughout — no new color values,
+   no button styling here beyond the icon-button box. */
 
 .writing-tools-view {
   height: 100vh;
@@ -124,67 +126,291 @@
   flex-wrap: wrap;
 }
 
-/* ------------------------- Correct-mode diff view ------------------------- */
+/* --------------------------- Page title icon ----------------------------- */
 
-.writing-tools-diff {
-  flex: 1;
-  min-height: 220px;
-  overflow-y: auto;
-  color: var(--ink);
-  background: var(--paper-raised);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-m);
-  padding: 10px 14px;
-  line-height: 1.6;
-  white-space: pre-wrap;
+/* Each page title carries the same drawing as its sidebar quick action
+   (issue #125) — decorative only, so the h1's text stays its name. */
+.writing-tools-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
-.writing-tools-diff-change {
-  display: inline;
+.writing-tools-title-icon {
+  width: 26px;
+  height: 26px;
+  color: var(--ink-soft);
+  flex-shrink: 0;
 }
 
-.writing-tools-diff-removed-active {
-  color: var(--danger);
-  text-decoration: line-through;
-}
+/* ------------------------- Result icon actions ---------------------------- */
 
-.writing-tools-diff-removed {
-  color: var(--ink-faint);
-  text-decoration: line-through;
-}
-
-.writing-tools-diff-added-active {
-  color: var(--ok);
-  text-decoration: underline;
-  text-decoration-style: solid;
-}
-
-.writing-tools-diff-added {
-  color: var(--ink-faint);
-  text-decoration: underline;
-  text-decoration-style: dotted;
-}
-
-.writing-tools-diff-toggle {
+/* The result rows' actions are icon buttons whose `title`/`aria-label` is the
+   action's own text (components/IconActionButton.tsx). */
+.writing-tools-icon-btn {
   display: inline-grid;
   place-items: center;
-  width: 18px;
-  height: 18px;
-  margin: 0 2px;
+  width: 30px;
+  height: 30px;
   padding: 0;
-  border: 1px solid var(--line);
-  border-radius: 5px;
-  background: var(--paper-sunken);
-  color: var(--ink-soft);
-  font-size: 11px;
-  line-height: 1;
-  cursor: pointer;
-  vertical-align: middle;
 }
 
-.writing-tools-diff-toggle:hover {
-  background: var(--ink-hover);
+.writing-tools-icon {
+  width: 17px;
+  height: 17px;
+}
+
+/* ----------------------- Correct mode: marked surface --------------------- */
+
+/* One surface: a real textarea (visible caret, native selection/IME) whose
+   own glyphs are transparent, with a typographically identical mirror drawn
+   over it that paints the text and the clickable correction marks. The pair
+   must match on every metric below or the marks drift off their words; the
+   mirror never changes layout (marks differ only by colour and underline). */
+.writing-tools-pane-correct {
+  flex: 1;
+  min-width: 0;
+}
+
+.writing-tools-editor {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-height: 260px;
+}
+
+.writing-tools-editor textarea,
+.writing-tools-editor-mirror {
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.5;
+  letter-spacing: normal;
+  tab-size: 4;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-m);
+}
+
+.writing-tools-editor textarea {
+  flex: 1;
+  width: 100%;
+  min-height: 260px;
+  resize: vertical;
+  background: var(--paper-raised);
+  color: transparent;
+  caret-color: var(--ink);
+}
+
+/* The placeholder is the textarea's own, so it must stay visible. */
+.writing-tools-editor textarea::placeholder {
+  color: var(--ink-faint);
+  opacity: 1;
+}
+
+.writing-tools-editor-mirror {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
   color: var(--ink);
+  background: transparent;
+  border-color: transparent;
+  /* The textarea underneath handles every pointer event; only the marks
+     take them back. */
+  pointer-events: none;
+}
+
+.writing-tools-mark-wrap {
+  position: relative;
+  display: inline;
+  pointer-events: auto;
+}
+
+/* A mark is a real button, so it is Tab-reachable and Enter/Space applies it.
+   Styling keeps it indistinguishable in size from the text it covers. */
+.writing-tools-mark {
+  font: inherit;
+  line-height: inherit;
+  color: inherit;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: var(--accent-line);
+  text-decoration: underline dotted var(--accent);
+  text-underline-offset: 2px;
+  white-space: pre-wrap;
+  cursor: pointer;
+}
+
+.writing-tools-mark:hover {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+.writing-tools-mark:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* A pure insertion has no word to cover: anchor it at zero width so the
+   following text stays where the textarea's own glyphs are, and show a small
+   "+" badge beside the caret position instead. */
+.writing-tools-mark.is-insert {
+  display: inline-block;
+  width: 0;
+  overflow: visible;
+  background: none;
+  text-decoration: none;
+}
+
+.writing-tools-mark-insert {
+  position: absolute;
+  left: -0.35em;
+  top: -0.5em;
+  display: inline-grid;
+  place-items: center;
+  width: 1em;
+  height: 1em;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-size: 0.66em;
+  line-height: 1;
+}
+
+.writing-tools-mark-tip {
+  display: none;
+  position: absolute;
+  left: 0;
+  top: 100%;
+  z-index: 3;
+  margin-top: 5px;
+  padding: 5px 9px;
+  gap: 8px;
+  align-items: baseline;
+  width: max-content;
+  max-width: 320px;
+  white-space: normal;
+  font-size: 12.5px;
+  line-height: 1.4;
+  background: var(--paper-raised);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-s);
+  box-shadow: 0 4px 14px rgba(var(--shadow-rgb), 0.18);
+}
+
+/* "Hovering or focusing a mark reveals its suggestion" — both, so the
+   affordance never depends on a pointer. */
+.writing-tools-mark-wrap:hover .writing-tools-mark-tip,
+.writing-tools-mark-wrap:focus-within .writing-tools-mark-tip {
+  display: inline-flex;
+}
+
+.writing-tools-mark-tip-text {
+  color: var(--ok);
+  font-weight: 600;
+}
+
+.writing-tools-mark-tip-text.is-delete {
+  color: var(--ink-faint);
+  text-decoration: line-through;
+}
+
+.writing-tools-mark-tip-hint {
+  color: var(--ink-soft);
+}
+
+/* The streamed correction while Correct runs, before it becomes marks. */
+.writing-tools-live-text {
+  white-space: pre-wrap;
+  font-size: 13.5px;
+  color: var(--ink-soft);
+  background: var(--paper-sunken);
+  border-radius: var(--radius-s);
+  padding: 10px 12px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+/* ----------------------------- Tone picker -------------------------------- */
+
+.writing-tools-tone {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+}
+
+.writing-tools-tone-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-soft);
+}
+
+.writing-tools-tone-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.writing-tools-tone-option {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 13.5px;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+/* The native radio is stretched over the whole chip rather than hidden: the
+   chip is the click target, and the browser keeps owning the checked state,
+   arrow-key cycling and focus. */
+.writing-tools-tone-option input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  appearance: none;
+  -webkit-appearance: none;
+  cursor: pointer;
+}
+
+.writing-tools-tone-option.is-on {
+  background: var(--accent);
+  border-color: transparent;
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+
+.writing-tools-tone-option:focus-within {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.writing-tools-tone-custom {
+  flex: 1 1 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  color: var(--ink-soft);
+}
+
+/* -------------------------- Working indicator ----------------------------- */
+
+.writing-tools-working {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--ink-soft);
 }
 
 /* --------------------------- Notices / actions ---------------------------- */

@@ -227,6 +227,7 @@ pub fn run() {
             commands::translate_stream,
             commands::correct_stream,
             commands::enhance_prompt,
+            commands::enhance_prompt_stream,
             commands::save_writing_tool_result,
             commands::classify_message,
             commands::log_triage_action,

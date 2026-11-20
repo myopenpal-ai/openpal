@@ -327,6 +327,15 @@ plain Vite dev server with the Tauri IPC layer mocked:
   OS. It never touches a real window: the OS-drawn frame, how a webview paints
   select popups and scrollbars, a real OS appearance change reaching
   WKWebView/WebView2 and the production stylesheet stay manual checks.
+- `ui/tests/e2e/writing-tools.spec.ts` is the Writing Tools screens in a real
+  browser: Improve's tone picker takes exactly one choice at a time, reveals the
+  one Custom instructions field, and the typed instructions survive a relaunch
+  (via `support/persistedSettings.ts`); and Correct is one textbox with no
+  result pane, whose painted mirror matches the textarea's box, font metrics and
+  text character for character — the marks are placed at text offsets in that
+  mirror, so a drift there puts every suggestion beside its words. It never runs
+  the model: the streaming commands are Channels the mocked tier cannot answer,
+  so marks, progressive output and Stop stay with the Vitest and Rust tests.
 - `ui/tests/e2e/injection-review.spec.ts` drives the prompt-injection review
   card: attach a file, send, the card, Stop / Continue / Escape, the notice
   line, the "Not sent to the AI" tag, and what `save_conversation` gets;

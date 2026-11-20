@@ -3108,7 +3108,10 @@ pub async fn correct_stream(
 /// alongside Translate/Correct). Non-streaming on purpose: the result is
 /// cleaned once in `prompt_enhancer::clean_enhanced` and either replaces the
 /// draft atomically or is kept out entirely — the composer never shows a
-/// half-written rewrite. Validates input before any parental check (same
+/// half-written rewrite. The standalone Improve screen uses
+/// [`enhance_prompt_stream`] instead, where a visible result pane makes a
+/// live token preview safe; see `docs/design/PROMPT_ENHANCER.md` decision 4.
+/// Validates input before any parental check (same
 /// rule as `translate_stream`); like `translate_stream`/`correct_stream`,
 /// deliberately not gated by `PluginManager::capability_enabled` here — this
 /// is a net-new command with no other call site, so the UI's own
@@ -3124,17 +3127,63 @@ pub async fn enhance_prompt(
     state: State<'_, AppState>,
     text: String,
 ) -> Result<prompt_enhancer::EnhanceOutcome, String> {
+    // No tone: the composer's inline action has no picker, so it keeps the
+    // exact request it has always sent (Natural), never a stale one from the
+    // standalone screen's own picker.
+    run_improve(&state, &text, prompt_enhancer::Tone::Natural, |_| {}).await
+}
+
+/// The standalone Improve screen's streamed twin of [`enhance_prompt`]:
+/// same validation, parental policy, clean-up and `EnhanceOutcome`, but every
+/// `ChatEvent` also reaches `on_event` so the result pane can fill in as the
+/// model writes. Nothing partial ever touches a draft here — the screen has
+/// its own read-only result box, which is what made streaming safe for this
+/// call site and not for the composer.
+///
+/// `tone`/`tone_instructions` are the tone picker's wire values: `"natural"`
+/// (or anything unrecognised) with blank instructions means today's rewrite
+/// verbatim; `"custom"` with blank instructions falls back to Natural rather
+/// than asking for a register nobody specified. Resolves to the same
+/// `EnhanceOutcome` the non-streaming command returns — the frontend replaces
+/// its streamed preview with the cleaned text on `Enhanced`, and keeps the
+/// preview with a notice on `Kept`.
+#[tauri::command]
+pub async fn enhance_prompt_stream(
+    state: State<'_, AppState>,
+    text: String,
+    tone: Option<String>,
+    tone_instructions: Option<String>,
+    on_event: Channel<ChatEvent>,
+) -> Result<prompt_enhancer::EnhanceOutcome, String> {
+    let tone = prompt_enhancer::parse_tone(
+        tone.as_deref().unwrap_or("natural"),
+        tone_instructions.as_deref().unwrap_or(""),
+    );
+    run_improve(&state, &text, tone, move |event| {
+        let _ = on_event.send(event);
+    })
+    .await
+}
+
+/// Everything [`enhance_prompt`]/[`enhance_prompt_stream`] share: validate,
+/// build the request for `tone`, run it behind the one-shot gate, clean the
+/// answer and log one content-free line. `on_event` forwards every streamed
+/// event to a caller that wants a live preview; the composer passes a no-op.
+async fn run_improve(
+    state: &AppState,
+    text: &str,
+    tone: prompt_enhancer::Tone,
+    mut on_event: impl FnMut(ChatEvent) + Send,
+) -> Result<prompt_enhancer::EnhanceOutcome, String> {
     use prompt_enhancer::{EnhanceOutcome, KeepReason};
 
-    let draft = validate_writing_tool_text(&text, "Type a message first.")?;
+    let draft = validate_writing_tool_text(text, "Type a message first.")?;
     validate_draft_length(&draft)?;
 
     let settings = state.settings.lock().await.clone();
 
-    let messages = vec![
-        system_message(prompt_enhancer::SYSTEM_PROMPT.to_string()),
-        user_message(prompt_enhancer::user_message_text(&draft)),
-    ];
+    let request = prompt_enhancer::build_request(&draft, &tone);
+    let messages = vec![system_message(request.system), user_message(request.user)];
     let sampling = prompt_enhancer::fixed_sampling(&draft, settings.show_thinking);
 
     let parental_enabled = state.parental_config.lock().await.enabled;
@@ -3146,18 +3195,14 @@ pub async fn enhance_prompt(
 
     let mut answer = String::new();
     let mut reasoning_seen = false;
-    let cancelled = run_one_shot_completion(
-        &state,
-        &settings,
-        gate,
-        messages,
-        &sampling,
-        |event| match event {
-            ChatEvent::Token { text } => answer.push_str(&text),
+    let cancelled = run_one_shot_completion(state, &settings, gate, messages, &sampling, |event| {
+        match &event {
+            ChatEvent::Token { text } => answer.push_str(text),
             ChatEvent::Reasoning { .. } => reasoning_seen = true,
             _ => {}
-        },
-    )
+        }
+        on_event(event);
+    })
     .await?;
 
     let outcome = if cancelled {

@@ -4,14 +4,26 @@ import { api } from "../lib/api";
 import { copyText } from "../lib/clipboard";
 import type { ChatEvent } from "../lib/types";
 import QueuedNotice from "../components/QueuedNotice";
+import IconActionButton from "../components/IconActionButton";
+import {
+  CheckIcon,
+  ClearIcon,
+  CopyIcon,
+  CorrectIcon,
+  DiscardAllIcon,
+  DownloadIcon,
+  KeepAllIcon,
+  LanguagesIcon,
+} from "../components/WritingToolsIcons";
 import { useStore } from "../state/store";
 import { WRITING_TOOL_LANGUAGES } from "../lib/writingToolsLanguages";
 import { chunkText } from "../lib/writingToolsChunking";
 import {
+  applyAllDiffMarks,
+  applyDiffMark,
   computeWordDiff,
-  defaultAcceptedMap,
-  reconcileDiffText,
-  type DiffPart,
+  diffMarks,
+  type DiffMark,
 } from "../lib/writingToolsDiff";
 
 export type WritingToolsMode = "translate" | "correct";
@@ -35,20 +47,31 @@ export type WritingToolsMode = "translate" | "correct";
  * an in-flight translation exactly like a chat reply. Leaving the screen
  * cancels its request: the result would have nowhere to show.
  *
- * Two later additions on top of the original paste-box:
- * - **Document translation/correction**: "Upload a document" reuses the
- *   existing `pick_attachments` command (already extracts text from PDFs/
- *   text files for chat attachments) to fill the source box, and — only for
- *   an uploaded document, not pasted text — a "Download" button saves the
- *   result via the native save dialog. Long documents are split into
- *   model-sized chunks (`chunkText`) and translated/corrected one chunk at a
- *   time, streaming each chunk's tokens into the same growing result.
- * - **Tracked changes for Correct mode**: once a correction finishes, a
- *   word-level diff (`computeWordDiff`) against the original replaces the
- *   plain result textarea with an inline strikethrough/underline view where
- *   every individual change can be accepted or reverted — Translate mode
- *   never diffs (there's no meaningful word-level diff across languages), so
- *   it keeps the plain textarea unconditionally.
+ * One editing surface per mode (issue #125):
+ * - **Translate** keeps two panes — the source and a separate, read-only
+ *   result — because a translation is a different language and there is no
+ *   meaningful word-level mark to put in place.
+ * - **Correct** is a single editable surface: the user's own text, with each
+ *   detected error marked *in place* as a focusable button. Hovering or
+ *   focusing a mark reveals its suggestion; activating the mark (click, Enter
+ *   or Space) writes it in and the old wording is gone — deliberately
+ *   destructive, not a tracked-changes pane. There is no second "original"
+ *   box and no strikethrough/underline view.
+ *
+ * The marks are painted by a mirror layer over the transparent-text textarea
+ * so the surface stays a real, editable `<textarea>` (one accessible textbox,
+ * native caret/selection/IME) rather than a hand-rolled contenteditable. The
+ * mirror is typographically identical to the textarea and never affects its
+ * layout: marks only change colour and underline. Typing into the textarea
+ * drops the pending marks (their offsets no longer line up with the text),
+ * which is why applying a suggestion and then continuing to type is safe.
+ *
+ * Document translation/correction is unchanged: "Upload a document" reuses
+ * the existing `pick_attachments` command to fill the surface, and — only for
+ * an uploaded document, not pasted text — Download saves the result via the
+ * native save dialog. Long documents are split into model-sized chunks
+ * (`chunkText`) and translated/corrected one chunk at a time, streaming each
+ * chunk's tokens into the same growing result.
  */
 export default function WritingToolsScreen({ mode }: { mode: WritingToolsMode }) {
   const { t } = useTranslation();
@@ -69,6 +92,9 @@ export default function WritingToolsScreen({ mode }: { mode: WritingToolsMode })
   );
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  // Stop was pressed while the model was writing: the partial answer stays
+  // on screen, with the same stopped notice the composer's improver uses.
+  const [stopped, setStopped] = useState(false);
 
   // Document translation/correction: set only when the source box was filled
   // by "Upload a document" (never by pasting), since it also gates whether
@@ -81,12 +107,18 @@ export default function WritingToolsScreen({ mode }: { mode: WritingToolsMode })
     null,
   );
 
-  // Correct-mode tracked changes: computed once (on the finished result, not
-  // incrementally per token — diffing a partial stream would visibly thrash)
-  // and only for Correct mode. `null` means "show the plain result textarea
-  // instead" (Translate mode, still streaming, or no run yet).
-  const [diffParts, setDiffParts] = useState<DiffPart[] | null>(null);
-  const [accepted, setAccepted] = useState<Record<string, boolean>>({});
+  // Correct mode: the model's correction as it streams. It is shown in a
+  // live region while it arrives (the answer appears progressively, like
+  // Translate's result box), then turns into in-place marks once the run
+  // finishes — diffing a partial stream against the whole original would
+  // mark everything after the last received word as deleted.
+  const [live, setLive] = useState("");
+  // The marks currently offered on the surface. Applying one writes it into
+  // `sourceText`; none survive a run, a Clear, or a manual edit.
+  const [marks, setMarks] = useState<DiffMark[]>([]);
+  // Whether Correct has produced a correction yet: gates Copy/Download, so
+  // they act on a corrected text rather than on the user's own paste.
+  const [hasResult, setHasResult] = useState(false);
 
   // StrictMode-safe request guard (same shape as Discover.tsx): a stale
   // response from an abandoned request, or one that lands after unmount,
@@ -96,6 +128,14 @@ export default function WritingToolsScreen({ mode }: { mode: WritingToolsMode })
   const requestIdRef = useRef<string | null>(null);
   // Set by Stop, so a long document doesn't go on to its next chunk.
   const stopRequested = useRef(false);
+  // The mirror layer tracks the textarea's scroll so a long document's marks
+  // stay glued to their words. See the header comment.
+  const mirrorRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  // Set by the actions that unmount their own button (`applyMark`, Keep all,
+  // Discard all): where focus goes on the next render (see the effect below).
+  const focusMarkAfterRender = useRef<string | null>(null);
+  const focusSurfaceAfterRender = useRef(false);
   useEffect(() => {
     alive.current = true;
     return () => {
@@ -105,19 +145,49 @@ export default function WritingToolsScreen({ mode }: { mode: WritingToolsMode })
     };
   }, []);
 
+  // A mark is a real button that unmounts the moment it is applied (as do
+  // Keep all / Discard all), which would otherwise drop focus to <body> and
+  // leave the next suggestion a full Tab cycle away. Hand focus to the next
+  // mark, or to the text after the last one.
+  useEffect(() => {
+    const nextId = focusMarkAfterRender.current;
+    const toSurface = focusSurfaceAfterRender.current;
+    focusMarkAfterRender.current = null;
+    focusSurfaceAfterRender.current = false;
+    if (nextId) {
+      mirrorRef.current
+        ?.querySelector<HTMLButtonElement>(`[data-mark-id="${nextId}"]`)
+        ?.focus();
+    } else if (toSurface) {
+      textareaRef.current?.focus();
+    }
+  }, [marks]);
+
   const trimmed = sourceText.trim();
   const canRun = trimmed.length > 0 && !busy && (mode === "correct" || !!targetLang);
 
-  // The text Copy/Download actually act on: the reconciled diff (respecting
-  // each change's current accept/reject state) once one exists, otherwise
-  // the plain streamed result.
-  const finalText = diffParts ? reconcileDiffText(diffParts, accepted) : resultText;
+  // The text Copy/Download actually act on: Correct mode edits its own
+  // surface in place, so that text — with every kept suggestion already
+  // written in — is the result. Translate's result pane is read-only.
+  const finalText = mode === "correct" ? sourceText : resultText;
+  const hasFinalText = mode === "correct" ? hasResult && sourceText.length > 0 : finalText.length > 0;
+  const canClear =
+    !busy && (sourceText.length > 0 || finalText.length > 0 || marks.length > 0 || live.length > 0);
 
   const resetOutputs = () => {
     setResultText("");
     setError(null);
-    setDiffParts(null);
-    setAccepted({});
+    setMarks([]);
+    setLive("");
+    setStopped(false);
+    setHasResult(false);
+  };
+
+  const clear = () => {
+    setSourceText("");
+    setUploadedFileName(null);
+    setCopied(false);
+    resetOutputs();
   };
 
   const uploadDocument = async () => {
@@ -167,7 +237,8 @@ export default function WritingToolsScreen({ mode }: { mode: WritingToolsMode })
           if (isStale()) return;
           if (event.type === "token") {
             accumulated += event.data.text;
-            setResultText(accumulated);
+            if (mode === "translate") setResultText(accumulated);
+            else setLive(accumulated);
           } else if (event.type === "error") {
             setError(event.data.message);
           }
@@ -182,7 +253,8 @@ export default function WritingToolsScreen({ mode }: { mode: WritingToolsMode })
         if (isStale() || stopRequested.current) break;
         if (i < chunks.length - 1) {
           accumulated += "\n\n";
-          setResultText(accumulated);
+          if (mode === "translate") setResultText(accumulated);
+          else setLive(accumulated);
         }
       }
       return true;
@@ -191,10 +263,28 @@ export default function WritingToolsScreen({ mode }: { mode: WritingToolsMode })
     try {
       const ran = await runModelRequest({ id, kind: "writingTool" }, runChunks);
       if (ran === undefined) return; // cancelled before it started
-      if (!isStale() && mode === "correct") {
-        const parts = computeWordDiff(trimmed, accumulated);
-        setDiffParts(parts);
-        setAccepted(defaultAcceptedMap(parts));
+      if (isStale()) return;
+      if (stopRequested.current) {
+        // Keep whatever the model wrote so far on screen instead of turning
+        // a half-finished correction into marks.
+        setStopped(true);
+        return;
+      }
+      if (mode === "correct") {
+        // The diff is against the trimmed text that was actually sent, so
+        // every mark is shifted past any leading whitespace the surface
+        // carries and still lands on the right words.
+        const leading = sourceText.indexOf(trimmed);
+        const parts = diffMarks(computeWordDiff(trimmed, accumulated));
+        setMarks(
+          parts.map((m) => ({
+            ...m,
+            start: m.start + (leading > 0 ? leading : 0),
+            end: m.end + (leading > 0 ? leading : 0),
+          })),
+        );
+        setLive("");
+        setHasResult(true);
       }
     } catch (err: unknown) {
       if (!isStale()) setError(String(err));
@@ -235,24 +325,59 @@ export default function WritingToolsScreen({ mode }: { mode: WritingToolsMode })
     }
   };
 
-  const toggleChange = (id: string) => {
-    setAccepted((prev) => ({ ...prev, [id]: !(prev[id] ?? true) }));
+  // --- Correct mode's in-place suggestions --------------------------------
+
+  /** Write one suggestion into the text and forget it. No undo: the replaced
+   * wording is gone from `sourceText` the moment this returns. Focus moves to
+   * the next mark so a keyboard user doesn't fall back to the top of the page
+   * when the button they just pressed unmounts; after the last one it lands in
+   * the text, ready for the next edit. */
+  const applyMark = (id: string) => {
+    const index = marks.findIndex((m) => m.id === id);
+    const next = marks[index + 1];
+    const result = applyDiffMark(sourceText, marks, id);
+    setSourceText(result.text);
+    setMarks(result.marks);
+    focusMarkAfterRender.current = next ? next.id : null;
+    focusSurfaceAfterRender.current = !next;
   };
 
-  const acceptAllChanges = () => diffParts && setAccepted(defaultAcceptedMap(diffParts));
-  const rejectAllChanges = () => {
-    if (!diffParts) return;
-    const all: Record<string, boolean> = {};
-    for (const part of diffParts) if (part.type === "change") all[part.change.id] = false;
-    setAccepted(all);
+  const keepAll = () => {
+    setSourceText(applyAllDiffMarks(sourceText, marks));
+    setMarks([]);
+    focusSurfaceAfterRender.current = true;
   };
+
+  const discardAll = () => {
+    setMarks([]);
+    focusSurfaceAfterRender.current = true;
+  };
+
+  /** The surface's pending text as alternating untouched runs and marks.
+   * Marks are non-overlapping and already sorted by construction. */
+  const segments: Array<{ text: string } | { mark: DiffMark }> = [];
+  {
+    let cursor = 0;
+    for (const mark of marks) {
+      if (mark.start > cursor) segments.push({ text: sourceText.slice(cursor, mark.start) });
+      segments.push({ mark });
+      cursor = mark.end;
+    }
+    if (cursor < sourceText.length) segments.push({ text: sourceText.slice(cursor) });
+  }
+
+  const title = mode === "translate" ? t("writingTools.modeTranslate") : t("writingTools.modeCorrect");
+  const TitleIcon = mode === "translate" ? LanguagesIcon : CorrectIcon;
 
   return (
     <div className="writing-tools-view">
       <div className="writing-tools-scroll">
         <div className="writing-tools-col">
           <div className="writing-tools-head">
-            <h1>{mode === "translate" ? t("writingTools.modeTranslate") : t("writingTools.modeCorrect")}</h1>
+            <h1 className="writing-tools-title">
+              <TitleIcon className="writing-tools-title-icon" />
+              {title}
+            </h1>
             <p>
               {mode === "translate" ? t("writingTools.translateSubtitle") : t("writingTools.correctSubtitle")}
             </p>
@@ -294,119 +419,150 @@ export default function WritingToolsScreen({ mode }: { mode: WritingToolsMode })
             </div>
           )}
 
-          <div className="writing-tools-panes">
-            <div className="writing-tools-pane">
+          {mode === "correct" ? (
+            // One surface: the user's own text, marks in place, still a real
+            // textarea underneath (see the header comment).
+            <div className="writing-tools-pane writing-tools-pane-correct">
               <div className="writing-tools-source-head">
                 <label htmlFor="writing-tools-source">{t("writingTools.sourceLabel")}</label>
-                <button
-                  type="button"
-                  className="btn-quiet"
-                  disabled={busy}
-                  onClick={() => void uploadDocument()}
-                >
-                  {t("writingTools.uploadDocument")}
-                </button>
+                <div className="writing-tools-result-actions">
+                  <button
+                    type="button"
+                    className="btn-quiet"
+                    disabled={busy}
+                    onClick={() => void uploadDocument()}
+                  >
+                    {t("writingTools.uploadDocument")}
+                  </button>
+                  {marks.length > 0 && (
+                    <>
+                      <IconActionButton label={t("writingTools.keepAll")} onClick={keepAll}>
+                        <KeepAllIcon />
+                      </IconActionButton>
+                      <IconActionButton label={t("writingTools.discardAll")} onClick={discardAll}>
+                        <DiscardAllIcon />
+                      </IconActionButton>
+                    </>
+                  )}
+                  {hasFinalText && (
+                    <IconActionButton
+                      label={copied ? t("writingTools.copied") : t("writingTools.copy")}
+                      onClick={() => void copy()}
+                    >
+                      {copied ? <CheckIcon /> : <CopyIcon />}
+                    </IconActionButton>
+                  )}
+                  {uploadedFileName && hasFinalText && !busy && (
+                    <IconActionButton label={t("writingTools.download")} onClick={() => void download()}>
+                      <DownloadIcon />
+                    </IconActionButton>
+                  )}
+                  <IconActionButton label={t("writingTools.clear")} onClick={clear} disabled={!canClear}>
+                    <ClearIcon />
+                  </IconActionButton>
+                </div>
               </div>
               {uploadedFileName && (
                 <p className="writing-tools-uploaded-file">
                   {t("writingTools.uploadedFile", { name: uploadedFileName })}
                 </p>
               )}
-              <textarea
-                id="writing-tools-source"
-                value={sourceText}
-                disabled={busy}
-                placeholder={t("writingTools.sourcePlaceholder")}
-                onChange={(e) => {
-                  setSourceText(e.target.value);
-                  if (e.target.value.trim().length === 0) setUploadedFileName(null);
-                }}
-              />
-            </div>
-            <div className="writing-tools-pane">
-              <div className="writing-tools-result-head">
-                <label
-                  id="writing-tools-result-label"
-                  htmlFor={diffParts ? undefined : "writing-tools-result"}
-                >
-                  {t("writingTools.resultLabel")}
-                </label>
-                <div className="writing-tools-result-actions">
-                  {diffParts && (
-                    <>
-                      <button type="button" className="btn-quiet" onClick={acceptAllChanges}>
-                        {t("writingTools.acceptAllChanges")}
-                      </button>
-                      <button type="button" className="btn-quiet" onClick={rejectAllChanges}>
-                        {t("writingTools.rejectAllChanges")}
-                      </button>
-                    </>
-                  )}
-                  {finalText && (
-                    <button type="button" className="btn-quiet" onClick={() => void copy()}>
-                      {copied ? t("writingTools.copied") : t("writingTools.copy")}
-                    </button>
-                  )}
-                  {uploadedFileName && finalText && !busy && (
-                    <button type="button" className="btn-quiet" onClick={() => void download()}>
-                      {t("writingTools.download")}
-                    </button>
+              <div className="writing-tools-editor">
+                <div className="writing-tools-editor-mirror" ref={mirrorRef}>
+                  {marks.length === 0 ? (
+                    <span aria-hidden="true">{sourceText}</span>
+                  ) : (
+                    segments.map((segment, i) =>
+                      "text" in segment ? (
+                        <span key={`equal-${i}`} aria-hidden="true">
+                          {segment.text}
+                        </span>
+                      ) : (
+                        <CorrectionMark
+                          key={segment.mark.id}
+                          mark={segment.mark}
+                          onApply={applyMark}
+                        />
+                      ),
+                    )
                   )}
                 </div>
+                <textarea
+                  ref={textareaRef}
+                  id="writing-tools-source"
+                  value={sourceText}
+                  disabled={busy}
+                  placeholder={t("writingTools.sourcePlaceholder")}
+                  onChange={(e) => {
+                    setSourceText(e.target.value);
+                    // Offsets no longer line up with the edited text.
+                    setMarks([]);
+                    if (e.target.value.trim().length === 0) setUploadedFileName(null);
+                  }}
+                  onScroll={(e) => {
+                    if (mirrorRef.current) mirrorRef.current.scrollTop = e.currentTarget.scrollTop;
+                  }}
+                />
               </div>
-              {diffParts ? (
-                <div
-                  className="writing-tools-diff"
-                  role="region"
-                  aria-labelledby="writing-tools-result-label"
-                >
-                  {diffParts.map((part, i) => {
-                    if (part.type === "equal") {
-                      return <span key={i}>{part.text}</span>;
-                    }
-                    const isAccepted = accepted[part.change.id] ?? true;
-                    return (
-                      <span key={part.change.id} className="writing-tools-diff-change">
-                        {part.change.removed && (
-                          <del
-                            className={
-                              isAccepted
-                                ? "writing-tools-diff-removed"
-                                : "writing-tools-diff-removed-active"
-                            }
-                          >
-                            {part.change.removed}
-                          </del>
-                        )}
-                        {part.change.added && (
-                          <ins
-                            className={
-                              isAccepted
-                                ? "writing-tools-diff-added-active"
-                                : "writing-tools-diff-added"
-                            }
-                          >
-                            {part.change.added}
-                          </ins>
-                        )}
-                        <button
-                          type="button"
-                          className="writing-tools-diff-toggle"
-                          onClick={() => toggleChange(part.change.id)}
-                          aria-label={t(
-                            isAccepted ? "writingTools.rejectChange" : "writingTools.acceptChange",
-                          )}
-                          title={t(
-                            isAccepted ? "writingTools.rejectChange" : "writingTools.acceptChange",
-                          )}
-                        >
-                          {isAccepted ? "↺" : "✓"}
-                        </button>
-                      </span>
-                    );
-                  })}
+              {live && <p className="writing-tools-live-text">{live}</p>}
+            </div>
+          ) : (
+            <div className="writing-tools-panes">
+              <div className="writing-tools-pane">
+                <div className="writing-tools-source-head">
+                  <label htmlFor="writing-tools-source">{t("writingTools.sourceLabel")}</label>
+                  <button
+                    type="button"
+                    className="btn-quiet"
+                    disabled={busy}
+                    onClick={() => void uploadDocument()}
+                  >
+                    {t("writingTools.uploadDocument")}
+                  </button>
                 </div>
-              ) : (
+                {uploadedFileName && (
+                  <p className="writing-tools-uploaded-file">
+                    {t("writingTools.uploadedFile", { name: uploadedFileName })}
+                  </p>
+                )}
+                <textarea
+                  id="writing-tools-source"
+                  value={sourceText}
+                  disabled={busy}
+                  placeholder={t("writingTools.sourcePlaceholder")}
+                  onChange={(e) => {
+                    setSourceText(e.target.value);
+                    if (e.target.value.trim().length === 0) setUploadedFileName(null);
+                  }}
+                />
+              </div>
+              <div className="writing-tools-pane">
+                <div className="writing-tools-result-head">
+                  <label id="writing-tools-result-label" htmlFor="writing-tools-result">
+                    {t("writingTools.resultLabel")}
+                  </label>
+                  <div className="writing-tools-result-actions">
+                    {hasFinalText && (
+                      <IconActionButton
+                        label={copied ? t("writingTools.copied") : t("writingTools.copy")}
+                        onClick={() => void copy()}
+                      >
+                        {copied ? <CheckIcon /> : <CopyIcon />}
+                      </IconActionButton>
+                    )}
+                    {uploadedFileName && hasFinalText && !busy && (
+                      <IconActionButton
+                        label={t("writingTools.download")}
+                        onClick={() => void download()}
+                      >
+                        <DownloadIcon />
+                      </IconActionButton>
+                    )}
+                    <IconActionButton label={t("writingTools.clear")} onClick={clear} disabled={!canClear}>
+                      <ClearIcon />
+                    </IconActionButton>
+                  </div>
+                </div>
                 <textarea
                   id="writing-tools-result"
                   aria-labelledby="writing-tools-result-label"
@@ -414,13 +570,25 @@ export default function WritingToolsScreen({ mode }: { mode: WritingToolsMode })
                   readOnly
                   placeholder={t("writingTools.resultPlaceholder")}
                 />
-              )}
+              </div>
             </div>
-          </div>
+          )}
+
+          {busy && !waiting && (
+            <p className="writing-tools-working" role="status">
+              <span className="searching-spinner" aria-hidden="true" />
+              {mode === "translate" ? t("writingTools.translating") : t("writingTools.correcting")}
+            </p>
+          )}
 
           {chunkProgress && (
             <p className="writing-tools-notice" role="status">
               {t("writingTools.chunkProgress", chunkProgress)}
+            </p>
+          )}
+          {stopped && (
+            <p className="writing-tools-notice" role="status">
+              {t("chatView.composer.improve.stopped")}
             </p>
           )}
           {error && (
@@ -447,5 +615,52 @@ export default function WritingToolsScreen({ mode }: { mode: WritingToolsMode })
         </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * One in-place correction mark. It sits in the mirror layer exactly where the
+ * wrong wording sits in the textarea, and is a real `<button>`: tab-reachable,
+ * Enter/Space activates it, and its accessible name carries the suggestion
+ * ("Keep: you're nice") so the affordance is never hover-only. Hover and
+ * focus both reveal the suggestion in a small tip; activating the mark writes
+ * the suggestion in.
+ */
+function CorrectionMark({
+  mark,
+  onApply,
+}: {
+  mark: DiffMark;
+  onApply: (id: string) => void;
+}) {
+  const { t } = useTranslation();
+  const keep = t("writingTools.keepSuggestion");
+  const label = mark.added ? `${keep}: ${mark.added}` : keep;
+  return (
+    <span className="writing-tools-mark-wrap">
+      <button
+        type="button"
+        className={`writing-tools-mark${mark.removed ? "" : " is-insert"}`}
+        data-mark-id={mark.id}
+        aria-label={label}
+        onClick={() => onApply(mark.id)}
+      >
+        {mark.removed ? (
+          mark.removed
+        ) : (
+          <span className="writing-tools-mark-insert" aria-hidden="true">
+            +
+          </span>
+        )}
+      </button>
+      <span className="writing-tools-mark-tip" aria-hidden="true">
+        <span
+          className={`writing-tools-mark-tip-text${mark.added ? "" : " is-delete"}`}
+        >
+          {mark.added || mark.removed}
+        </span>
+        <span className="writing-tools-mark-tip-hint">{keep}</span>
+      </span>
+    </span>
   );
 }

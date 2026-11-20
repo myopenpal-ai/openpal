@@ -24,6 +24,7 @@ import {
 import { useCloseOnOutside } from "../components/Dropdown";
 import ConfirmDialog from "../components/ConfirmDialog";
 import DeleteProjectDialog from "../components/DeleteProjectDialog";
+import { CorrectIcon, LanguagesIcon, SparkleIcon } from "../components/WritingToolsIcons";
 
 const CompassIcon = () => (
   <svg
@@ -56,22 +57,6 @@ const PuzzleIcon = () => (
   </svg>
 );
 
-const LanguagesIcon = () => (
-  <svg
-    className="sidebar-action-icon"
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    strokeWidth="1.9"
-    strokeLinecap="round"
-    strokeLinejoin="round"
-    aria-hidden="true"
-  >
-    <path d="M5 7h8M9 4.5v2.5M7 7c0 3 1.8 5.3 4.5 6.5M11.5 7c-.6 2-1.8 3.8-3.5 5" />
-    <path d="M13 19l3.2-8 3.2 8M14.4 16.4h3.6" />
-  </svg>
-);
-
 const SkillIcon = () => (
   <svg
     className="sidebar-action-icon"
@@ -85,38 +70,6 @@ const SkillIcon = () => (
   >
     <path d="M12 4.5v3M12 16.5v3M4.5 12h3M16.5 12h3M7 7l2 2M15 15l2 2M17 7l-2 2M9 15l-2 2" />
     <circle cx="12" cy="12" r="2.4" />
-  </svg>
-);
-
-const CorrectIcon = () => (
-  <svg
-    className="sidebar-action-icon"
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    strokeWidth="1.9"
-    strokeLinecap="round"
-    strokeLinejoin="round"
-    aria-hidden="true"
-  >
-    <path d="M4.5 12.5 6.5 14.5 10 9" />
-    <path d="M13 8.5h6.5M13 12h6.5M13 15.5h4.5" />
-  </svg>
-);
-
-const SparkleIcon = () => (
-  <svg
-    className="sidebar-action-icon"
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    strokeWidth="1.9"
-    strokeLinecap="round"
-    strokeLinejoin="round"
-    aria-hidden="true"
-  >
-    <path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8Z" />
-    <path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8Z" />
   </svg>
 );
 

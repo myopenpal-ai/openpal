@@ -1906,6 +1906,11 @@ attachment pipeline already does the hard part:
 
 ### Phase 5 — ✅ Done (2026-08-29) — Tracked-changes diff view for Correct
 
+> Superseded by Phase 6: the reporter chose a destructive in-place apply, so
+> the `<del>`/`<ins>` pane, the per-change accept/reject state and
+> `reconcileDiffText`/`defaultAcceptedMap` are no longer shipped. Kept below
+> as the record of that phase.
+
 Confirmed scope up front: **full per-change accept/reject** (the more
 thorough of two options, deliberately chosen over a simpler read-only
 diff). Correct-mode only — Translate's output is a different language
@@ -1966,6 +1971,68 @@ plain result textarea is unconditional for Translate.
   verification run, which hit a keychain hiccup) — still short of an actual
   visual click-through, which remains blocked on the same
   Accessibility/Screen Recording permission gap noted in Phase 3.
+
+### Phase 6 — ✅ Done (2026-11-20) — The editing-surface pass (issue #125)
+
+A UX pass over all three Writing Tools screens. Full ticket:
+`feat(chat): rework the Writing Tools editing surface, actions and Improve
+tones`. Reporter-confirmed decisions that shape it:
+
+- **One surface for Correct, destructive apply.** The tracked-changes model
+  (Phase 5) is gone: one editable surface holds the user's own text with each
+  detected error marked in place. Hover or focus reveals the suggestion;
+  activating the mark writes it in and the pre-correction wording is not
+  recoverable. The duplicate original box and the struck-through
+  original-plus-correction pane are both gone. Translate keeps two panes —
+  a translation is a different language, so in-place marks are Correct-only.
+- **Marks, not a diff view.** `ui/src/lib/writingToolsDiff.ts` keeps
+  `computeWordDiff` but now groups two changes separated by
+  whitespace-only `equal` text into *one* change (including the whitespace on
+  both sides), so `Thanks, you'r nise` → `Thanks, you're nice` is a single
+  suggestion ("re nice" over "r nise"), not one per word. `diffMarks` locates
+  each change as `[start, end)` offsets into the original; `applyDiffMark`
+  writes one suggestion in and shifts the marks after it;
+  `applyAllDiffMarks` is Keep all. `reconcileDiffText`/`defaultAcceptedMap`
+  were deleted with the tracked-changes state they served.
+- **How the marks are drawn.** The surface stays a real `<textarea>` (native
+  caret, selection, IME) whose own glyphs are transparent; a typographically
+  identical mirror layer above it paints the text and the marks. Each mark is
+  a real `<button>` — Tab-reachable, Enter/Space applies it, and its
+  accessible name is "Keep: <suggestion>" — so nothing is hover-only. Marks
+  only change colour/underline, never metrics, or they would drift off their
+  words; the mirror's `scrollTop` follows the textarea's. Applying a mark
+  unmounts its own button, so focus moves to the next mark (and to the text
+  after the last one) rather than falling back to `<body>`; typing drops the
+  pending marks, whose offsets no longer line up with the edited text.
+- **Icon actions with names.** Keep all / Discard all / Copy / Download /
+  Clear are `components/IconActionButton.tsx`, whose `label` is both the
+  `title` (hover text) and `aria-label` (accessible name) — same prior art as
+  `Markdown.tsx`'s code-block copy button. Clear empties the view's text,
+  result and marks back to its empty state.
+- **Titles carry their sidebar icon.** `components/WritingToolsIcons.tsx` is
+  now the single definition of the Languages/Correct/Sparkle drawings used by
+  both `Sidebar.tsx` and the three page titles; the title copy is decorative
+  (`aria-hidden`), so each `h1`'s name is still its text.
+- **Visible work, progressive answers.** All three views show a spinner +
+  "Translating…"/"Correcting…"/"Improving…" (`role="status"`) while the model
+  runs. Translate and Improve stream into their result boxes. Correct cannot
+  diff a partial stream (it would mark everything after the last token as
+  deleted), so the raw correction streams into a live preview that turns into
+  marks on completion; stopping mid-stream keeps that partial text on screen
+  and shows the existing stopped notice.
+- **Improve gains tones and streaming, the composer does not.** The
+  standalone screen now calls `enhance_prompt_stream` (tokens on a
+  `Channel<ChatEvent>`, the same cleaned `EnhanceOutcome` on the invoke) with
+  the tone picker's values (Natural default / Professional / Direct / Custom).
+  `prompt_enhancer::build_request` is the one place the request is assembled:
+  Natural returns the shipped `SYSTEM_PROMPT` + `user_message_text` untouched,
+  every other tone appends one clause that explicitly overrides only the
+  "keep the draft's tone exactly" rule. A unit test in `crates/core` pins all
+  three facts. The Custom instructions are one `Settings` string
+  (`improve_tone_instructions`), capped at 500 chars on the Rust side, saved
+  on blur/unmount — replaced on every edit, never appended to a list. The
+  composer's inline action keeps its non-streaming `enhance_prompt(text)` with
+  no tone (PROMPT_ENHANCER.md decision 4 still applies there).
 
 ## Risk register
 

@@ -9,11 +9,6 @@ exactly as [docs/RELEASING.md](docs/RELEASING.md) defines it: `fix` → patch,
 
 ## [Unreleased]
 
-
-
-
-
-
 - Mandatory password encryption: Standard Notes-style per-conversation keys sealed under a password-derived root, a mandatory first-run password on every onboarding path (portable included), and an id-preserving, in-place migration for existing installs.
 - Open the app at launch from the OS keychain without a password: on installed desktop builds a password-protected install unlocks straight in (the OS keychain stands in for the typed password), portable builds still prompt, and a keychain failure always falls back to the password gate.
 - Block the app and engine on unsafe published versions: a manifest-declared minimum supported version and blocked-version list turn the voluntary update dialog into a blocking, non-dismissable gate until a safe version is installed; an unsafe active engine build blocks chat and model usage until the engine is updated.
@@ -22,6 +17,7 @@ exactly as [docs/RELEASING.md](docs/RELEASING.md) defines it: `fix` → patch,
 - Surface the failing feed endpoint in update logs and document the engine-update feed bootstrap
 - Automate the engine-update feed: a nightly `engine-update.yml` publishes the rolling `engine-latest` channel (one sequential fetch-and-merge loop, feed created on first run), and a `feed-health.yml` alarm fails loudly if either configured update feed stops resolving — the update gate fails open, so a vanished feed is otherwise invisible to every user and dev.
 - Script the two remaining hand-steps of the update feeds as a dispatch-only `publish-update-feeds` workflow: promote a chosen stable `v*` draft into the live app feed (with feed verification and pre-release/draft guards), and/or refresh the `engine-latest` engine feed on demand (with optional target/tag inputs) — still only ever triggered by a human.
+- Writing Tools' editing surface is reworked: Correct marks each error in place on one editable surface and writes a suggestion in when it is activated (no tracked-changes pane, no second original box), corrections separated only by whitespace are one suggestion, and the result actions — Keep all, Discard all, Copy, Download, Clear — are named icons. The standalone Improve screen now streams its rewrite and offers Natural, Professional, Direct or a Custom tone whose instructions are remembered across restarts; the composer's inline Improve keeps its one-shot, single-tone behaviour.
 
 ## [0.2.0] - 2026-11-16
 
