@@ -24,6 +24,11 @@ Development setup, running the app and the test commands are in the
 cargo run -p openpal-bundler -- doctor
 ```
 
+Use Node 22 (`.nvmrc`) and the npm line `package.json` declares — `corepack
+enable` switches you to it. `npm run setup` installs from the committed
+lockfiles and stops with npm's own error when `package.json` and a lockfile
+disagree; `npm install <pkg>` is how you add a dependency.
+
 ## Working on a change
 
 **Branch** from `main` using the issue type and number,

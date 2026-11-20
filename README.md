@@ -68,15 +68,25 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full picture.
 
 ## Development
 
-Prerequisites: Rust (rustup), Node 18+, Xcode command line tools.
+Prerequisites: Rust (rustup), Node 22 (`.nvmrc`), Xcode command line tools.
+
+Use Node 22 from `.nvmrc`, and switch to the npm line `package.json` declares
+with `corepack enable` before installing anything — the lockfiles are produced
+with that npm, and a different major writes a lockfile CI's `npm ci` rejects.
 
 ```bash
 git clone https://github.com/myopenpal-ai/openpal.git && cd openpal
-npm run setup                                  # root + ui npm install
+nvm use                                        # Node 22 from .nvmrc
+corepack enable                                # the npm from packageManager
+npm run setup                                  # root + ui, from the committed lockfiles
 cargo run -p openpal-bundler -- fetch-engine   # stage llama-server (one time)
 npm run dev                                    # tauri dev
 npm run dev:onboarding                         # same, on a throwaway first-run profile
 ```
+
+`npm install <pkg>` (or `npm --prefix ui install <pkg>`) is still how a
+dependency is added — it is also the only thing that writes a lockfile, so run
+it on that Node/npm pair.
 
 `dev:onboarding` shows the first-run onboarding on every launch without
 touching your real data: it runs `npm run dev` in portable mode against
