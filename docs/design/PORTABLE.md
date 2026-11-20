@@ -209,20 +209,18 @@ documented limits, not parity targets.
   for Llama/Gemma pass-through licenses); `LICENSE` + a generated `NOTICE`
   (llama.cpp, WebView2, model attribution) ship in every bundle.
 - **Phase 4 — CI/release** ✅: `.github/workflows/portable.yml` builds on native
-  runners (macOS x64 `macos-15-intel` · Windows x64 `windows-latest` +
-  `crt-static` + optional fixed WebView2 · Ubuntu 22.04 x64 · Ubuntu 24.04
-  arm64) and uploads each artifact. Per-run cost controls: a `prepare` job
-  resolves the llama.cpp engine tag once and cuts the matrix to a canary
-  subset (`ubuntu-vulkan-x64` + `win-vulkan-x64` today, overridable via the
-  `NIGHTLY_CANARY_TARGETS` variable) on `b*` nightly tags (auto-created by
-  rolling.yml and published as `--kind nightly` **pre-releases** — `X.Y.Z+b{N}`
-  manifest version, invisible to the auto-updater), keeping the stable set
-  for `v*` (default: the stable targets with a runner today — `macos-arm64`
-  is left out until an Apple Silicon runner with the `macos-14` label is
-  registered, because an unregistered leg is cancelled and takes `publish`
-  down with it; re-add it by registering the runner or setting the
-  `STABLE_TARGETS` repo variable, and `prepare` warns whenever the stable set
-  omits it); the UI is compiled once per run; the GB-scale engine download
+  GitHub-hosted runners (macOS arm64 `macos-15` · macOS x64 `macos-15-intel` ·
+  Windows x64 `windows-latest` + `crt-static` + optional fixed WebView2 ·
+  Ubuntu 22.04 x64 · Ubuntu 24.04 arm64) and uploads each artifact. Per-run
+  cost controls: a `prepare` job resolves the llama.cpp engine tag once and
+  cuts the matrix to a canary subset (`ubuntu-vulkan-x64` + `win-vulkan-x64`,
+  the two cheapest legs, overridable via the `NIGHTLY_CANARY_TARGETS`
+  variable) on `b*` nightly tags (auto-created by rolling.yml and published as
+  `--kind nightly` **pre-releases** — `X.Y.Z+b{N}` manifest version, invisible
+  to the auto-updater), keeping the full five-target set for `v*` (every leg
+  is hosted, `macos-arm64` included; a `STABLE_TARGETS` repo variable can trim
+  a deliberate exception and `prepare` warns whenever that override omits
+  macos-arm64); the UI is compiled once per run; the GB-scale engine download
   is cached per-target keyed on the resolved tag. At the stable cut,
   `publish` signs the artifacts and assembles
   the draft release, then a per-target `smoke` matrix verifies each shipped

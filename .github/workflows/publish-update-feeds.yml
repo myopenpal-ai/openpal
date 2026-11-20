@@ -41,7 +41,7 @@ on:
         required: false
         default: false
       engine_targets:
-        description: "Comma-separated targets for the engine refresh; blank = the default set (same as engine-update.yml: everything except macos-arm64 until a macos-14 runner exists)."
+        description: "Comma-separated targets for the engine refresh; blank = the default set (same as engine-update.yml: all five targets, macos-arm64 included)."
         type: string
         required: false
         default: ""
@@ -228,10 +228,10 @@ jobs:
             raw="$TARGETS_INPUT"
             explicit=1
           else
-            # Same default as engine-update.yml: the targets with a runner in
-            # this org today; macos-arm64 stays stale-but-valid until a
-            # `macos-14` (Apple Silicon) runner exists.
-            raw="${ENGINE_TARGETS:-macos-x64,win-vulkan-x64,ubuntu-vulkan-x64,ubuntu-vulkan-arm64}"
+            # Same default as engine-update.yml: the full five-target
+            # inventory, macos-arm64 included. This loop runs on
+            # ubuntu-latest, so no macOS runner is involved.
+            raw="${ENGINE_TARGETS:-macos-arm64,macos-x64,win-vulkan-x64,ubuntu-vulkan-x64,ubuntu-vulkan-arm64}"
             explicit=0
           fi
 
@@ -256,7 +256,7 @@ jobs:
           # an explicit engine_targets selection (e.g. a one-off macos-arm64
           # bootstrap) is the operator's call, not an omission.
           if [[ "$explicit" == "0" && "$list" != *macos-arm64* ]]; then
-            echo "::warning::engine feed has no macos-arm64 — Apple Silicon installs keep their last published engine (no macos-14 runner registered; set engine_targets to include it explicitly)"
+            echo "::warning::engine feed has no macos-arm64 — Apple Silicon installs keep their last published engine (ENGINE_TARGETS is overridden; set engine_targets to include it explicitly)"
           fi
 
       - name: Fetch and publish every target

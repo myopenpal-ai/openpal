@@ -18,15 +18,14 @@
 # when the host can execute the target, so one ubuntu-latest runner
 # legitimately handles every target.
 #
-# Runner reality (same inventory portable.yml's stable matrix uses): the org
-# has a self-hosted `macos-15-intel` runner (`macos-x64`) but no Apple
-# Silicon runner with the `macos-14` label (`macos-arm64`) — so macos-arm64
-# is left OUT of the default target set until that runner exists, and its
-# manifest entry stays stale-but-valid until then (exactly portable.yml's
-# stable-matrix posture). The feed never *requires* a mac runner — the loop
-# runs entirely on ubuntu-latest — and the set is overridable with the
-# `ENGINE_TARGETS` repo variable; `prepare` warns whenever macos-arm64 is
-# omitted so the omission is never silent.
+# Runner reality: every leg is GitHub-hosted, and this loop runs entirely on
+# `ubuntu-latest` — staging an engine for any target, `macos-arm64` included,
+# needs no macOS runner because `fetch-engine` only smoke-tests a binary when
+# the host can execute it. The default target set is therefore the same
+# five-target inventory portable.yml's stable matrix builds (the label
+# inventory lives in docs/SECURITY_POSTURE.md). It is overridable with the
+# `ENGINE_TARGETS` repo variable; `prepare` warns whenever that set omits
+# macos-arm64 so the omission is never silent.
 #
 # Signing + trust: the feed is signed with the updater key, so this job
 # targets the `production-release` environment where TAURI_SIGNING_* live
@@ -104,13 +103,10 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Default: every target with a runner in this org today (same
-          # inventory portable.yml's stable matrix uses). macos-arm64 needs
-          # an Apple Silicon runner with the `macos-14` label (not registered
-          # yet), so it is left out and its engine-latest entry stays
-          # stale-but-valid until one exists — register the runner, or set
-          # the ENGINE_TARGETS repo variable, to include it again.
-          targets="${ENGINE_TARGETS:-macos-x64,win-vulkan-x64,ubuntu-vulkan-x64,ubuntu-vulkan-arm64}"
+          # Default: the full five-target inventory (the set portable.yml's
+          # stable matrix builds). No macOS runner is involved — the loop runs
+          # on ubuntu-latest — so nothing is left out here.
+          targets="${ENGINE_TARGETS:-macos-arm64,macos-x64,win-vulkan-x64,ubuntu-vulkan-x64,ubuntu-vulkan-arm64}"
 
           known="macos-arm64 macos-x64 win-vulkan-x64 ubuntu-vulkan-x64 ubuntu-vulkan-arm64"
           list=""
@@ -132,10 +128,11 @@ jobs:
           echo "Engine targets: $list"
 
           # Fail safe, not fail silent: an engine feed without the Apple
-          # Silicon entry is a deliberate maintenance decision — name it in
-          # the run rather than letting the omission pass without a trace.
+          # Silicon entry is a deliberate maintenance decision (an
+          # ENGINE_TARGETS override) — name it in the run rather than letting
+          # the omission pass without a trace.
           if [[ "$list" != *macos-arm64* ]]; then
-            echo "::warning::engine feed has no macos-arm64 — Apple Silicon installs keep their last published engine (no macos-14 runner registered; register one or set ENGINE_TARGETS to include it)"
+            echo "::warning::engine feed has no macos-arm64 — Apple Silicon installs keep their last published engine (ENGINE_TARGETS is overridden; unset it to include the target)"
           fi
 
   # The signing half, on the protected environment. One sequential loop, one
