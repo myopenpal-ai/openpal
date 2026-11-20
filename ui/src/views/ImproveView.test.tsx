@@ -181,6 +181,8 @@ describe("ImproveView tone picker", () => {
     await user.click(screen.getByRole("radio", { name: "Custom" }));
     const field = screen.getByLabelText("Your instructions");
     expect(field).toHaveValue("");
+    // Same cap as `prompt_enhancer::MAX_TONE_INSTRUCTIONS_CHARS`.
+    expect(field).toHaveAttribute("maxlength", "500");
 
     await user.type(field, "Make it warmer and shorter.");
     await user.tab(); // blur persists

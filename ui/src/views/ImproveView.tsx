@@ -25,6 +25,12 @@ const TONES = [
   { id: "custom", labelKey: "improveView.toneCustom" },
 ] as const;
 
+/** Mirrors `prompt_enhancer::MAX_TONE_INSTRUCTIONS_CHARS` (`crates/core`): the
+ * command truncates anything longer on a char boundary, so the field stops at
+ * the same length instead of letting the user type instructions the model
+ * silently never sees in full. */
+const MAX_TONE_INSTRUCTIONS_CHARS = 500;
+
 /**
  * The standalone "Improve a message" screen — reachable from the sidebar
  * quick-action row below "+ New chat", gated by the `writing-tools` plugin
@@ -236,6 +242,7 @@ export default function ImproveView() {
                 <textarea
                   id="improve-custom-tone"
                   rows={2}
+                  maxLength={MAX_TONE_INSTRUCTIONS_CHARS}
                   value={customInstructions}
                   disabled={busy}
                   placeholder={t("improveView.customTonePlaceholder")}
