@@ -39,6 +39,13 @@ jobs:
   # carries core's artifacts too, so a normal PR doesn't re-pay core's
   # compile). `rust-test` keeps fail-fast off so one crate's failure can't
   # hide another's results.
+  #
+  # Both jobs *write* their cache from `main` only (`save-if` below). The key
+  # is namespaced on the head branch, so a PR's entry can only ever be restored
+  # by a later push to that same branch — while every write evicts some other
+  # ref's entry from the repo-wide 10 GB pool the release legs depend on (issue
+  # #123). A merge-group run reuses `main`'s key but saves its own copy on the
+  # queue ref. Reading is unaffected: a warm ref still restores what it saved.
   rust-clippy:
     name: rust-clippy (fmt, clippy)
     runs-on: ubuntu-latest
@@ -65,6 +72,8 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           key: ${{ github.event_name == 'pull_request' && github.head_ref || 'base' }}-ci-clippy
+          # Only `main` writes — see the rust-cache note above `rust-clippy`.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       # crates/app links against Tauri/WebKitGTK and cpal (ALSA) even to
       # compile — mirrors portable.yml's Linux dependency list.
@@ -120,6 +129,8 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           key: ${{ github.event_name == 'pull_request' && github.head_ref || 'base' }}-${{ matrix.cache-key }}
+          # Only `main` writes — see the rust-cache note above `rust-clippy`.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       # Same system deps as ever — the crates build in one workspace and can
       # pull GUI/audio dependencies transitively even when compiling tests.
