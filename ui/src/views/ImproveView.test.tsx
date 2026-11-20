@@ -93,10 +93,25 @@ describe("ImproveView while a chat reply is running", () => {
   });
 });
 
-describe("ImproveView streaming", () => {
-  it("shows the working indicator, then the answer as it arrives", async () => {
-    // Only reveal the first token: the answer must already be on screen
-    // before the invoke resolves.
+describe("ImproveView one box", () => {
+  it("shows a single text box, still single after a rewrite", async () => {
+    const release = streamingMock("A clearer message.");
+    const user = userEvent.setup();
+    render(<ImproveView />);
+    expect(screen.getAllByRole("textbox")).toHaveLength(1);
+
+    await user.type(screen.getByLabelText("Your message"), "make this better pls");
+    await user.click(screen.getByRole("button", { name: "Improve" }));
+    await release();
+    await screen.findByDisplayValue("A clearer message.");
+
+    expect(screen.getAllByRole("textbox")).toHaveLength(1);
+  });
+
+  it("keeps the draft in the box while the rewrite runs, then swaps it in", async () => {
+    // Only reveal the first token: the box must still hold the user's own
+    // text while the answer is arriving — a half-written rewrite never stands
+    // in for it.
     let release!: () => void;
     const held = new Promise<void>((resolve) => (release = resolve));
     enhancePromptStream.mockImplementation(
@@ -114,7 +129,7 @@ describe("ImproveView streaming", () => {
     await user.click(screen.getByRole("button", { name: "Improve" }));
 
     expect(await screen.findByText("Improving…")).toBeInTheDocument();
-    expect(screen.getByDisplayValue("A clearer")).toBeInTheDocument();
+    expect(screen.getByLabelText("Your message")).toHaveValue("make this better pls");
 
     await act(async () => {
       release();
@@ -123,7 +138,7 @@ describe("ImproveView streaming", () => {
     expect(screen.queryByText("Improving…")).not.toBeInTheDocument();
   });
 
-  it("keeps the partial rewrite on screen and shows the stopped notice", async () => {
+  it("keeps the draft and shows the stopped notice when Stop is pressed", async () => {
     let finishStream!: () => void;
     enhancePromptStream.mockImplementation(
       async (_t, _tone, _i, onEvent: (e: ChatEvent) => void) => {
@@ -140,10 +155,28 @@ describe("ImproveView streaming", () => {
     await user.click(screen.getByRole("button", { name: "Improve" }));
     await user.click(await screen.findByRole("button", { name: "Stop" }));
 
-    expect(await screen.findByDisplayValue("A clearer")).toBeInTheDocument();
+    expect(screen.getByLabelText("Your message")).toHaveValue("make this better pls");
     expect(
       await screen.findByText("Stopped. Your message is unchanged."),
     ).toBeInTheDocument();
+  });
+
+  it("puts the draft back — verbatim — with Restore", async () => {
+    const release = streamingMock("A clearer message.");
+    const user = userEvent.setup();
+    render(<ImproveView />);
+    await user.type(screen.getByLabelText("Your message"), "  make this better pls ");
+    await user.click(screen.getByRole("button", { name: "Improve" }));
+    await release();
+    await screen.findByDisplayValue("A clearer message.");
+    expect(screen.getByLabelText("Improved message")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Restore your message" }));
+    expect(screen.getByLabelText("Your message")).toHaveValue("  make this better pls ");
+    expect(
+      screen.queryByRole("button", { name: "Restore your message" }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Copy" })).not.toBeInTheDocument();
   });
 });
 
@@ -226,13 +259,13 @@ describe("ImproveView actions", () => {
     await release();
     await screen.findByDisplayValue("A clearer message.");
 
-    for (const name of ["Copy", "Start a new chat with this", "Clear"]) {
+    for (const name of ["Copy", "Start a new chat with this", "Restore your message", "Clear"]) {
       const button = screen.getByRole("button", { name });
       expect(button).toHaveAttribute("title", name);
     }
   });
 
-  it("Clear empties the draft, the result and the status", async () => {
+  it("Clear empties the box and the status", async () => {
     const release = streamingMock("A clearer message.");
     const user = userEvent.setup();
     render(<ImproveView />);
@@ -243,7 +276,7 @@ describe("ImproveView actions", () => {
 
     await user.click(screen.getByRole("button", { name: "Clear" }));
     expect(screen.getByLabelText("Your message")).toHaveValue("");
-    expect(screen.getByLabelText("Improved message")).toHaveValue("");
+    expect(screen.getAllByRole("textbox")).toHaveLength(1);
     expect(screen.queryByRole("button", { name: "Copy" })).not.toBeInTheDocument();
   });
 

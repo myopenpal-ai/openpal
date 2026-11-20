@@ -222,11 +222,14 @@ pub fn translate_system_prompt(source_lang: Option<&str>, target_lang: &str) -> 
 
 /// Fixed system prompt for Correct mode. A `const` so its exact wording is a
 /// single, greppable, unit-tested source of truth.
-pub const CORRECT_SYSTEM_PROMPT: &str = "You are a grammar and style correction \
-    engine embedded in a writing tool. Fix grammar, spelling, and \
-    punctuation mistakes in the user's text, and improve awkward phrasing, \
-    without changing its meaning or the language it is written in. Output \
-    only the corrected text — no explanations, no notes, no quotation \
+pub const CORRECT_SYSTEM_PROMPT: &str = "You are a grammar and spelling correction \
+    engine embedded in a writing tool. Fix grammar and spelling mistakes in the \
+    user's text without changing its meaning, the language it is written in, or \
+    the user's own style. Leave punctuation exactly as the user wrote it: do not \
+    add, remove, or change punctuation for style. Fix punctuation only when it \
+    is clearly wrong, such as a quotation opened with a straight quote (\") and \
+    closed with a curly quote (”), or a missing closing bracket. Output only the \
+    corrected text — no explanations, no notes, do not wrap it in quotation \
     marks, and do not comment on what you changed.";
 
 #[cfg(test)]
@@ -267,6 +270,22 @@ mod tests {
         assert!(
             CORRECT_SYSTEM_PROMPT.contains("without changing"),
             "must instruct the model to preserve meaning/language"
+        );
+    }
+
+    #[test]
+    fn correct_prompt_leaves_punctuation_and_personal_style_alone() {
+        assert!(
+            CORRECT_SYSTEM_PROMPT.contains("own style"),
+            "must tell the model to keep the user's style"
+        );
+        assert!(
+            CORRECT_SYSTEM_PROMPT.contains("Leave punctuation exactly as the user wrote it"),
+            "must leave the user's punctuation untouched by default"
+        );
+        assert!(
+            CORRECT_SYSTEM_PROMPT.contains("clearly wrong"),
+            "must still allow fixing genuinely broken punctuation"
         );
     }
 

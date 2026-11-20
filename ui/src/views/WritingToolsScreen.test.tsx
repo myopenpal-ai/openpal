@@ -50,7 +50,7 @@ async function correct(user: ReturnType<typeof userEvent.setup>, source: string,
   render(<WritingToolsScreen mode="correct" />);
   await user.type(screen.getByLabelText("Your text"), source);
   await user.click(screen.getByRole("button", { name: "Correct" }));
-  await screen.findAllByRole("button", { name: /^Keep: / });
+  await screen.findAllByRole("button", { name: /^(Apply|Remove): / });
 }
 
 beforeEach(() => {
@@ -122,22 +122,39 @@ describe("Correct mode — one editable surface with marks", () => {
     const user = userEvent.setup();
     await correct(user, "Thanks, you'r nise", "Thanks, you're nice");
 
-    const marks = screen.getAllByRole("button", { name: /^Keep: / });
+    const marks = screen.getAllByRole("button", { name: /^Apply: / });
     expect(marks).toHaveLength(1);
-    expect(marks[0]).toHaveAccessibleName("Keep: re nice");
+    expect(marks[0]).toHaveAccessibleName("Apply: re nice");
+  });
+
+  it("shows the suggestion and its click-to-apply hint on hover", async () => {
+    const user = userEvent.setup();
+    await correct(user, "The cat sat on the mat.", "The dog sat on the rug.");
+
+    const mark = screen.getByRole("button", { name: "Apply: dog" });
+    await user.hover(mark);
+
+    // The tooltip opens on hover, with the instruction under the suggestion,
+    // and the text itself is still untouched until the mark is clicked.
+    expect(screen.getByText("dog")).toBeInTheDocument();
+    expect(screen.getByText("Click to apply")).toBeInTheDocument();
+    expect(screen.getByLabelText("Your text")).toHaveValue("The cat sat on the mat.");
+
+    await user.unhover(mark);
+    expect(screen.queryByText("Click to apply")).not.toBeInTheDocument();
   });
 
   it("writes a suggestion in on click and keeps the surface editable", async () => {
     const user = userEvent.setup();
     await correct(user, "The cat sat on the mat.", "The dog sat on the rug.");
 
-    await user.click(screen.getByRole("button", { name: "Keep: dog" }));
-
     const surface = screen.getByLabelText("Your text");
+    await user.click(screen.getByRole("button", { name: "Apply: dog" }));
+
     // The pre-correction wording is gone — this is a destructive apply.
     expect(surface).toHaveValue("The dog sat on the mat.");
-    expect(screen.queryByRole("button", { name: "Keep: dog" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Keep: rug" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Apply: dog" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Apply: rug" })).toBeInTheDocument();
     // Still editable after a suggestion lands.
     expect(surface).not.toBeDisabled();
   });
@@ -146,15 +163,15 @@ describe("Correct mode — one editable surface with marks", () => {
     const user = userEvent.setup();
     await correct(user, "The cat sat on the mat.", "The dog sat on the rug.");
 
-    const mark = screen.getByRole("button", { name: "Keep: dog" });
+    const mark = screen.getByRole("button", { name: "Apply: dog" });
     mark.focus();
     expect(mark).toHaveFocus();
     await user.keyboard("{Enter}");
     expect(screen.getByLabelText("Your text")).toHaveValue("The dog sat on the mat.");
 
-    // Pressing Enter unmounted that button: focus moves to the next
-    // suggestion instead of falling back to the document.
-    const next = screen.getByRole("button", { name: "Keep: rug" });
+    // Applying unmounted that mark: focus moves to the next suggestion
+    // instead of falling back to the document.
+    const next = screen.getByRole("button", { name: "Apply: rug" });
     expect(next).toHaveFocus();
     await user.keyboard("{Enter}");
     expect(screen.getByLabelText("Your text")).toHaveValue("The dog sat on the rug.");
@@ -167,16 +184,16 @@ describe("Correct mode — one editable surface with marks", () => {
     await correct(user, "The cat sat on the mat.", "The dog sat on the rug.");
     await user.click(screen.getByRole("button", { name: "Keep all" }));
     expect(screen.getByLabelText("Your text")).toHaveValue("The dog sat on the rug.");
-    expect(screen.queryByRole("button", { name: /^Keep: / })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^(Apply|Remove): / })).not.toBeInTheDocument();
 
     // A fresh correction, discarded in full, keeps the original wording.
     correctionOf("The dog sits on the rug.");
     await user.click(screen.getByRole("button", { name: "Correct" }));
     await screen.findByRole("button", { name: "Discard all" });
-    expect(screen.getByRole("button", { name: "Keep: sits" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Apply: sits" })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Discard all" }));
     expect(screen.getByLabelText("Your text")).toHaveValue("The dog sat on the rug.");
-    expect(screen.queryByRole("button", { name: /^Keep: / })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^(Apply|Remove): / })).not.toBeInTheDocument();
   });
 
   it("Copy and Download act on the text left after the choices", async () => {
@@ -190,7 +207,7 @@ describe("Correct mode — one editable surface with marks", () => {
     await screen.findByDisplayValue("The cat sat on the mat.");
 
     await user.click(screen.getByRole("button", { name: "Correct" }));
-    await user.click(await screen.findByRole("button", { name: "Keep: dog" }));
+    await user.click(await screen.findByRole("button", { name: "Apply: dog" }));
 
     await user.click(screen.getByRole("button", { name: "Copy" }));
     expect(copyText).toHaveBeenCalledWith("The dog sat on the mat.");
@@ -223,7 +240,7 @@ describe("Correct mode — working indicator and Stop", () => {
     await act(async () => {
       release();
     });
-    expect(await screen.findByRole("button", { name: "Keep: dog" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Apply: dog" })).toBeInTheDocument();
     expect(screen.queryByText("Correcting…")).not.toBeInTheDocument();
   });
 
@@ -246,7 +263,7 @@ describe("Correct mode — working indicator and Stop", () => {
     expect(
       await screen.findByText("Stopped. Your message is unchanged."),
     ).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /^Keep: / })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^(Apply|Remove): / })).not.toBeInTheDocument();
   });
 });
 

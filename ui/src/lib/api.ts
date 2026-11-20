@@ -356,11 +356,13 @@ export const api = {
    * `docs/design/PROMPT_ENHANCER.md` decision 4). Has no tone: the composer
    * offers no picker, so it always sends the natural request. */
   enhancePrompt: (text: string) => invoke<EnhanceOutcome>("enhance_prompt", { text }),
-  /** The standalone Improve screen's streamed twin: tokens arrive on
-   * `onEvent` while the invoke's own promise resolves to the same cleaned
-   * `EnhanceOutcome` `enhancePrompt` returns. `tone`/`toneInstructions` are
-   * the tone picker's values; `"natural"` (or nothing) reproduces
-   * `enhancePrompt` exactly. */
+  /** The standalone Improve screen's streamed twin: it is the command that
+   * carries the tone picker's `tone`/`toneInstructions` and resolves to the
+   * same cleaned `EnhanceOutcome` `enhancePrompt` returns; `"natural"` (or
+   * nothing) reproduces `enhancePrompt` exactly. Its tokens exist for
+   * progressive surfaces, but the Improve screen drops them: its one box
+   * holds the user's draft until the cleaned rewrite replaces it atomically
+   * (PROMPT_ENHANCER.md decision 4), so it passes a no-op listener. */
   enhancePromptStream: (
     text: string,
     tone: ImproveTone,

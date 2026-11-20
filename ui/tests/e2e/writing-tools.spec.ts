@@ -41,6 +41,10 @@ test("Improve takes exactly one tone and remembers Custom instructions across a 
   await boot(page, { persist: true });
   await page.getByRole("button", { name: "Improve a message" }).click();
 
+  // One box: the draft and the rewrite share the same textarea — no duplicate
+  // read-only result pane.
+  await expect(page.getByRole("textbox")).toHaveCount(1);
+
   // Natural is the default, and is the only checked chip.
   const natural = page.getByRole("radio", { name: "Natural" });
   await expect(natural).toBeChecked();

@@ -79,8 +79,10 @@ export const KeepAllIcon = ({ className = "writing-tools-icon" }: IconProps) => 
   </svg>
 );
 
-/** Throw every suggestion away — a counter-clockwise undo arrow. */
-export const DiscardAllIcon = ({ className = "writing-tools-icon" }: IconProps) => (
+/** An undo arrow — Correct's "Discard all" and Improve's "Restore your
+ * message" both mean "put the text back the way it was", so they share one
+ * drawing. */
+export const RestoreIcon = ({ className = "writing-tools-icon" }: IconProps) => (
   <svg
     className={className}
     viewBox="0 0 24 24"
@@ -95,6 +97,9 @@ export const DiscardAllIcon = ({ className = "writing-tools-icon" }: IconProps) 
     <path d="M7.5 5.5 4 9l3.5 3.5" />
   </svg>
 );
+
+/** Correct's "Discard all" is the same undo arrow. */
+export const DiscardAllIcon = RestoreIcon;
 
 export const CopyIcon = ({ className = "writing-tools-icon" }: IconProps) => (
   <svg

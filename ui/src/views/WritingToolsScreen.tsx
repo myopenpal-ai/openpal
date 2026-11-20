@@ -1,8 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { api } from "../lib/api";
 import { copyText } from "../lib/clipboard";
 import type { ChatEvent } from "../lib/types";
+import { useCloseOnScroll } from "../components/Dropdown";
 import QueuedNotice from "../components/QueuedNotice";
 import IconActionButton from "../components/IconActionButton";
 import {
@@ -53,10 +55,11 @@ export type WritingToolsMode = "translate" | "correct";
  *   meaningful word-level mark to put in place.
  * - **Correct** is a single editable surface: the user's own text, with each
  *   detected error marked *in place* as a focusable button. Hovering or
- *   focusing a mark reveals its suggestion; activating the mark (click, Enter
- *   or Space) writes it in and the old wording is gone — deliberately
- *   destructive, not a tracked-changes pane. There is no second "original"
- *   box and no strikethrough/underline view.
+ *   focusing a mark opens a tip with the suggestion (and a "Click to apply"
+ *   hint under it); activating the mark (click, Enter or Space) writes it in
+ *   and the old wording is gone — deliberately destructive, not a
+ *   tracked-changes pane. There is no second "original" box and no
+ *   strikethrough/underline view.
  *
  * The marks are painted by a mirror layer over the transparent-text textarea
  * so the surface stays a real, editable `<textarea>` (one accessible textbox,
@@ -621,11 +624,25 @@ export default function WritingToolsScreen({ mode }: { mode: WritingToolsMode })
 /**
  * One in-place correction mark. It sits in the mirror layer exactly where the
  * wrong wording sits in the textarea, and is a real `<button>`: tab-reachable,
- * Enter/Space activates it, and its accessible name carries the suggestion
- * ("Keep: you're nice") so the affordance is never hover-only. Hover and
- * focus both reveal the suggestion in a small tip; activating the mark writes
- * the suggestion in.
+ * Enter/Space applies it, and its accessible name carries both the suggestion
+ * and the action ("Apply: you're nice") so the affordance is never hover-only.
+ *
+ * Hover and focus open a small tip with the suggestion and a "Click to apply"
+ * hint under it; clicking the mark itself applies the suggestion straight away,
+ * so the mark is the click target, not the tip.
+ *
+ * The tip is portalled to `<body>` and fixed-positioned from the mark's own
+ * rect: the mirror layer has to clip its text to the textarea's box
+ * (`overflow: hidden`), which used to cut the tip off near the right or bottom
+ * edge. Fixed positioning also lets it flip above a mark on the last line and
+ * clamp itself inside the window.
  */
+
+/** Breathing room kept between the tip and the window edge. */
+const TIP_EDGE = 8;
+/** Space between the mark's box and the tip. */
+const TIP_GAP = 6;
+
 function CorrectionMark({
   mark,
   onApply,
@@ -634,16 +651,57 @@ function CorrectionMark({
   onApply: (id: string) => void;
 }) {
   const { t } = useTranslation();
-  const keep = t("writingTools.keepSuggestion");
-  const label = mark.added ? `${keep}: ${mark.added}` : keep;
+  const markRef = useRef<HTMLButtonElement>(null);
+  const tipRef = useRef<HTMLSpanElement>(null);
+  const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
+
+  const suggestion = mark.added || mark.removed;
+  const label = mark.added
+    ? t("writingTools.applySuggestionLabel", { text: mark.added })
+    : t("writingTools.removeSuggestionLabel", { text: mark.removed });
+
+  // The tip has no sane place to point once its text scrolls away. Hovering
+  // reopens it, so closing is enough.
+  useCloseOnScroll(open, () => setOpen(false));
+
+  // Measure after the tip mounts, then place it below the mark (or above it on
+  // the last lines), clamped inside the window on both axes.
+  useLayoutEffect(() => {
+    if (!open) {
+      setPos(null);
+      return;
+    }
+    const markEl = markRef.current;
+    const tipEl = tipRef.current;
+    if (!markEl || !tipEl) return;
+    const rect = markEl.getBoundingClientRect();
+    const { offsetWidth: width, offsetHeight: height } = tipEl;
+    const below = rect.bottom + TIP_GAP;
+    const above = rect.top - TIP_GAP - height;
+    setPos({
+      left: Math.min(
+        Math.max(TIP_EDGE, rect.left),
+        Math.max(TIP_EDGE, window.innerWidth - width - TIP_EDGE),
+      ),
+      top:
+        below + height <= window.innerHeight - TIP_EDGE ? below : Math.max(TIP_EDGE, above),
+    });
+  }, [open]);
+
   return (
     <span className="writing-tools-mark-wrap">
       <button
+        ref={markRef}
         type="button"
         className={`writing-tools-mark${mark.removed ? "" : " is-insert"}`}
         data-mark-id={mark.id}
         aria-label={label}
         onClick={() => onApply(mark.id)}
+        onPointerEnter={() => setOpen(true)}
+        onPointerLeave={() => setOpen(false)}
+        onFocus={() => setOpen(true)}
+        onBlur={() => setOpen(false)}
       >
         {mark.removed ? (
           mark.removed
@@ -653,14 +711,27 @@ function CorrectionMark({
           </span>
         )}
       </button>
-      <span className="writing-tools-mark-tip" aria-hidden="true">
-        <span
-          className={`writing-tools-mark-tip-text${mark.added ? "" : " is-delete"}`}
-        >
-          {mark.added || mark.removed}
-        </span>
-        <span className="writing-tools-mark-tip-hint">{keep}</span>
-      </span>
+      {open &&
+        createPortal(
+          <span
+            ref={tipRef}
+            className="writing-tools-mark-tip"
+            aria-hidden="true"
+            style={{
+              left: pos?.left ?? 0,
+              top: pos?.top ?? 0,
+              visibility: pos ? "visible" : "hidden",
+            }}
+          >
+            <span className={`writing-tools-mark-tip-text${mark.added ? "" : " is-delete"}`}>
+              {suggestion}
+            </span>
+            <span className="writing-tools-mark-tip-hint">
+              {t("writingTools.applySuggestion")}
+            </span>
+          </span>,
+          document.body,
+        )}
     </span>
   );
 }

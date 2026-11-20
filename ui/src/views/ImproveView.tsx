@@ -10,6 +10,7 @@ import {
   CheckIcon,
   ClearIcon,
   CopyIcon,
+  RestoreIcon,
   SparkleIcon,
   StartChatIcon,
 } from "../components/WritingToolsIcons";
@@ -31,6 +32,11 @@ const TONES = [
  * silently never sees in full. */
 const MAX_TONE_INSTRUCTIONS_CHARS = 500;
 
+/** The stream's tokens are dropped on purpose: the one box keeps the user's
+ * own text until the cleaned rewrite can replace it in a single step — see
+ * the header comment. */
+const ignoreTokens: (event: ChatEvent) => void = () => undefined;
+
 /**
  * The standalone "Improve a message" screen — reachable from the sidebar
  * quick-action row below "+ New chat", gated by the `writing-tools` plugin
@@ -44,15 +50,23 @@ const MAX_TONE_INSTRUCTIONS_CHARS = 500;
  * Same shape as `WritingToolsScreen` (single-turn, non-conversational, no
  * Library/`app_db` persistence, one request in the store's `modelRequests`
  * queue — waiting, cancellable, behind a reply already running, and
- * cancelled if the user leaves the screen). Unlike the composer's inline
- * action, which stays a non-streaming, atomic replace of the draft
- * (`docs/design/PROMPT_ENHANCER.md` decision 4 — a half-written rewrite must
- * never land in the draft), this screen has its own read-only result box, so
- * it streams: tokens land there as they arrive (`api.enhancePromptStream`),
- * and the command's own promise still resolves to the cleaned
- * `EnhanceOutcome`, which replaces the preview with the final text — or
- * leaves the partial rewrite on screen with a notice when the user stops or
- * the guards reject it.
+ * cancelled if the user leaves the screen).
+ *
+ * **One box.** The draft and the rewrite share a single editable textarea:
+ * what you typed is what gets improved, and the cleaned rewrite replaces it
+ * when the request completes — no second read-only pane duplicating the
+ * text. The box is labelled "Your message" until a rewrite has landed
+ * ("Improved message" after), and the pre-improve wording is kept in
+ * `original` so the Restore action can put it back.
+ *
+ * The request still goes through `api.enhancePromptStream` — that is the
+ * command that carries the tone picker's values — but its tokens are
+ * deliberately not painted: overwriting the box token by token would stand a
+ * half-written rewrite in for the user's own text, the same failure
+ * `docs/design/PROMPT_ENHANCER.md` decision 4 rules out for the composer's
+ * inline action. The invoke resolves to the cleaned `EnhanceOutcome`, which
+ * lands in the box in one step; stopping or a guard rejection leaves the
+ * draft exactly as it was and shows the usual notice.
  *
  * The tone picker is another thing the composer deliberately doesn't have:
  * one of Natural (default, today's rewrite verbatim), Professional, Direct or
@@ -68,7 +82,9 @@ export default function ImproveView() {
   const saveSettings = useStore((s) => s.saveSettings);
 
   const [draft, setDraft] = useState("");
-  const [resultText, setResultText] = useState("");
+  // What the box held before the rewrite that is in it now: non-null once an
+  // improved message has landed, and what Restore puts back.
+  const [original, setOriginal] = useState<string | null>(null);
   const [status, setStatus] = useState<{ text: string; alert: boolean } | null>(null);
   const [busy, setBusy] = useState(false);
   // This screen's request in `modelRequests` while `busy`.
@@ -119,11 +135,21 @@ export default function ImproveView() {
   const trimmed = draft.trim();
   const tooLong = draft.length > MAX_DRAFT_CHARS;
   const canRun = trimmed.length > 0 && !tooLong && !busy;
-  const canClear = !busy && (draft.length > 0 || resultText.length > 0 || status !== null);
+  const canClear = !busy && (draft.length > 0 || status !== null);
+  // A rewrite is in the box: the result-only actions apply to it.
+  const improved = original !== null && !busy;
 
   const clear = () => {
     setDraft("");
-    setResultText("");
+    setOriginal(null);
+    setStatus(null);
+    setCopied(false);
+  };
+
+  const restore = () => {
+    if (original === null) return;
+    setDraft(original);
+    setOriginal(null);
     setStatus(null);
     setCopied(false);
   };
@@ -132,26 +158,19 @@ export default function ImproveView() {
     if (!canRun) return;
     const seq = ++requestSeq.current;
     const isStale = () => !alive.current || requestSeq.current !== seq;
+    // Exactly what the box holds now, so Restore can put it back verbatim.
+    const source = draft;
 
     // The field may not have blurred (Run was clicked straight from it in
     // some webviews), so persist before sending rather than relying on blur.
     persistInstructions();
 
     setBusy(true);
-    setResultText("");
     setStatus(null);
+    setCopied(false);
     const id = crypto.randomUUID();
     requestIdRef.current = id;
     setRequestId(id);
-
-    const onEvent = (event: ChatEvent) => {
-      if (isStale()) return;
-      if (event.type === "token") {
-        // Progressive: the answer shows up as the model writes it. The final
-        // cleaned text replaces this preview when the invoke resolves.
-        setResultText((prev) => prev + event.data.text);
-      }
-    };
 
     try {
       const outcome = await runModelRequest({ id, kind: "improve" }, () =>
@@ -159,7 +178,7 @@ export default function ImproveView() {
           trimmed,
           tone,
           tone === "custom" ? customInstructions.trim() : "",
-          onEvent,
+          ignoreTokens,
         ),
       );
       if (isStale()) return;
@@ -168,13 +187,12 @@ export default function ImproveView() {
         const { key, alert } = keptStatus("cancelled");
         setStatus({ text: t(key), alert });
       } else if (outcome.type === "enhanced") {
-        setResultText(outcome.data.text);
+        // One step in, one step out: nothing partial ever stood in the box.
+        setDraft(outcome.data.text);
+        setOriginal(source);
       } else {
-        // `cancelled` mid-stream: the partial rewrite stays on screen and
-        // the stopped notice explains why it stopped there. Every other
-        // reason means the guards rejected the output, so the raw preview
-        // (which may carry scaffolding) is cleared.
-        if (outcome.data.reason !== "cancelled") setResultText("");
+        // Stopped mid-stream or rejected by the guards: the box still holds
+        // the user's own text, untouched, and the notice says why.
         const { key, alert } = keptStatus(outcome.data.reason);
         setStatus({ text: t(key), alert });
       }
@@ -194,7 +212,7 @@ export default function ImproveView() {
   };
 
   const copy = async () => {
-    if (await copyText(resultText)) {
+    if (await copyText(draft)) {
       setCopied(true);
       setTimeout(() => setCopied(false), 1400);
     }
@@ -256,39 +274,34 @@ export default function ImproveView() {
           <div className="writing-tools-panes">
             <div className="writing-tools-pane">
               <div className="writing-tools-source-head">
-                <label htmlFor="improve-view-source">{t("improveView.sourceLabel")}</label>
-              </div>
-              <textarea
-                id="improve-view-source"
-                value={draft}
-                disabled={busy}
-                placeholder={t("improveView.sourcePlaceholder")}
-                onChange={(e) => {
-                  setDraft(e.target.value);
-                  setResultText("");
-                  setStatus(null);
-                }}
-              />
-            </div>
-            <div className="writing-tools-pane">
-              <div className="writing-tools-result-head">
-                <label id="improve-view-result-label" htmlFor="improve-view-result">
-                  {t("improveView.resultLabel")}
+                {/* The label follows what the box holds: the draft before a
+                    rewrite, the rewritten message after one. */}
+                <label htmlFor="improve-view-message">
+                  {t(original === null ? "improveView.sourceLabel" : "improveView.resultLabel")}
                 </label>
                 <div className="writing-tools-result-actions">
-                  {resultText && !busy && (
+                  {improved && (
                     <>
-                      <IconActionButton
-                        label={copied ? t("improveView.copied") : t("improveView.copy")}
-                        onClick={() => void copy()}
-                      >
-                        {copied ? <CheckIcon /> : <CopyIcon />}
-                      </IconActionButton>
-                      <IconActionButton
-                        label={t("improveView.startChat")}
-                        onClick={() => startChatWithDraft(resultText)}
-                      >
-                        <StartChatIcon />
+                      {draft.trim().length > 0 && (
+                        <>
+                          <IconActionButton
+                            label={copied ? t("improveView.copied") : t("improveView.copy")}
+                            onClick={() => void copy()}
+                          >
+                            {copied ? <CheckIcon /> : <CopyIcon />}
+                          </IconActionButton>
+                          <IconActionButton
+                            label={t("improveView.startChat")}
+                            onClick={() => startChatWithDraft(draft)}
+                          >
+                            <StartChatIcon />
+                          </IconActionButton>
+                        </>
+                      )}
+                      {/* Stays available even if the rewrite was emptied by
+                          hand: the user's own wording is still recoverable. */}
+                      <IconActionButton label={t("improveView.restore")} onClick={restore}>
+                        <RestoreIcon />
                       </IconActionButton>
                     </>
                   )}
@@ -298,11 +311,14 @@ export default function ImproveView() {
                 </div>
               </div>
               <textarea
-                id="improve-view-result"
-                aria-labelledby="improve-view-result-label"
-                value={resultText}
-                readOnly
-                placeholder={t("improveView.resultPlaceholder")}
+                id="improve-view-message"
+                value={draft}
+                disabled={busy}
+                placeholder={t("improveView.sourcePlaceholder")}
+                onChange={(e) => {
+                  setDraft(e.target.value);
+                  setStatus(null);
+                }}
               />
             </div>
           </div>

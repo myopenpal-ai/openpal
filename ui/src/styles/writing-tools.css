@@ -227,8 +227,10 @@
   pointer-events: auto;
 }
 
-/* A mark is a real button, so it is Tab-reachable and Enter/Space applies it.
-   Styling keeps it indistinguishable in size from the text it covers. */
+/* A mark is a real button, so it is Tab-reachable and Enter/Space opens it.
+   Styling keeps it indistinguishable in size from the text it covers. The
+   wash is the same strength as the old --accent-line blue, in the danger hue:
+   a correction is something to look at, not the page's actionable accent. */
 .writing-tools-mark {
   font: inherit;
   line-height: inherit;
@@ -237,20 +239,20 @@
   padding: 0;
   border: 0;
   border-radius: 3px;
-  background: var(--accent-line);
-  text-decoration: underline dotted var(--accent);
+  background: var(--danger-line);
+  text-decoration: underline dotted var(--danger);
   text-underline-offset: 2px;
   white-space: pre-wrap;
   cursor: pointer;
 }
 
 .writing-tools-mark:hover {
-  background: var(--accent);
+  background: var(--danger);
   color: var(--accent-ink);
 }
 
 .writing-tools-mark:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--danger);
   outline-offset: 1px;
 }
 
@@ -274,22 +276,26 @@
   width: 1em;
   height: 1em;
   border-radius: 50%;
-  background: var(--accent);
+  background: var(--danger);
   color: var(--accent-ink);
   font-size: 0.66em;
   line-height: 1;
 }
 
+/* Portalled to <body> and fixed-positioned from the mark's rect (see
+   CorrectionMark): the mirror layer must clip its text to the textarea, so a
+   tip living inside it was cut off next to the box's right/bottom edge. It is
+   pure preview — the mark under it stays the click target, so the tip never
+   takes the pointer. */
 .writing-tools-mark-tip {
-  display: none;
-  position: absolute;
-  left: 0;
-  top: 100%;
-  z-index: 3;
-  margin-top: 5px;
+  position: fixed;
+  z-index: 50;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  margin: 0;
   padding: 5px 9px;
-  gap: 8px;
-  align-items: baseline;
   width: max-content;
   max-width: 320px;
   white-space: normal;
@@ -299,13 +305,7 @@
   border: 1px solid var(--line);
   border-radius: var(--radius-s);
   box-shadow: 0 4px 14px rgba(var(--shadow-rgb), 0.18);
-}
-
-/* "Hovering or focusing a mark reveals its suggestion" — both, so the
-   affordance never depends on a pointer. */
-.writing-tools-mark-wrap:hover .writing-tools-mark-tip,
-.writing-tools-mark-wrap:focus-within .writing-tools-mark-tip {
-  display: inline-flex;
+  pointer-events: none;
 }
 
 .writing-tools-mark-tip-text {
@@ -318,6 +318,8 @@
   text-decoration: line-through;
 }
 
+/* The instruction sits on its own line under the suggestion, so the tip reads
+   top-down: what the text becomes, then what to do. */
 .writing-tools-mark-tip-hint {
   color: var(--ink-soft);
 }
