@@ -9,10 +9,10 @@ philosophy:
   This is machinery, not releases: nightlies are smoke-check targets for the
   full matrix between stable cuts, never something users auto-update to.
 - **Stable** — a deliberately cut `vX.Y.Z`, created only by a human running
-  the manual **Make Release** workflow, which builds the stable matrix (the
-  four targets with a runner today; `macos-arm64` returns once an Apple
-  Silicon runner is registered), assembles a signed **draft** release and a
-  per-target **smoke** gate, and stays inert until a human promotes the draft.
+  the manual **Make Release** workflow, which builds the stable matrix (all
+  five targets, Apple Silicon included; all on GitHub-hosted runners),
+  assembles a signed **draft** release and a per-target **smoke** gate, and
+  stays inert until a human promotes the draft.
 
 The version rule and PR-driven bumping are unchanged (below); what changed is
 who creates the tags: `b*` tags are pushed by CI automatically, `v*` tags are
@@ -153,8 +153,8 @@ non-exempt path (same set as the version-bump gate). It:
    `workflow_dispatch` on the workflow forces a nightly for current `main`.
 
 `portable.yml`'s `prepare` job then builds the slim **canary** subset — by
-default `ubuntu-vulkan-x64` + `win-vulkan-x64`, the targets with a runner in
-this org today, overridable via the `NIGHTLY_CANARY_TARGETS` repo variable —
+default `ubuntu-vulkan-x64` + `win-vulkan-x64`, the two cheapest legs,
+overridable via the `NIGHTLY_CANARY_TARGETS` repo variable —
 against the just-resolved llama.cpp engine tag, reusing the per-target engine
 cache, and `publish` runs the bundler with `--kind nightly`: the release is a
 **pre-release** whose manifest version is the workspace semver plus `+b{N}`
@@ -309,10 +309,11 @@ mistakes.
 Watch Actions → **portable**. The tag-triggered run:
 
 1. `prepare` resolves the llama.cpp engine tag once and computes the target
-   matrix (canary subset for `b*`, the stable set for `v*` — `macos-arm64`
-   included once an Apple Silicon runner is registered, or via the
-   `STABLE_TARGETS` repo variable); a single `ui` job compiles the frontend
-   once for every target.
+   matrix (canary subset for `b*`, all five targets for `v*`) — every leg runs
+   on a GitHub-hosted image, so `macos-arm64` is in by default; a
+   `STABLE_TARGETS` repo variable can trim a deliberate exception, and
+   `prepare` warns if that override drops `macos-arm64`. A single `ui` job
+   compiles the frontend once for every target.
 2. The matrix `build` jobs assemble each bundle (restoring the shared UI and
    the per-target engine cache keyed on the resolved tag).
 3. `publish` (this track is `v*`, so `--kind stable`) signs every artifact and
@@ -421,13 +422,14 @@ a single ubuntu-latest runner. The first successful run also creates the
 `engine-latest` release itself (`engine-manifest` publishes **non-draft**,
 unlike a `v*` cut's draft/promote gate), so **no manual bootstrap is
 needed** once the signing secrets live on the `production-release`
-environment (docs/SECURITY_POSTURE.md). The default target set reuses
-`portable.yml`'s stable inventory: `macos-arm64` is left out until an Apple
-Silicon runner with the `macos-14` label is registered — its entry then
-stays stale-but-valid, and the set is overridable with the `ENGINE_TARGETS`
-repo variable. The `feed-health.yml` workflow checks both configured feeds
-return 200 nightly: the only alarm a vanished feed has, because the update
-gate fails open.
+environment (docs/SECURITY_POSTURE.md). The default target set is the full
+five-target inventory, the same set `portable.yml`'s stable matrix builds —
+`macos-arm64` included, because the loop stages and packages engine archives
+on `ubuntu-latest` and `fetch-engine` only smoke-tests a binary the host can
+execute. The set is overridable with the `ENGINE_TARGETS` repo variable, and
+`prepare` warns if that override drops `macos-arm64`. The `feed-health.yml`
+workflow checks both configured feeds return 200 nightly: the only alarm a
+vanished feed has, because the update gate fails open.
 
 The bundler commands remain the manual path (e.g. publishing a target
 outside the scheduled set) — or run the **`publish-update-feeds`** workflow

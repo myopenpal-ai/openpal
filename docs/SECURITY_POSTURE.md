@@ -6,7 +6,7 @@ even if CI is green. It complements [SECURITY.md](../SECURITY.md) (vulnerability
 reporting and product threat model) and [RELEASING.md](RELEASING.md) (release
 runbook).
 
-Last reviewed: 2026-11-15 (posture hardening, P0–P1).
+Last reviewed: 2026-11-20 (hosted runner inventory and the self-hosted runner rule).
 
 ---
 
@@ -35,6 +35,38 @@ normal PR.
 > **On the free plan**, `secret_scanning_non_provider_patterns` and
 > `secret_scanning_validity_checks` require **GitHub Advanced Security** and stay
 > off. Re-evaluate if the org ever moves to a paid plan.
+
+### Runners: hosted inventory + the self-hosted rule (review-enforced)
+
+Unlike the table above, this section is not a GitHub setting — it is a
+convention kept truthful by review. Every job in this repo runs on
+GitHub-hosted images today — including the macOS ones, which land in the
+hosted `GitHub Actions` runner group; the repo registers no self-hosted
+runners of its own. The portable / engine matrices map targets to these
+labels (`portable.yml`'s `os_for`):
+
+| Target | Runner label | Kind |
+| --- | --- | --- |
+| `macos-arm64` | `macos-15` | hosted arm64 |
+| `macos-x64` | `macos-15-intel` | hosted Intel |
+| `win-vulkan-x64` | `windows-latest` | hosted |
+| `ubuntu-vulkan-x64` | `ubuntu-22.04` | hosted |
+| `ubuntu-vulkan-arm64` | `ubuntu-24.04-arm` | hosted |
+
+`macos-14` was retired on 2026-11-02; the live hosted arm64 labels are
+`macos-15` and `macos-26`. `macos-15-intel` is the hosted Intel image, not a
+self-hosted runner.
+
+If a self-hosted runner is ever added (issue #55), three rules hold:
+
+- A job on it runs as the logged-in maintainer, so a self-hosted runner is
+  **never** reachable from `pull_request` or `merge_group` events.
+- Its label must not collide with a hosted image's label, because a job asking
+  for that hosted label is matched by any self-hosted runner carrying it.
+- A runner registered directly to the repository is usable by every workflow
+  in it, so it belongs in a runner group whose access is restricted to the
+  workflows that need it — the label is a convention, the group's access list
+  is enforced.
 
 ## 2. Review policy (solo project — deliberate)
 
