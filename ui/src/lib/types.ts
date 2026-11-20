@@ -1228,7 +1228,20 @@ export interface Settings {
    * what a settings row saved before the field existed reads as) means never.
    * Mirrors the Rust `Settings::auto_delete_after_days` (`Option<u32>`). */
   autoDeleteAfterDays: number | null;
+  /** The Improve screen's "Custom" tone: the free-text register instructions
+   * the user typed, saved so they survive an app restart. One string,
+   * replaced on every edit — never a list of past instructions. Empty (the
+   * default, and what a settings row saved before the field existed reads
+   * as) means "no custom register": the same request as Natural. Mirrors the
+   * Rust `Settings::improve_tone_instructions`. */
+  improveToneInstructions: string;
 }
+
+/** The Improve screen's tone picker. `"natural"` is the default and sends
+ * exactly the request the composer's inline improver sends; the other three
+ * ask the same model for a different register. The wire values match
+ * `prompt_enhancer::parse_tone` in `crates/core`. */
+export type ImproveTone = "natural" | "professional" | "direct" | "custom";
 
 /** The Settings UI's language picker, and every other file that needs to name
  * this type — single source of truth is `Settings["language"]` itself. */

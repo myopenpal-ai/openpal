@@ -683,11 +683,14 @@ pub fn translate_system_prompt(source_lang: Option<&str>, target_lang: &str) -> 
 
 /// Fixed system prompt for Correct mode. A `const` so its exact wording is a
 /// single, greppable, unit-tested source of truth.
-pub const CORRECT_SYSTEM_PROMPT: &str = "You are a grammar and style correction \
-    engine embedded in a writing tool. Fix grammar, spelling, and \
-    punctuation mistakes in the user's text, and improve awkward phrasing, \
-    without changing its meaning or the language it is written in. Output \
-    only the corrected text — no explanations, no notes, no quotation \
+pub const CORRECT_SYSTEM_PROMPT: &str = "You are a grammar and spelling correction \
+    engine embedded in a writing tool. Fix grammar and spelling mistakes in the \
+    user's text without changing its meaning, the language it is written in, or \
+    the user's own style. Leave punctuation exactly as the user wrote it: do not \
+    add, remove, or change punctuation for style. Fix punctuation only when it \
+    is clearly wrong, such as a quotation opened with a straight quote (\") and \
+    closed with a curly quote (”), or a missing closing bracket. Output only the \
+    corrected text — no explanations, no notes, do not wrap it in quotation \
     marks, and do not comment on what you changed.";
 
 #[cfg(test)]
@@ -719,6 +722,22 @@ mod tests {
         assert!(
             CORRECT_SYSTEM_PROMPT.contains("without changing"),
             "must instruct the model to preserve meaning/language"
+        );
+    }
+
+    #[test]
+    fn correct_prompt_leaves_punctuation_and_personal_style_alone() {
+        assert!(
+            CORRECT_SYSTEM_PROMPT.contains("own style"),
+            "must tell the model to keep the user's style"
+        );
+        assert!(
+            CORRECT_SYSTEM_PROMPT.contains("Leave punctuation exactly as the user wrote it"),
+            "must leave the user's punctuation untouched by default"
+        );
+        assert!(
+            CORRECT_SYSTEM_PROMPT.contains("clearly wrong"),
+            "must still allow fixing genuinely broken punctuation"
         );
     }
 
@@ -1906,6 +1925,11 @@ attachment pipeline already does the hard part:
 
 ### Phase 5 — ✅ Done (2026-08-29) — Tracked-changes diff view for Correct
 
+> Superseded by Phase 6: the reporter chose a destructive in-place apply, so
+> the `<del>`/`<ins>` pane, the per-change accept/reject state and
+> `reconcileDiffText`/`defaultAcceptedMap` are no longer shipped. Kept below
+> as the record of that phase.
+
 Confirmed scope up front: **full per-change accept/reject** (the more
 thorough of two options, deliberately chosen over a simpler read-only
 diff). Correct-mode only — Translate's output is a different language
@@ -1966,6 +1990,85 @@ plain result textarea is unconditional for Translate.
   verification run, which hit a keychain hiccup) — still short of an actual
   visual click-through, which remains blocked on the same
   Accessibility/Screen Recording permission gap noted in Phase 3.
+
+### Phase 6 — ✅ Done (2026-11-20) — The editing-surface pass (issue #125)
+
+A UX pass over all three Writing Tools screens. Full ticket:
+`feat(chat): rework the Writing Tools editing surface, actions and Improve
+tones`. Reporter-confirmed decisions that shape it:
+
+- **One surface for Correct, destructive apply.** The tracked-changes model
+  (Phase 5) is gone: one editable surface holds the user's own text with each
+  detected error marked in place. Hover or focus opens a tip with the
+  suggestion and a "Click to apply" hint; clicking the mark writes it in and
+  the pre-correction wording is not recoverable. The duplicate original box and
+  the struck-through original-plus-correction pane are both gone. Translate
+  keeps two panes — a translation is a different language, so in-place marks
+  are Correct-only.
+- **Marks, not a diff view.** `ui/src/lib/writingToolsDiff.ts` keeps
+  `computeWordDiff` but now groups two changes separated by
+  whitespace-only `equal` text into *one* change (including the whitespace on
+  both sides), so `Thanks, you'r nise` → `Thanks, you're nice` is a single
+  suggestion ("re nice" over "r nise"), not one per word. `diffMarks` locates
+  each change as `[start, end)` offsets into the original; `applyDiffMark`
+  writes one suggestion in and shifts the marks after it;
+  `applyAllDiffMarks` is Keep all. `reconcileDiffText`/`defaultAcceptedMap`
+  were deleted with the tracked-changes state they served.
+- **How the marks are drawn.** The surface stays a real `<textarea>` (native
+  caret, selection, IME) whose own glyphs are transparent; a typographically
+  identical mirror layer above it paints the text and the marks. Each mark is
+  a real `<button>` — Tab-reachable, Enter/Space applies it, and its
+  accessible name is "Apply: <text>" (or "Remove: <text>" for a deletion) — so
+  nothing is hover-only. Marks only change colour/underline, never metrics, or
+  they would drift off their words, and the mirror's `scrollTop` follows the
+  textarea's; the wash is
+  `--danger-line`, the danger hue at the same opacity as
+  `--accent-line`, because a correction is a problem to look at rather than the
+  page's actionable accent. The suggestion tip is portalled to `<body>` and
+  fixed-positioned from the mark's rect, so the mirror's `overflow: hidden` (it
+  has to clip text to the textarea) can no longer cut it off next to the box's
+  edges; it flips above a mark on the last line and clamps inside the window.
+  Applying a mark unmounts its own button, so focus moves to the next mark (and
+  to the text after the last one) rather than falling back to `<body>`; typing
+  drops the pending marks, whose offsets no longer line up with the edited
+  text.
+- **Icon actions with names.** Keep all / Discard all / Copy / Download /
+  Clear are `components/IconActionButton.tsx`, whose `label` is both the
+  `title` (hover text) and `aria-label` (accessible name) — same prior art as
+  `Markdown.tsx`'s code-block copy button. Clear empties the view's text,
+  result and marks back to its empty state.
+- **Titles carry their sidebar icon.** `components/WritingToolsIcons.tsx` is
+  now the single definition of the Languages/Correct/Sparkle drawings used by
+  both `Sidebar.tsx` and the three page titles; the title copy is decorative
+  (`aria-hidden`), so each `h1`'s name is still its text.
+- **Visible work, answers where they belong.** All three views show a spinner +
+  "Translating…"/"Correcting…"/"Improving…" (`role="status"`) while the model
+  runs. Translate streams into its result box. Improve has **one** box — the
+  draft and the rewrite are the same editable textarea — so it does not paint
+  tokens: the cleaned rewrite replaces the draft in one step when the invoke
+  resolves (a half-written rewrite must never stand in for the user's own
+  text; `PROMPT_ENHANCER.md` decision 4), and the pre-improve wording stays
+  behind a Restore action. Correct cannot diff a partial stream (it would
+  mark everything after the last token as deleted), so the raw correction
+  streams into a live preview that turns into marks on completion; stopping
+  mid-stream keeps that partial text on screen and shows the existing stopped
+  notice.
+- **Improve gains tones, the composer does not.** The standalone screen now
+  calls `enhance_prompt_stream` (the command carrying the tone picker's
+  values, and the same cleaned `EnhanceOutcome` on the invoke) with
+  Natural (default) / Professional / Direct / Custom; its tokens are dropped
+  because the screen shows one box that must keep the user's draft until the
+  cleaned rewrite can replace it in a single step (`PROMPT_ENHANCER.md`
+  decision 4). `prompt_enhancer::build_request` is the one place the request
+  is assembled:
+  Natural returns the shipped `SYSTEM_PROMPT` + `user_message_text` untouched,
+  every other tone appends one clause that explicitly overrides only the
+  "keep the draft's tone exactly" rule. A unit test in `crates/core` pins all
+  three facts. The Custom instructions are one `Settings` string
+  (`improve_tone_instructions`), capped at 500 chars on the Rust side, saved
+  on blur/unmount — replaced on every edit, never appended to a list. The
+  composer's inline action keeps its non-streaming `enhance_prompt(text)` with
+  no tone (PROMPT_ENHANCER.md decision 4 still applies there).
 
 ## Risk register
 

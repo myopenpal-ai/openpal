@@ -39,6 +39,7 @@ import type {
   HfSearchPage,
   HfSearchQuery,
   ImportSummary,
+  ImproveTone,
   InjectionReviewDecision,
   ModelInfo,
   NotificationClick,
@@ -351,8 +352,32 @@ export const api = {
   /** The composer's "Improve my message" action. Plain (non-streaming)
    * invoke, not a Channel — the result is cleaned once in Rust and either
    * replaces the draft atomically or is kept out entirely, so there is
-   * nothing to stream into the textarea. */
+   * nothing to stream into the textarea (see
+   * `docs/design/PROMPT_ENHANCER.md` decision 4). Has no tone: the composer
+   * offers no picker, so it always sends the natural request. */
   enhancePrompt: (text: string) => invoke<EnhanceOutcome>("enhance_prompt", { text }),
+  /** The standalone Improve screen's streamed twin: it is the command that
+   * carries the tone picker's `tone`/`toneInstructions` and resolves to the
+   * same cleaned `EnhanceOutcome` `enhancePrompt` returns; `"natural"` (or
+   * nothing) reproduces `enhancePrompt` exactly. Its tokens exist for
+   * progressive surfaces, but the Improve screen drops them: its one box
+   * holds the user's draft until the cleaned rewrite replaces it atomically
+   * (PROMPT_ENHANCER.md decision 4), so it passes a no-op listener. */
+  enhancePromptStream: (
+    text: string,
+    tone: ImproveTone,
+    toneInstructions: string,
+    onEvent: (e: ChatEvent) => void,
+  ) => {
+    const channel = new Channel<ChatEvent>();
+    channel.onmessage = onEvent;
+    return invoke<EnhanceOutcome>("enhance_prompt_stream", {
+      text,
+      tone,
+      toneInstructions,
+      onEvent: channel,
+    });
+  },
   /** Save a Writing Tools translate/correct result to disk via the native
    * save dialog, defaulting to `suggestedFileName`. Resolves to `false` if
    * the dialog was closed without a choice (not an error) — same convention

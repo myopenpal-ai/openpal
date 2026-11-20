@@ -54,6 +54,9 @@
   --danger: #b3261e;
   --danger-rgb: 179, 38, 30;
   --danger-soft: rgba(var(--danger-rgb), 0.1);
+  /* Same wash strength as --accent-line: Correct mode's in-place marks are a
+     problem to look at, so they use the danger hue at the accent's opacity. */
+  --danger-line: rgba(var(--danger-rgb), 0.32);
   /* Badge-scoped text colors: darker than --ok/--warn so badge text clears
      4.5:1 on its soft/sunken backgrounds, without changing --ok/--warn
      everywhere else (buttons, banners) they're used. */
@@ -151,6 +154,7 @@
     --danger: #d4604f;
     --danger-rgb: 212, 96, 79;
     --danger-soft: rgba(var(--danger-rgb), 0.14);
+    --danger-line: rgba(var(--danger-rgb), 0.4);
     /* --ok/--warn already clear 4.5:1 on their badge backgrounds in dark
        mode — no separate badge-scoped darkening needed here. */
     --badge-ok-ink: var(--ok);
@@ -200,6 +204,7 @@
   --danger: #d4604f;
   --danger-rgb: 212, 96, 79;
   --danger-soft: rgba(var(--danger-rgb), 0.14);
+  --danger-line: rgba(var(--danger-rgb), 0.4);
   /* --ok/--warn already clear 4.5:1 on their badge backgrounds in dark
      mode — no separate badge-scoped darkening needed here. */
   --badge-ok-ink: var(--ok);

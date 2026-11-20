@@ -1953,6 +1953,15 @@ pub struct Settings {
     /// before this field existed reads as) means never. Synced with the rest
     /// of `Settings`, and each deletion syncs like a manual one.
     pub auto_delete_after_days: Option<u32>,
+    /// The Improve screen's "Custom" tone: the free-text register
+    /// instructions the user typed, saved so they survive an app restart.
+    /// One string, replaced on every edit — never a list of past
+    /// instructions. Only read when the tone picker is on "Custom"
+    /// (`commands::enhance_prompt_stream`); empty (the default, and what a
+    /// settings row saved before this field existed reads as, via the
+    /// struct-level `#[serde(default)]`) means "no custom register", i.e.
+    /// the same request as Natural.
+    pub improve_tone_instructions: String,
 }
 
 impl Default for Settings {
@@ -1993,6 +2002,7 @@ impl Default for Settings {
             theme: "system".to_string(),
             desktop_notifications: false,
             auto_delete_after_days: None,
+            improve_tone_instructions: String::new(),
             system_prompt: "You are a friendly, helpful AI assistant running privately on the \
                             user's own computer. Be clear and warm. When the user seems new to a \
                             topic, explain it simply and avoid jargon. Keep answers concise unless \
