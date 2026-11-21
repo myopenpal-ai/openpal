@@ -386,9 +386,35 @@ missed its build fails there, red, naming the run. The tag-triggered run:
    artifact's SHA-256 and updater signature, the version the bundle itself
    reports, and that the packaged engine executes.
 
-The first tag for an engine bump pays a cold, full pipeline (engine fetch on
-all-platform native builds, signing) — expect it to be slow, and check it end
-to end rather than assuming the trigger works.
+The Rust compile is warm on a first `v*` cut. GitHub scopes caches per ref and
+only the default branch's scope is visible to every tag, so the `build` legs
+restore the entries a `main` run wrote — a `push` to `main` that changed a
+dependency or toolchain file, or one of the twice-weekly `schedule` runs (Mon
+and Thu, 03:47 UTC, which also keep the entries inside the 7-day cache
+expiry). A `main` run publishes nothing: it builds the stable matrix, discards
+the artifacts and stops before `publish`. That is what makes a first cut look
+like a warm re-run instead of v0.6.0's 76-minute cold one (issue #134); on an
+exact cache hit rust-cache saves nothing, so a cut adds no build cache of its
+own to the pool.
+
+Two things can still be cold on a cut, and neither is the Rust compile:
+
+- the **engine download**, if llama.cpp's `latest` pointer moved since the last
+  warm run — the engine cache is keyed on the resolved tag, so a moved pointer
+  is a one-time miss that the next warm run picks up;
+- `publish` and `smoke`, which deliberately hold no cache: their keys could
+  only ever be written by the tag that wrote them, so they compile the small
+  `openpal-bundler` crate from scratch, which a first cut paid anyway.
+
+To warm the caches on demand (for instance right after merging a dependency
+bump, before cutting), dispatch `portable` on `main`:
+`gh workflow run portable.yml --ref main`. A branch dispatch is a one-off
+build, not a warm run, but it writes the same default-branch entries. If the
+`build` legs log `No cache found.` on a cut, the warm entries are gone (a
+failed warm run, or the 7-day expiry after a long gap): the cut still works,
+it just pays the cold compile, and its own run is the one that repopulates the
+tag's scope. Check `gh api /repos/myopenpal-ai/openpal/actions/caches` if it
+keeps happening — do not re-cut to get a warm one.
 
 ### 5. Verify and promote
 
