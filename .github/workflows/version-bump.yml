@@ -18,7 +18,9 @@
 # single commit on the PR head — and pushes it over HTTPS with the
 # RELEASE_PUSH_TOKEN PAT, because only a non-GITHUB_TOKEN push re-triggers the
 # PR's checks (the re-run then passes; the scheme is idempotent — one bump
-# commit, then green). The bucket is the declared `release:` label when one is
+# commit, then green). The push is not trusted on its own: the run waits for
+# the re-triggered check to appear on the new head and fails red if it never
+# does (issue #131). The bucket is the declared `release:` label when one is
 # present, else the suggestion the check would print (the PR title's
 # conventional type); the CHANGELOG.md line is the PR title. Forks and the
 # merge-queue ref (gh-readonly-queue/…, which no one can push to) keep the old
@@ -40,6 +42,9 @@ on:
 permissions:
   contents: read
   pull-requests: read
+  # The push below proves itself by finding the PR's re-triggered check run on
+  # the new head commit; reading check runs needs this explicitly.
+  checks: read
 
 concurrency:
   group: version-bump-${{ github.ref }}
@@ -50,9 +55,17 @@ jobs:
     name: version-bump (release gate)
     runs-on: ubuntu-latest
     steps:
+      # persist-credentials: false — the release PAT is the only credential the
+      # auto-bump push uses. actions/checkout v7 keeps its token in a separate
+      # RUNNER_TEMP credentials file wired in through includeIf.gitdir: keys, so
+      # scrubbing `http.https://github.com/.extraheader` from .git/config
+      # stopped removing anything (issue #131): the push inherited
+      # GITHUB_TOKEN's Authorization header and re-triggered nothing. The
+      # repository is public, so the fetches below need no credential at all.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       # On pull_request the PR's title/labels/base come straight from the
       # event. On merge_group they are not in the payload: the queue runs on a
@@ -142,8 +155,10 @@ jobs:
       # auto-fixable (exit 3 on pull_request), and only for in-repo PR branches
       # — a fork's head lives on a repo CI has no access to. The pushed commit
       # re-triggers the PR's checks (PAT push, not GITHUB_TOKEN), so the next
-      # run passes with the bump already in history.
+      # run passes with the bump already in history. The step after this one
+      # proves the re-trigger actually happened before the workflow goes green.
       - name: Apply the automated version bump to the PR head
+        id: bump
         if: github.event_name == 'pull_request' && steps.check.outputs.bump_bucket != ''
         env:
           BUMP_BUCKET: ${{ steps.check.outputs.bump_bucket }}
@@ -189,12 +204,20 @@ jobs:
           node scripts/check-version-bump.mjs --base "$BASE_SHA" --head "$new_sha" \
             --title "$PR_TITLE" --labels "$PR_LABELS"
 
-          # Drop the checkout action's stored credentials so the push
-          # authenticates with the PAT and nothing else (same trick as
-          # rolling.yml): only a non-GITHUB_TOKEN push re-triggers workflows.
-          git config --unset-all http.https://github.com/.extraheader || true
+          # Belt and braces for the bug in #131: a push authenticated with
+          # GITHUB_TOKEN succeeds and silently re-triggers nothing, so any
+          # GitHub Authorization header still visible to git must fail the run
+          # here instead of being pushed through. With
+          # persist-credentials: false this finds nothing; it catches a future
+          # checkout change (or a re-added credential).
+          if git config --get-all 'http.https://github.com/.extraheader' >/dev/null 2>&1; then
+            echo "::error::a GitHub Authorization header is configured in git config — the bump push would authenticate as GITHUB_TOKEN and re-trigger no checks"
+            git config --show-origin --get-all 'http.https://github.com/.extraheader'
+            exit 1
+          fi
           git remote add bump-origin "https://x-access-token:${RELEASE_PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           git push bump-origin "HEAD:refs/heads/${head_ref}"
+          echo "new_sha=${new_sha}" >> "$GITHUB_OUTPUT"
 
           cat >> "$GITHUB_STEP_SUMMARY" <<EOF
           ## 🤖 CI bumped the workspace version on this PR
@@ -202,7 +225,39 @@ jobs:
           The PR changed user-facing code without a version bump, so CI committed
           \`node scripts/bump-version.mjs --bump $BUMP_BUCKET --notes "…"\` to the PR
           head (one commit: Cargo.toml, Cargo.lock, the plugin manifests,
-          CHANGELOG.md) and pushed it; the version-bump check now passes on the
-          re-run. Review it like any other commit — if the bucket is wrong,
-          re-bump or fix the \`release:\` label.
+          CHANGELOG.md) and pushed it. The PR's checks re-run on the new head;
+          this workflow fails red if they do not start (a GITHUB_TOKEN push
+          starts no workflow, silently). Review the bump like any other commit —
+          if the bucket is wrong, re-bump or fix the \`release:\` label.
           EOF
+
+      # The pushed commit is only useful if GitHub actually re-ran the PR's
+      # checks on it. A GITHUB_TOKEN push moves the branch and starts nothing,
+      # and the run would otherwise finish green (issue #131). The re-run is
+      # observable as this workflow's own check run on the new head commit, so
+      # wait for it and fail red if it never appears.
+      - name: Verify the bump commit re-triggered the PR's checks
+        if: github.event_name == 'pull_request' && steps.check.outputs.bump_bucket != ''
+        env:
+          NEW_SHA: ${{ steps.bump.outputs.new_sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          # The check run is named after this job's `name:` — its presence on
+          # the new head is the signal that the pull_request workflow started.
+          echo "waiting for the PR's checks to start on ${NEW_SHA} — up to 120s"
+          for attempt in $(seq 1 24); do
+            count="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${NEW_SHA}/check-runs?per_page=100" \
+              --jq '[.check_runs[] | select(.name == "version-bump (release gate)")] | length')"
+            if [[ "$count" -gt 0 ]]; then
+              echo "checks re-triggered on ${NEW_SHA} (${count} version-bump check run(s))"
+              echo "::notice::the auto-bump commit re-triggered the PR's checks — https://github.com/${GITHUB_REPOSITORY}/pull/${PR_NUMBER}/checks"
+              exit 0
+            fi
+            echo "no check run yet (attempt ${attempt}/24)"
+            sleep 5
+          done
+          echo "::error::the auto-bump commit ${NEW_SHA} did not re-trigger the PR's checks within 120s — the push authenticated as GITHUB_TOKEN (or another credential), so GitHub started no workflow for it."
+          echo "::error::Expected: a version-bump (release gate) check run on ${NEW_SHA} — https://github.com/${GITHUB_REPOSITORY}/pull/${PR_NUMBER}/checks"
+          echo "::error::The bump is already on the PR head; fix RELEASE_PUSH_TOKEN (docs/RELEASING.md) and re-run this workflow."
+          exit 1

@@ -44,7 +44,9 @@
 #   runs on a fresh tag every night and tag scopes never fall back to one
 #   another, so its entry is write-only — it can only push some other ref's
 #   entry out of the repo-wide 10 GB cache pool that the `v*` legs and `ci`
-#   share (issue #123). `v*` tags are re-cut in place, so they keep saving.
+#   share (issue #123). `v*` tags are shipped (or re-run) rather than re-cut, so
+#   their entry stays re-readable for the recovery dispatch, and they keep
+#   saving.
 # - full verification concentrates at the stable cut: after `publish` signs
 #   the artifacts and assembles the draft, a per-target `smoke` matrix boots
 #   each bundle's metadata/engine and verifies the updater signature; a green
@@ -53,7 +55,11 @@
 #
 # Triggers: manual (with optional pre-staged model), a `v*` stable tag (cut
 # deliberately via the Make Release workflow), or a `b*` nightly tag
-# (auto-created by rolling.yml on every user-facing merge to `main`).
+# (auto-created by rolling.yml on every user-facing merge to `main`). A manual
+# dispatch may also target a *tag* ref: it rebuilds that tag's release and
+# never a branch's, which is the recovery path when a tag push missed its build
+# (the tag-pushing workflows now fail red rather than let that pass silently —
+# issue #131). A branch dispatch builds a one-off and assembles no release.
 name: portable
 
 # Least privilege: read-only by default; the `publish`/`discard` jobs re-open
@@ -104,6 +110,16 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
 
+      # A dispatch on a tag exists to rebuild that tag's release. The optional
+      # model input is for branch dispatches that build a one-off bundle; a
+      # tag's release must carry the standard SKU, so refuse the combination
+      # before anything expensive starts.
+      - name: Refuse model pre-staging on a tag-ref dispatch
+        if: github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/tags/') && inputs.model != ''
+        run: |
+          echo "::error::model pre-staging is for branch dispatches only — a tag-ref dispatch rebuilds that tag's release and must ship the standard SKU"
+          exit 1
+
       # `master` pin + explicit toolchain, so neither half floats (header note).
       - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master @ 2026-11-14
         with:
@@ -130,7 +146,7 @@ jobs:
       - name: Compute target matrix
         id: matrix
         env:
-          REF_NAME: ${{ github.ref_name }}
+          REF: ${{ github.ref }}
           EVENT_NAME: ${{ github.event_name }}
           NIGHTLY_CANARY: ${{ vars.NIGHTLY_CANARY_TARGETS }}
           STABLE_TARGETS: ${{ vars.STABLE_TARGETS }}
@@ -138,7 +154,12 @@ jobs:
           set -euo pipefail
 
           is_stable() {
-            [ "$EVENT_NAME" = "workflow_dispatch" ] || [[ "$REF_NAME" == v* ]]
+            # The tag kind decides, whichever event started the run: a `b*`
+            # tag always builds the canary subset (including a manual recovery
+            # dispatch on it); everything else builds the stable set, and a
+            # branch dispatch counts as stable.
+            if [[ "$REF" == refs/tags/b* ]]; then return 1; fi
+            [ "$EVENT_NAME" = "workflow_dispatch" ] || [[ "$REF" == refs/tags/v* ]]
           }
 
           # target → runner label. Every label is GitHub-hosted; the inventory
@@ -397,21 +418,22 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-  # Only on a tag push (never workflow_dispatch, which may build a one-off
-  # with a pre-staged model that shouldn't become "the" release for that tag)
-  # — signs every Portable artifact the matrix produced, merges them into the
-  # tag's `latest.json` (see bundler/src/manifest.rs), and publishes/updates
-  # the GitHub Release. The release kind comes from the tag prefix: a `b*`
-  # nightly runs the bundler with `--kind nightly` — a **pre-release** whose
-  # manifest version is `X.Y.Z+b{N}` build metadata, invisible to the
-  # auto-updater (`/releases/latest` never resolves to a pre-release) — while
-  # `v*` keeps `--kind stable`, today's draft-plus-human-promote soft-launch
-  # gate. The promote instructions are issued by the `promote` job only after
-  # the per-target smoke gate passes (stable cuts only).
+  # Only for a tag ref — a tag push, or a deliberate workflow_dispatch on the
+  # tag itself (the recovery path when that tag's push missed its build; a
+  # branch dispatch builds a one-off and assembles no release). Signs every
+  # Portable artifact the matrix produced, merges them into the tag's
+  # `latest.json` (see bundler/src/manifest.rs), and publishes/updates the
+  # GitHub Release. The release kind comes from the tag prefix: a `b*` nightly
+  # runs the bundler with `--kind nightly` — a **pre-release** whose manifest
+  # version is `X.Y.Z+b{N}` build metadata, invisible to the auto-updater
+  # (`/releases/latest` never resolves to a pre-release) — while `v*` keeps
+  # `--kind stable`, today's draft-plus-human-promote soft-launch gate. The
+  # promote instructions are issued by the `promote` job only after the
+  # per-target smoke gate passes (stable cuts only).
   publish:
     name: publish
     needs: build
-    if: github.event_name == 'push' && (startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/tags/b'))
+    if: startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/tags/b')
     runs-on: ubuntu-latest
     # Release-signing runs target a protected environment so the signing
     # secrets are scoped to it (docs/SECURITY_POSTURE.md), and they refuse to
@@ -514,7 +536,7 @@ jobs:
   smoke:
     name: smoke (${{ matrix.name }})
     needs: [prepare, publish]
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ${{ matrix.os }}
     # Draft releases are invisible to read-only tokens (the API 404s), and
     # smoke must download the *draft* it is verifying — so write is required
@@ -577,7 +599,7 @@ jobs:
   promote:
     name: promote (summary)
     needs: [publish, smoke]
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && needs.smoke.result == 'success'
+    if: startsWith(github.ref, 'refs/tags/v') && needs.smoke.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - name: Promote instructions
@@ -602,7 +624,7 @@ jobs:
   discard:
     name: discard draft (smoke failed)
     needs: [publish, smoke]
-    if: ${{ always() && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && (needs.smoke.result == 'failure' || needs.smoke.result == 'cancelled') }}
+    if: ${{ always() && startsWith(github.ref, 'refs/tags/v') && (needs.smoke.result == 'failure' || needs.smoke.result == 'cancelled') }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -625,5 +647,7 @@ jobs:
 
           One or more per-target smoke legs failed (see the `smoke` matrix job
           above), so the draft release was deleted and **no promote
-          instructions were issued**. Fix the build and re-cut the release.
+          instructions were issued**. Fix the build and cut the next version —
+          the failed tag is permanent (release tag ruleset), so it is retired
+          by an operator or left as the record of the failed cut.
           EOF
