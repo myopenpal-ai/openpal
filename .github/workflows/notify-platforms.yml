@@ -79,8 +79,12 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
 
-      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
+      # `master` pin + explicit `toolchain`, so neither half floats (issue #130;
+      # see portable.yml's header note). Cache budget aside (#123), the action
+      # ref still must not be a generated `stable` branch tip.
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master @ 2026-11-14
         with:
+          toolchain: 1.100.0
           components: clippy
 
       # No rust-cache: see the header note (cache budget, issue #123).
@@ -106,8 +110,10 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
 
-      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
+      # Same `master` pin + explicit `toolchain` as the macOS leg above (#130).
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master @ 2026-11-14
         with:
+          toolchain: 1.100.0
           components: clippy
 
       # No rust-cache: see the header note (cache budget, issue #123).
@@ -156,8 +162,10 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
 
-      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
+      # Same `master` pin + explicit `toolchain` as the macOS leg above (#130).
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master @ 2026-11-14
         with:
+          toolchain: 1.100.0
           components: clippy
           targets: aarch64-linux-android
 
