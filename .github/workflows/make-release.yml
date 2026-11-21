@@ -8,7 +8,10 @@
 # cascades into `portable.yml`'s `v*` trigger (full
 # five-target matrix → signed draft release → per-target smoke gate → human
 # promote). A tag push made by GITHUB_TOKEN cannot spawn further workflow
-# runs, so the dedicated push credential is required.
+# runs, so the dedicated push credential is required — and, because such a push
+# succeeds silently without starting anything, the real-cut run waits for the
+# `portable` run to appear and fails red naming the run that should exist
+# (issue #131). See `docs/RELEASING.md` for the token and the recovery path.
 #
 # Dry-run by default: it validates the chosen commit and prints exactly what
 # a real run would do, without creating anything. The full stable-cut runbook
@@ -80,6 +83,10 @@ concurrency:
 
 permissions:
   contents: write
+  # The cascade check below lists portable.yml's runs through the API. A
+  # workflow that names any permission gets only the named ones, so reading
+  # runs needs this explicitly.
+  actions: read
 
 env:
   GH_TOKEN: ${{ github.token }}
@@ -89,14 +96,19 @@ jobs:
     name: Make Release
     runs-on: ubuntu-latest
     steps:
-      # Checkout with the job's default credentials (persisted) so read-only
-      # git calls (fetch/validation) still work; the push step below drops
-      # those credentials before pushing so the tag is pushed with the PAT,
-      # never GITHUB_TOKEN.
+      # persist-credentials: false — the release PAT is the only credential
+      # this job pushes with. actions/checkout v7 keeps its token in a separate
+      # RUNNER_TEMP credentials file wired in through includeIf.gitdir: keys,
+      # so scrubbing `http.https://github.com/.extraheader` from .git/config
+      # stopped removing anything (issue #131): the tag push inherited
+      # GITHUB_TOKEN's Authorization header, GitHub started no workflow for it,
+      # and every cut silently built nothing. The repository is public, so the
+      # read-only fetches below need no credential at all.
       - name: Checkout chosen commit with full history
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
           fetch-depth: 0
+          persist-credentials: false
           ref: ${{ inputs.commit != '' && inputs.commit || github.ref_name }}
 
       # A specific commit SHA ref may not have brought `origin/main` or the
@@ -179,7 +191,7 @@ jobs:
                     echo "dry run — the version is already released; exiting green as an 'already cut' no-op"
                     ALREADY_CUT=true
                   else
-                    echo "::error::workspace version v${VERSION} was already cut — tag v${VERSION} already exists, refusing to re-cut. Delete the tag (and its release, if any) before re-cutting, or bump for the next release."
+                    echo "::error::workspace version v${VERSION} was already cut — tag v${VERSION} already exists, refusing to re-cut. Release tags are immovable: bump for the next release and cut that (docs/RELEASING.md); an orphaned tag is retired by an operator."
                     exit 1
                   fi
                 else
@@ -248,18 +260,24 @@ jobs:
             echo "::error::RELEASE_PUSH_TOKEN secret is not set — create the fine-grained PAT and add it as a repository secret (docs/RELEASING.md)"
             exit 1
           fi
-          # Drop the checkout action's stored credentials so the push below
-          # authenticates with the PAT and nothing else: a GITHUB_TOKEN push
-          # would succeed but would silently never cascade into portable.yml.
-          # Only GITHUB_TOKEN pushes are exempt from re-triggering workflows —
-          # this push fires them.
-          git config --unset-all http.https://github.com/.extraheader || true
+          # Belt and braces for the bug in #131: a tag pushed with
+          # GITHUB_TOKEN succeeds and silently starts no workflow, so any
+          # GitHub Authorization header still visible to git must fail the run
+          # here instead of being pushed through. With
+          # persist-credentials: false this finds nothing; it catches a future
+          # checkout change (or a re-added credential) before it can hide
+          # again.
+          if git config --get-all 'http.https://github.com/.extraheader' >/dev/null 2>&1; then
+            echo "::error::a GitHub Authorization header is configured in git config — the tag push would authenticate as GITHUB_TOKEN and start no portable run"
+            git config --show-origin --get-all 'http.https://github.com/.extraheader'
+            exit 1
+          fi
           # x-access-token is the placeholder username GitHub accepts for a
           # PAT. The token lives in the runner's .git/config for this job only
           # and is masked in logs by GitHub Actions.
           git remote add token-origin "https://x-access-token:${RELEASE_PUSH_TOKEN}@github.com/myopenpal-ai/openpal.git"
           if git ls-remote --tags token-origin "refs/tags/${VERSION}" | grep -q "refs/tags/${VERSION}"; then
-            echo "::error::tag ${VERSION} already exists on origin — refusing to re-cut. Delete the tag (and its release, if any) before re-cutting, or choose another commit."
+            echo "::error::tag ${VERSION} already exists on origin — refusing to re-cut. Release tags are immovable: bump for the next release and cut that, or ship this tag (docs/RELEASING.md)."
             exit 1
           fi
           # Sign the tag with the imported GIT_SIGNING_KEY (the tag ruleset
@@ -267,6 +285,39 @@ jobs:
           git tag -s "${VERSION}" -m "Release ${VERSION} (cut from ${SHA})"
           git push token-origin "${VERSION}"
           echo "Created and pushed signed annotated tag ${VERSION}"
+
+      # A green tag push proves nothing: a push authenticated with
+      # GITHUB_TOKEN succeeds and starts no workflow, leaving no trace anywhere
+      # (issue #131). The release is in flight only once portable.yml has a run
+      # on exactly this tag and commit, so wait for it and fail red naming the
+      # run that should exist when it never appears.
+      - name: Verify the tag push cascaded into portable
+        id: cascade
+        if: ${{ inputs.dry_run != true && inputs.dry_run != 'true' }}
+        env:
+          VERSION: ${{ steps.checks.outputs.version }}
+          SHA: ${{ steps.checks.outputs.sha }}
+        run: |
+          set -euo pipefail
+          echo "waiting for a portable run on ${VERSION} (${SHA}) — up to 120s"
+          url=""
+          for attempt in $(seq 1 24); do
+            runs="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/portable.yml/runs?per_page=50")"
+            url="$(printf '%s' "$runs" | jq -r --arg tag "$VERSION" --arg sha "$SHA" \
+              '[.workflow_runs[] | select(.event == "push" and .head_branch == $tag and .head_sha == $sha)][0].html_url // empty')"
+            if [[ -n "$url" ]]; then
+              echo "portable run started: ${url}"
+              echo "portable_url=${url}" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "no portable run yet (attempt ${attempt}/24)"
+            sleep 5
+          done
+          echo "::error::tag ${VERSION} was pushed but no portable.yml run started for it within 120s — the tag push did not cascade."
+          echo "::error::That means the push did not authenticate with RELEASE_PUSH_TOKEN (a GITHUB_TOKEN push starts no workflow, silently). See docs/RELEASING.md."
+          echo "::error::Expected run: a push run on refs/tags/${VERSION} at ${SHA} — https://github.com/${GITHUB_REPOSITORY}/actions/workflows/portable.yml"
+          echo "::error::The tag exists and cannot be deleted or re-pointed (release tag ruleset). Ship it once the credential is fixed: gh workflow run portable.yml --ref ${VERSION}"
+          exit 1
 
       - name: Summary
         env:
@@ -306,8 +357,13 @@ jobs:
           ## $VERSION tagged — stable cut is in progress
 
           Annotated tag **$VERSION** signed and pushed on \`$SHA\` with the
-          release push token. The \`portable\` workflow is now building the
-          full five-target matrix and assembling a signed **draft** release.
+          release push token, and the cascade was verified: the \`portable\` run
+          for this tag has started.
+
+          ${{ steps.cascade.outputs.portable_url }}
+
+          That run is building the full five-target matrix and assembling a
+          signed **draft** release.
 
           After it finishes, check the per-target smoke gate. **Only when the
           run summary says "✓ Smoke passed — promote"** (every bundle verified

@@ -5,7 +5,9 @@
 # signed tags) and pushed over HTTPS with the RELEASE_PUSH_TOKEN fine-grained
 # PAT, which cascades into `portable.yml`'s `b*` trigger (a tag push made by
 # GITHUB_TOKEN cannot spawn further workflow runs, so a dedicated push
-# credential is required).
+# credential is required). Because that push succeeds silently without starting
+# anything, the run waits for the `portable` run to appear and fails red naming
+# the run that should exist (issue #131).
 # `portable.yml` then builds the slim canary subset and publishes a
 # **pre-release**.
 #
@@ -18,7 +20,8 @@
 #   skip is exactly one cheap run.
 #
 # `workflow_dispatch` forces a nightly for current `main` (a missed batch, a
-# re-tag during testing, a runner that was down, …).
+# runner that was down, a push that failed before `RELEASE_PUSH_TOKEN` was
+# fixed, …). It cannot re-create a nightly tag: they are immovable.
 #
 # Safety for batched queue merges: `git rev-list --count HEAD` is monotonic
 # per squash-merge, the workflow concurrency serializes runs (a newer run
@@ -46,6 +49,10 @@ concurrency:
 
 permissions:
   contents: write
+  # The cascade check below lists portable.yml's runs through the API. A
+  # workflow that names any permission gets only the named ones, so reading
+  # runs needs this explicitly.
+  actions: read
 
 jobs:
   nightly:
@@ -73,14 +80,20 @@ jobs:
             echo "should_run=true" >> "$GITHUB_OUTPUT"
           fi
 
-      # Checkout with the job's default credentials (persisted) so read-only
-      # git calls still work; the push step below drops those credentials
-      # before pushing so the tag is pushed with the PAT, never GITHUB_TOKEN.
+      # persist-credentials: false — the release PAT is the only credential
+      # this job pushes with. actions/checkout v7 keeps its token in a separate
+      # RUNNER_TEMP credentials file wired in through includeIf.gitdir: keys,
+      # so scrubbing `http.https://github.com/.extraheader` from .git/config
+      # stopped removing anything (issue #131): the tag push inherited
+      # GITHUB_TOKEN's Authorization header, GitHub started no workflow for it,
+      # and every nightly tag silently built nothing. The repository is public,
+      # so the read-only tag/history reads below need no credential at all.
       - name: Checkout with full history
         if: steps.check.outputs.should_run == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       # The v*/b* tag ruleset requires *signed* tags, so the tag is signed in
       # the runner with the dedicated GIT_SIGNING_KEY (public half registered
@@ -142,12 +155,17 @@ jobs:
             echo "tag=$tag" >> "$GITHUB_OUTPUT"
             echo "created=false" >> "$GITHUB_OUTPUT"
           else
-            # Drop the checkout action's stored credentials so the push below
-            # authenticates with the PAT and nothing else: a GITHUB_TOKEN
-            # push would succeed but would silently never cascade into
-            # portable.yml. Only GITHUB_TOKEN pushes are exempt from
-            # re-triggering workflows — this push fires them.
-            git config --unset-all http.https://github.com/.extraheader || true
+            # Belt and braces for the bug in #131: a tag pushed with
+            # GITHUB_TOKEN succeeds and silently starts no workflow, so any
+            # GitHub Authorization header still visible to git must fail the
+            # run here instead of being pushed through. With
+            # persist-credentials: false this finds nothing; it catches a
+            # future checkout change (or a re-added credential).
+            if git config --get-all 'http.https://github.com/.extraheader' >/dev/null 2>&1; then
+              echo "::error::a GitHub Authorization header is configured in git config — the tag push would authenticate as GITHUB_TOKEN and start no portable run"
+              git config --show-origin --get-all 'http.https://github.com/.extraheader'
+              exit 1
+            fi
             # x-access-token is the placeholder username GitHub accepts for a
             # PAT. The token lives in the runner's .git/config for this job
             # only and is masked in logs by GitHub Actions.
@@ -175,6 +193,38 @@ jobs:
             fi
           fi
 
+      # A green tag push proves nothing: a push authenticated with GITHUB_TOKEN
+      # succeeds and starts no workflow, leaving no trace anywhere (issue
+      # #131). Wait for portable.yml to have a run on exactly this tag and
+      # commit, and fail red naming the run that should exist if it never
+      # appears.
+      - name: Verify the tag push cascaded into portable
+        id: cascade
+        if: steps.check.outputs.should_run == 'true' && steps.tag.outputs.created == 'true'
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          echo "waiting for a portable run on ${TAG} (${GITHUB_SHA}) — up to 120s"
+          url=""
+          for attempt in $(seq 1 24); do
+            runs="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/portable.yml/runs?per_page=50")"
+            url="$(printf '%s' "$runs" | jq -r --arg tag "$TAG" --arg sha "$GITHUB_SHA" \
+              '[.workflow_runs[] | select(.event == "push" and .head_branch == $tag and .head_sha == $sha)][0].html_url // empty')"
+            if [[ -n "$url" ]]; then
+              echo "portable run started: ${url}"
+              echo "portable_url=${url}" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "no portable run yet (attempt ${attempt}/24)"
+            sleep 5
+          done
+          echo "::error::nightly tag ${TAG} was pushed but no portable.yml run started for it within 120s — the tag push did not cascade."
+          echo "::error::That means the push did not authenticate with RELEASE_PUSH_TOKEN (a GITHUB_TOKEN push starts no workflow, silently). See docs/RELEASING.md."
+          echo "::error::Expected run: a push run on refs/tags/${TAG} at ${GITHUB_SHA} — https://github.com/${GITHUB_REPOSITORY}/actions/workflows/portable.yml"
+          echo "::error::The tag exists and cannot be deleted or re-pointed (release tag ruleset). Ship it once the credential is fixed: gh workflow run portable.yml --ref ${TAG}"
+          exit 1
+
       - name: Note the nightly tag
         if: steps.check.outputs.should_run == 'true'
         run: |
@@ -184,6 +234,8 @@ jobs:
 
           The `portable` workflow is now running its canary build for this tag,
           and will publish a **pre-release** (invisible to the auto-updater).
+
+          ${{ steps.cascade.outputs.portable_url }}
           EOF
           else
             cat >> "$GITHUB_STEP_SUMMARY" <<'EOF'

@@ -100,7 +100,10 @@ bumps it itself: one commit pushed to the PR head —
 `chore(release): auto-bump workspace version to vX.Y.Z` — performing the exact
 rewrite `node scripts/bump-version.mjs --bump <bucket> --notes "<PR title>"`
 would (same `Cargo.toml` / `Cargo.lock` / `plugins/*/plugin.json` /
-`CHANGELOG.md` touch-points, same verification). The check passes on the
+`CHANGELOG.md` touch-points, same verification). The workflow then waits for
+the PR's re-triggered check to appear on the new head and **fails red** if it
+never starts — a `GITHUB_TOKEN` push moves the branch and starts nothing, so
+the push cannot be trusted on its own (issue #131). The check passes on the
 re-run. The bucket is the declared `release: patch|minor|major` label when one
 is present, otherwise the same suggestion the check prints (`feat` → minor,
 anything else → patch); the `## [Unreleased]` line is the PR title with its
@@ -165,7 +168,47 @@ per-merge signal that the full matrix is healthy between stable cuts, at a
 fraction of the cost. They are *not* updater feeds: `/releases/latest` never
 resolves to a pre-release, so no installed app ever auto-updates to a nightly
 (`crates/core/src/update.rs` is untouched by this track). They are *not*
-promised artifacts: a nightly tag can be deleted/replaced without ceremony.
+promised artifacts — but their tags are not disposable either: the release-tag
+ruleset makes every `b*` tag signed, immovable and undeletable, so a nightly
+that misses its build is shipped or retired like any other tag, never deleted
+or re-pointed ([Release tags are immovable](#release-tags-are-immovable)).
+
+## Release tags are immovable
+
+The repository ruleset **`release tags: signed, immovable, undeletable`**
+applies to `refs/tags/v*` and `refs/tags/b*` with `bypass_actors: []` and
+enforces exactly three rules:
+
+| Rule | Effect |
+| --- | --- |
+| `required_signatures` | every `v*`/`b*` tag must be signed; the workflows sign in the runner with `GIT_SIGNING_KEY` |
+| `non_fast_forward` | a tag cannot be moved to another commit — it cannot be re-pointed or made to fire again |
+| `deletion` | a tag cannot be deleted — not by `git push --delete`, not by the API |
+
+There is no bypass actor, so nothing is exempt by default — not the workflows,
+not repository admins. The only way to delete one is an operator-level ruleset
+change (below). Consequences worth knowing before a cut:
+
+- **A tag is permanent.** "Delete it and re-tag" is not a recovery path; a
+  re-run of Make Release for an existing version is refused by design.
+- **Every tag must end with a release.** A `v*`/`b*` tag with no release is an
+  orphan: public, undeletable, and (for `v*`) invisible to
+  `/releases/latest`. The rule is **each tag has a release, or it is
+  retired**: ship it (a tag-ref dispatch of `portable.yml`, see
+  [recovery](#if-a-tag-exists-but-its-build-never-started-recovery)), or retire
+  it with an operator-level ruleset change (below). Never leave one without a
+  decision.
+- **A tag stays retired.** Retiring is for a tag that will never be shipped
+  (for example a `v*` cut whose draft the smoke gate discarded — fix it under
+  the *next* version, which carries the fix). Never retire and then re-cut the
+  same version.
+- **Retiring a tag is an operator action.** No workflow can do it. Add a
+  bypass actor to the ruleset (Settings → Rules → the `release tags` ruleset →
+  Bypass list — a repository admin or app), delete the tag and its release
+  (`gh api -X DELETE repos/{owner}/{repo}/git/refs/tags/<tag>` and
+  `gh release delete <tag> --yes`), then remove the bypass actor again. Record
+  the tag and the reason in the release ticket, and remove the bypass as soon
+  as the deletion is done.
 
 ## Cut a stable release
 
@@ -188,10 +231,21 @@ Everything below is the whole job; there are no unrecorded steps.
   - store it as the `RELEASE_PUSH_TOKEN` **Actions secret** on this repo
     (Settings → Secrets and variables → Actions; it is shown only once at
     creation, so set it immediately).
-  Without it, the `b*`/`v*` tag cascade into `portable.yml` never fires, the
-  auto-bump never lands, and the workflows fail at their push steps — the
-  version-bump gate instead fails red naming the bump command, exactly as it
-  did before the automation.
+  Without it, the push steps fail immediately naming the missing secret, and
+  the auto-bump never lands — the version-bump gate then fails red naming the
+  bump command, exactly as it did before the automation.
+- **Every push proves it had an effect.** The three pushing workflows do not
+  trust the push's exit code: `rolling.yml` and `make-release.yml` wait for the
+  `portable` run on exactly the new tag and commit, and `version-bump.yml`
+  waits for the PR's re-triggered check on the new head. All three fail **red**
+  naming the run that should exist when nothing starts. This matters because
+  the failure mode is invisible otherwise: a push authenticated with
+  `GITHUB_TOKEN` succeeds, moves the tag or branch, and GitHub starts no
+  workflow for it — the run that looks green is the one that did nothing
+  (issue #131). `actions/checkout` runs with `persist-credentials: false` in
+  those workflows so the only credential is the `RELEASE_PUSH_TOKEN` remote;
+  the push steps also refuse to run if a GitHub Authorization header is
+  visible to git at all.
 - The **`GIT_SIGNING_KEY` SSH private key** — the `v*`/`b*` tag ruleset
   requires **signed tags**, so both tag-pushing workflows sign the tag in the
   runner with this key:
@@ -289,8 +343,12 @@ git signing setup is needed:
      "you never bumped" states (the version's tag does not exist yet).
 2. **Re-run with `dry_run: false`**: the workflow creates a **signed annotated
    `vX.Y.Z` tag** (`git tag -s` with `GIT_SIGNING_KEY`) and pushes it with
-   `RELEASE_PUSH_TOKEN`, which cascades into `portable.yml`. Its summary then
-   carries the promote instructions (gated on the per-target smoke check).
+   `RELEASE_PUSH_TOKEN`, which cascades into `portable.yml`. It then **waits
+   for that `portable` run to start** — on exactly the new tag and commit —
+   and only goes green once it has; if none appears within 120 s the run fails
+   **red**, naming the run that should exist and the recovery command. Its
+   summary then links the run and carries the promote instructions (gated on
+   the per-target smoke check).
 
 Every run is self-labelled in the Actions run list as **`Make Release — dry
 run`** or **`Make Release — real cut`**, and overlapping dispatches (say a dry
@@ -306,7 +364,10 @@ mistakes.
 
 ### 4. Wait for the draft release
 
-Watch Actions → **portable**. The tag-triggered run:
+Watch Actions → **portable**. The Make Release run (or `rolling-nightly` for a
+nightly) has already waited for this run to start and went green on that, so
+the tag-pushing run being green is the proof the cascade happened — a tag that
+missed its build fails there, red, naming the run. The tag-triggered run:
 
 1. `prepare` resolves the llama.cpp engine tag once and computes the target
    matrix (canary subset for `b*`, all five targets for `v*`) — every leg runs
@@ -348,9 +409,40 @@ gh release edit vX.Y.Z --draft=false --repo myopenpal-ai/openpal
 
 - If any smoke leg failed, the run instead deletes the draft and its summary
   says **❌ Smoke failed — draft discarded**; **no promote instructions are
-  issued**. Investigate the failing leg, fix the build, and re-cut.
+  issued**. Investigate the failing leg, fix the build, and cut the *next*
+  version — the failed tag is permanent, so retire it per [Release tags are
+  immovable](#release-tags-are-immovable). Never re-cut a version whose tag
+  exists; Make Release refuses it.
 
 Done: users' in-app update check now finds `vX.Y.Z`.
+
+### If a tag exists but its build never started (recovery)
+
+The tag-pushing runs verify the cascade (above), so this is for a tag that
+predates that check or whose trigger was lost another way. **Do not re-cut** —
+the tag is immovable and Make Release refuses an existing tag. Ship the tag
+once `RELEASE_PUSH_TOKEN` is fixed:
+
+```bash
+gh workflow run portable.yml --ref vX.Y.Z
+```
+
+A dispatch on a **tag** runs the same pipeline as the tag push: `prepare`
+builds that tag's matrix (stable for `v*`, canary for `b*`), `publish` signs
+and assembles the release for that tag (`--kind stable` or `--kind nightly`),
+and `smoke`/`promote`/`discard` behave exactly as they do for a push. The
+optional model pre-stage input is refused on a tag ref — a release carries the
+standard SKU. A branch dispatch still builds a one-off and assembles no
+release. The `portable` concurrency group cancels an in-progress run on the
+same ref, so dispatch only when the tag's push-triggered run is absent or
+finished.
+
+This needs the tag's commit to contain the tag-dispatch gate in
+`portable.yml`: `--ref <tag>` runs the workflow file as it existed at that tag.
+Tags cut before the gate can only build their artifacts on a dispatch, not
+their release, so those are retired with an operator bypass ([Release tags are
+immovable](#release-tags-are-immovable)) or shipped by cutting the next
+version.
 
 ### Full SKU (installed app) cuts
 
@@ -484,14 +576,15 @@ curl -fsSL https://github.com/myopenpal-ai/openpal/releases/download/engine-late
 - The `release: patch|minor|major` and `no-release` labels are created by
   `scripts/ensure-labels.sh` (owner-level, before the labeler and gate go
   live); the labeler keeps the `release:` one in sync with the title.
-- **`RELEASE_PUSH_TOKEN` and `GIT_SIGNING_KEY` are operator steps.** Both
-  tag-pushing workflows fail with a message naming the missing secret — at the
-  push step for the token, at the signing step for the key. This is
-  intentional: the token is a credential whose pushes trigger CI (which
-  `GITHUB_TOKEN` never can — scope it to this one repository and rotate before
-  it lapses), and the key is what lets CI-created tags satisfy the signed-tag
-  ruleset (register its public half on your GitHub account; rotate it on a
-  schedule or if it ever leaks).
+- **`RELEASE_PUSH_TOKEN` and `GIT_SIGNING_KEY` are operator steps.** The three
+  pushing workflows fail with a message naming the missing secret — at the push
+  step for the token, at the signing step for the key — and, if a push somehow
+  does not start its downstream run, the verification step after it fails red
+  naming the run that should exist. This is intentional: the token is a
+  credential whose pushes trigger CI (which `GITHUB_TOKEN` never can — scope it
+  to this one repository and rotate before it lapses), and the key is what lets
+  CI-created tags satisfy the signed-tag ruleset (register its public half on
+  your GitHub account; rotate it on a schedule or if it ever leaks).
 - The draft release is the intentional soft-launch gate from the auto-updater
   plan; nothing reaches users until the human promotion in step 5. The
   per-target smoke gate is the quality gate in front of it — a smoke failure
