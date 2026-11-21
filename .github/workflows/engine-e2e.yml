@@ -75,6 +75,12 @@ jobs:
         with:
           # Scoped so a PR branch can't poison the cache main's builds restore.
           key: ${{ github.event_name == 'pull_request' && github.head_ref || 'base' }}-engine-e2e
+          # Only `main` writes: a PR/merge-group entry can only be restored by
+          # a later run on that same ref, while every write evicts some other
+          # ref's entry from the repo-wide 10 GB pool the release legs need
+          # (issue #123). Not writing also removes the poisoning risk the key
+          # scoping above guards against.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
           # Like notify-platforms.yml: a red run that keeps nothing makes the
           # next push re-pay the ~12m cold-harness compile on this path.
           cache-on-failure: true

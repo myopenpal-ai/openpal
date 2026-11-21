@@ -46,6 +46,8 @@ jobs:
         with:
           # Scoped so a PR branch can't poison the cache main's builds restore.
           key: ${{ github.event_name == 'pull_request' && github.head_ref || 'base' }}-injection-e2e
+          # Only `main` writes — see engine-e2e.yml's note (issue #123).
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install Linux build dependencies
         run: |
