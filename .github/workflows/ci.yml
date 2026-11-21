@@ -65,8 +65,16 @@ jobs:
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
 
-      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
+      # `master` pin + explicit `toolchain`, so neither half floats (issue #130:
+      # `39008827` was the generated `stable` branch tip, which dtolnay
+      # force-moves and GitHub can then garbage-collect; and rust-cache folds
+      # the rustc version into its key, so a toolchain floating on `stable`
+      # discards the cache on every Rust release). 1.100.0 is what `stable`
+      # resolved to when these entries were written, so this rotates the key
+      # once rather than once per release.
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master @ 2026-11-14
         with:
+          toolchain: 1.100.0
           components: rustfmt, clippy
 
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
@@ -124,7 +132,10 @@ jobs:
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
 
-      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
+      # Same `master` pin + explicit `toolchain` as `rust-clippy` above (#130).
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master @ 2026-11-14
+        with:
+          toolchain: 1.100.0
 
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
