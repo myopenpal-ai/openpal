@@ -7,6 +7,14 @@
 # engine-e2e.yml, since a Windows build of the app crate is the slowest job we
 # have. Nothing here can show a notification: posting, the permission prompt
 # and taps stay manual checks (docs/TESTING.md).
+#
+# No `Swatinem/rust-cache` here, deliberately (issue #123). The three legs held
+# ~2.7 GB of the repo-wide 10 GB cache pool — the largest single block — for
+# jobs that only run when `crates/app/src/notify/**` (or `Cargo.lock`) changes.
+# That left too little room for a `v*` cut's per-target build caches, and
+# evicting a release leg costs ~13 min on a re-cut while evicting these costs
+# one cold `clippy` run on a rare path change (the Windows leg's is ~18 min).
+# Re-add a cache here only with a matching saving elsewhere on the budget.
 name: notify-platforms
 
 # Least privilege — read-only (docs/SECURITY_POSTURE.md).
@@ -75,12 +83,7 @@ jobs:
         with:
           components: clippy
 
-      # Saved on failure too: a cold build that keeps nothing makes the next
-      # push pay it again.
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
-        with:
-          key: ${{ github.event_name == 'pull_request' && github.head_ref || 'base' }}-notify-macos
-          cache-on-failure: true
+      # No rust-cache: see the header note (cache budget, issue #123).
 
       # The whole app crate, not just notify/: a backend's dead-code allowances
       # and its callers in commands.rs and lib.rs only hold together as one
@@ -107,12 +110,7 @@ jobs:
         with:
           components: clippy
 
-      # Saved on failure too: a cold Windows build is ~18 min, and a red run
-      # that keeps nothing makes the next push pay it again.
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
-        with:
-          key: ${{ github.event_name == 'pull_request' && github.head_ref || 'base' }}-notify-windows
-          cache-on-failure: true
+      # No rust-cache: see the header note (cache budget, issue #123).
 
       # SQLCipher's vendored OpenSSL (crates/core/Cargo.toml) is a ~13 min
       # serial nmake build on Windows. This job only lints and tests, so link
@@ -163,10 +161,7 @@ jobs:
           components: clippy
           targets: aarch64-linux-android
 
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
-        with:
-          key: ${{ github.event_name == 'pull_request' && github.head_ref || 'base' }}-notify-android
-          cache-on-failure: true
+      # No rust-cache: see the header note (cache budget, issue #123).
 
       # The C parts of dependencies are compiled for the device, with the
       # runner's preinstalled NDK (minSdk 24, as in

@@ -28,6 +28,23 @@
 #   per-target `beforeBuildCommand`.
 # - the per-target engine download is cached keyed on target + the *resolved*
 #   engine tag (from `prepare`), so repeat runs for the same tag hit the cache.
+# - the Rust toolchain is pinned to an explicit version through the action's
+#   `toolchain` input, and the action itself is pinned to a commit on its
+#   `master` history. Both halves matter. `Swatinem/rust-cache` folds the rustc
+#   version into its key, so a toolchain that floats on `stable` silently
+#   discards all four legs' caches on every Rust release even though
+#   `Cargo.lock` did not change. And the action must not be pinned to a
+#   generated toolchain branch: `39008827` (what this file used to carry) is
+#   `refs/heads/stable`, one commit ahead of `master` and force-moved on every
+#   release — unreachable from `master`, therefore garbage-collectable, which
+#   breaks the workflow later and silently. `df2a88e` is the `master` commit it
+#   was generated from: same action code, durable ref. Bump the version
+#   deliberately, in all four jobs.
+# - rust-cache only *writes* where the entry can be read back. A `b*` nightly
+#   runs on a fresh tag every night and tag scopes never fall back to one
+#   another, so its entry is write-only — it can only push some other ref's
+#   entry out of the repo-wide 10 GB cache pool that the `v*` legs and `ci`
+#   share (issue #123). `v*` tags are re-cut in place, so they keep saving.
 # - full verification concentrates at the stable cut: after `publish` signs
 #   the artifacts and assembles the draft, a per-target `smoke` matrix boots
 #   each bundle's metadata/engine and verifies the updater signature; a green
@@ -87,11 +104,16 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
 
-      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
+      # `master` pin + explicit toolchain, so neither half floats (header note).
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master @ 2026-11-14
+        with:
+          toolchain: 1.100.0
 
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           key: portable-prepare
+          # A `b*` nightly tag's entry can never be read back (header note).
+          save-if: ${{ !startsWith(github.ref, 'refs/tags/b') }}
 
       # Resolve "latest" → concrete build tag once, following llama.cpp's
       # nightly pointer release. The resolved tag (never the literal "latest")
@@ -222,11 +244,16 @@ jobs:
           node-version: 20
           cache: npm
 
-      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
+      # `master` pin + explicit toolchain, so neither half floats (header note).
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master @ 2026-11-14
+        with:
+          toolchain: 1.100.0
 
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           key: portable-${{ matrix.target }}
+          # A `b*` nightly tag's entry can never be read back (header note).
+          save-if: ${{ !startsWith(github.ref, 'refs/tags/b') }}
 
       # Tauri 2 (WebKitGTK) + AppImage (FUSE) + cpal (ALSA) build/runtime deps.
       # libfuse2 is `libfuse2t64` on Ubuntu 24.04+ — try both.
@@ -417,11 +444,16 @@ jobs:
           node-version: 20
           cache: npm
 
-      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
+      # `master` pin + explicit toolchain, so neither half floats (header note).
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master @ 2026-11-14
+        with:
+          toolchain: 1.100.0
 
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           key: publish
+          # A `b*` nightly tag's entry can never be read back (header note).
+          save-if: ${{ !startsWith(github.ref, 'refs/tags/b') }}
 
       - name: Install npm dependencies (root — for the Tauri CLI signer)
         run: npm ci
@@ -497,11 +529,16 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
 
-      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
+      # `master` pin + explicit toolchain, so neither half floats (header note).
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master @ 2026-11-14
+        with:
+          toolchain: 1.100.0
 
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           key: portable-smoke-${{ matrix.target }}
+          # A `b*` nightly tag's entry can never be read back (header note).
+          save-if: ${{ !startsWith(github.ref, 'refs/tags/b') }}
 
       # Download the shipped bytes from the draft release (not the workflow
       # artifacts) so this verifies exactly what a user would download, plus
