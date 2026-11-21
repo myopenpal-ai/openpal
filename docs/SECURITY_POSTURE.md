@@ -27,7 +27,7 @@ normal PR.
 | Least-privilege `GITHUB_TOKEN`: `contents: read` default, `actions: write` only on the `frontend` job, `contents: write` + `deployments: write` only on `portable`'s `publish`/`smoke`/`discard` (`smoke` needs write to read the *draft* release it verifies — drafts 404 for read-only tokens), `engine-update`'s `publish`, and `publish-update-feeds` (`promote` needs `contents: write` to edit the release; its `engine` job needs `contents: write` + `deployments: write`); `actions: read` only on the tag-pushing workflows and `checks: read` only on `version-bump`, both for their cascade verification | `permissions:` in every workflow | 2026-11-19 |
 | Release signing keys scoped away from every non-release job | `TAURI_SIGNING_*` live on the `production-release` environment; `portable`'s `publish`, `engine-update`'s `publish`, and `publish-update-feeds`'s `engine` job target `environment: production-release` | 2026-11-19 |
 | A vanished update feed fails loudly instead of silently fail-opening | `feed-health.yml` asserts both configured feed URLs (`/releases/latest/download/latest.json`, `engine-latest/engine-manifest.json`) return 200 nightly; not a PR gate — it has no `pull_request`/`merge_group:` trigger and can never block the merge queue | 2026-11-19 |
-| `/releases/latest` is only ever made live by a human | `publish-update-feeds` is `workflow_dispatch`-only (no schedule/push/merge) and `portable.yml` assembles `v*` as a draft; no automated path promotes a release | 2026-11-19 |
+| `/releases/latest` is only ever made live by a human | `publish-update-feeds` is `workflow_dispatch`-only (no schedule/push/merge) and `portable.yml` assembles `v*` as a draft; no automated path promotes a release — including the `portable` runs on `main` that only warm the caches (issue #134), which publish nothing and cannot reach `publish`/`smoke`/`promote`/`discard` (all tag-ref-only) | 2026-11-21 |
 | A release tag is only signed if its commit is an ancestor of `main` | `publish` job, `Verify the tag is an ancestor of main` step | 2026-11-15 |
 | Secret scanning (incl. push protection) + dependabot security updates + automated security fixes | repo → Settings → Code security and analysis | 2026-11-15 |
 | Dependabot PRs auto-merge only when `.github/dependabot-policy.json` passes them (known publisher, allowlisted, not blocklisted, patch/minor incl. 0.x, release age within its window); a daily sweep re-evaluates every open Dependabot PR | workflow `dependabot-automerge.yml` + engine `scripts/dependabot-policy.sh`, single source of truth `.github/dependabot-policy.json` (trusted publishers / allowlist / blocklist / windows) | 2026-11-15 |
@@ -102,9 +102,18 @@ The moment a **second collaborator with write access** joins:
 - **Content-addressed model/classifier caches stay unscoped** (keyed by known
   SHA-256 pins): poisoning them corrupts test inputs, never shipped artifacts;
   scoping them would re-download ~400 MB per PR.
-- **`portable` cache keys stay branch-agnostic**: the workflow only runs on
-  tags/`workflow_dispatch`, both of which require write access (the same trust
-  domain as pushing the release branch).
+- **`portable` cache keys stay branch-agnostic, and `portable` now also runs on
+  `main`**: tags, a `workflow_dispatch`, a `push` to `main` that touches a
+  Rust-cache key input (a dependency or toolchain file), and a twice-weekly
+  `schedule`. Only the last two resolve to the default branch, and both are
+  triggers GitHub lets write the default branch's cache scope — `workflow_run`
+  and `pull_request_target` cannot, so neither is used — which is the same
+  write-access trust domain as pushing the release branch. Running on `main`
+  is the point: cache scopes never fall back from one tag to another, so the
+  default branch is the only scope a `v*` tag's first build can restore a warm
+  Rust/cargo cache from (issue #134). That run publishes nothing — a branch
+  run uploads no artifact, and `publish`/`smoke`/`promote`/`discard` are
+  tag-ref-only — so a branch-agnostic key never carries release authority.
 
 ## 4. Owner-only steps (can't be done via PR)
 

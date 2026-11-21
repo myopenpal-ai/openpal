@@ -40,13 +40,35 @@
 #   breaks the workflow later and silently. `df2a88e` is the `master` commit it
 #   was generated from: same action code, durable ref. Bump the version
 #   deliberately, in all four jobs.
-# - rust-cache only *writes* where the entry can be read back. A `b*` nightly
-#   runs on a fresh tag every night and tag scopes never fall back to one
-#   another, so its entry is write-only — it can only push some other ref's
-#   entry out of the repo-wide 10 GB cache pool that the `v*` legs and `ci`
-#   share (issue #123). `v*` tags are shipped (or re-run) rather than re-cut, so
-#   their entry stays re-readable for the recovery dispatch, and they keep
-#   saving.
+# - rust-cache only *writes* where the entry can be read back, and GitHub
+#   scopes caches per ref: a run restores from its own ref or the default
+#   branch, and caches never fall back from one tag to another. A `b*` nightly
+#   runs on a fresh tag every night, so its entry is write-only — it can only
+#   push some other ref's entry out of the repo-wide 10 GB cache pool that the
+#   `v*` legs and `ci` share (issue #123). It therefore restores the default
+#   branch's entries (below) and saves none. A `v*` first cut is cold for the
+#   same reason: its own scope starts empty and it cannot read another tag's.
+# - so the keys a cut needs are warmed on the default branch instead (issue
+#   #134). `build`'s key is `v0-rust-portable-<target>-build-…` — the job id is
+#   part of it — plus OS/arch, the rustc version and a hash of the workspace
+#   manifests, `Cargo.lock` and the rust/cargo/CC environment. Nothing in it
+#   names the ref, so a run of *this same* `build` job on `main` writes a key
+#   the tag can read: a `push` to `main` that touches one of those inputs, and
+#   the twice-weekly `schedule` (which also keeps the entries inside GitHub's
+#   7-day access expiry), build the stable matrix on `main` with their
+#   artifacts discarded. A tag then restores that entry, and rust-cache saves
+#   nothing when the match is exact — so a cut writes no build cache of its
+#   own. The `push` run probes the key with `lookup-only` first: every
+#   user-facing merge bumps the workspace version, which edits `Cargo.toml`
+#   and `Cargo.lock` without changing the key (the hash discounts workspace
+#   packages), so the probe is what keeps a merge from paying a full build.
+#   The `schedule` run deliberately skips the probe and rebuilds, which
+#   refreshes both the restored artifacts and their last-access clock.
+# - `smoke` and `publish` declare no cache at all. Their keys could only ever
+#   be written by the tag that wrote them (a first cut always misses), so the
+#   1.36 GB the five smoke legs added to a tag scope and `publish`'s 0.28 GB
+#   were write-only in the pool; they now compile the small `openpal-bundler`
+#   crate from scratch, which a cold tag paid anyway.
 # - full verification concentrates at the stable cut: after `publish` signs
 #   the artifacts and assembles the draft, a per-target `smoke` matrix boots
 #   each bundle's metadata/engine and verifies the updater signature; a green
@@ -54,12 +76,17 @@
 #   makes `discard` delete the draft so nothing stale lingers.
 #
 # Triggers: manual (with optional pre-staged model), a `v*` stable tag (cut
-# deliberately via the Make Release workflow), or a `b*` nightly tag
-# (auto-created by rolling.yml on every user-facing merge to `main`). A manual
-# dispatch may also target a *tag* ref: it rebuilds that tag's release and
-# never a branch's, which is the recovery path when a tag push missed its build
-# (the tag-pushing workflows now fail red rather than let that pass silently —
-# issue #131). A branch dispatch builds a one-off and assembles no release.
+# deliberately via the Make Release workflow), a `b*` nightly tag (auto-created
+# by rolling.yml on every user-facing merge to `main`), a `push` to `main`
+# touching a cache-key input (the warm run above), or the twice-weekly
+# `schedule` that keeps those warm entries alive. A manual dispatch may also
+# target a *tag* ref: it rebuilds that tag's release and never a branch's,
+# which is the recovery path when a tag push missed its build (the tag-pushing
+# workflows now fail red rather than let that pass silently — issue #131). A
+# branch dispatch builds a one-off and assembles no release. Only a tag ref
+# can reach `publish`/`smoke`/`promote`/`discard` and only a tag ref uploads
+# artifacts: a `main` run exists solely to warm the caches and discards
+# everything it builds.
 name: portable
 
 # Least privilege: read-only by default; the `publish`/`discard` jobs re-open
@@ -80,9 +107,28 @@ on:
         type: boolean
         default: false
   push:
+    # A push to `main` that can change a cache key runs the warm build (header
+    # note). Path filters are not evaluated for tag pushes, so the `tags`
+    # trigger below still fires for every tag.
+    branches:
+      - main
+    paths:
+      - "Cargo.lock"
+      - "**/Cargo.toml"
+      - "rust-toolchain"
+      - "rust-toolchain.toml"
+      - ".cargo/config.toml"
+      - ".github/workflows/portable.yml"
     tags:
       - "v*"
       - "b*"
+  schedule:
+    # Twice a week (Mon + Thu, 03:47 UTC — off the top-of-hour scheduling herd
+    # and after engine-update.yml's 03:17 / feed-health.yml's 03:23 crons).
+    # GitHub drops a cache entry not accessed for 7 days; twice weekly leaves
+    # ~3.5 days of margin for a delayed or skipped run, and the run restores
+    # (accesses) the entries before re-validating them.
+    - cron: "47 3 * * 1,4"
 
 concurrency:
   group: portable-${{ github.ref }}
@@ -97,9 +143,9 @@ env:
 
 jobs:
   # Compute what this run builds. One cheap job decides the matrix from the
-  # tag kind (canary subset for `b*` nightlies, full five for `v*` and
-  # workflow_dispatch) and resolves the llama.cpp engine tag once, so every
-  # matrix job keys its engine cache on the same resolved tag.
+  # ref (canary subset for `b*` nightlies, the full stable set for `v*`, a
+  # branch or a `main` warm run) and resolves the llama.cpp engine tag once, so
+  # every matrix job keys its engine cache on the same resolved tag.
   prepare:
     name: prepare matrix + engine tag
     runs-on: ubuntu-latest
@@ -107,6 +153,7 @@ jobs:
       matrix: ${{ steps.matrix.outputs.matrix }}
       engine_tag: ${{ steps.engine.outputs.tag }}
       kind: ${{ steps.matrix.outputs.kind }}
+      warm: ${{ steps.matrix.outputs.warm }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
 
@@ -154,12 +201,12 @@ jobs:
           set -euo pipefail
 
           is_stable() {
-            # The tag kind decides, whichever event started the run: a `b*`
-            # tag always builds the canary subset (including a manual recovery
-            # dispatch on it); everything else builds the stable set, and a
-            # branch dispatch counts as stable.
-            if [[ "$REF" == refs/tags/b* ]]; then return 1; fi
-            [ "$EVENT_NAME" = "workflow_dispatch" ] || [[ "$REF" == refs/tags/v* ]]
+            # The ref decides, whichever event started the run: a `b*` tag
+            # always builds the canary subset (including a manual recovery
+            # dispatch on it); every other ref — a `v*` tag, `main` (a warm
+            # push or the schedule), or a branch dispatch — builds the stable
+            # set, which is exactly the set a cut needs to find warm.
+            [[ "$REF" != refs/tags/b* ]]
           }
 
           # target → runner label. Every label is GitHub-hosted; the inventory
@@ -176,13 +223,22 @@ jobs:
             esac
           }
 
+          # `warm` marks a default-branch run whose only job is to populate the
+          # keys a `v*` tag restores (header note). A branch *dispatch* is not
+          # warm: it is a deliberate one-off build and keeps its artifacts.
+          warm="false"
+          if [ "$REF" = "refs/heads/main" ] && [ "$EVENT_NAME" != "workflow_dispatch" ]; then
+            warm="true"
+          fi
+
           if is_stable; then
             kind="stable"
             # Default: every portable target. All five run on GitHub-hosted
             # images (see `os_for`), so there is no registration step in the
             # way; a label that stops resolving shows up as a cancelled leg in
             # the run list. Set STABLE_TARGETS to trim a deliberate exception
-            # (e.g. a hotfix that should not wait on the Mac legs).
+            # (e.g. a hotfix that should not wait on the Mac legs) — a warm run
+            # follows the same set, since it exists to warm a cut.
             targets="${STABLE_TARGETS:-macos-arm64,macos-x64,win-vulkan-x64,ubuntu-vulkan-x64,ubuntu-vulkan-arm64}"
           else
             # Canary default = the two cheapest legs; the full set is a
@@ -209,9 +265,25 @@ jobs:
           unset IFS
 
           matrix="[${entries%,}]"
-          echo "kind=$kind" >> "$GITHUB_OUTPUT"
-          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
-          echo "matrix [$kind]: $matrix"
+          {
+            echo "kind=$kind"
+            echo "warm=$warm"
+            echo "matrix=$matrix"
+          } >> "$GITHUB_OUTPUT"
+          echo "matrix [$kind]: $matrix (warm: $warm)"
+
+          # Say what a warm run is in the run itself, the way Make Release
+          # self-labels: the only evidence for this job is the Actions log.
+          if [ "$warm" = "true" ]; then
+            {
+              echo "## Warm run (\`$EVENT_NAME\` on \`$REF\`)"
+              echo
+              echo "This run exists to populate the default-branch caches a"
+              echo "\`v*\` tag restores. It publishes nothing: no artifact is"
+              echo "uploaded, and \`publish\`/\`smoke\`/\`promote\`/\`discard\` only"
+              echo "run on a tag ref."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
 
           # Fail safe, not fail silent: a stable cut that omits the arm64
           # bundle is a deliberate maintenance decision (a STABLE_TARGETS
@@ -252,6 +324,15 @@ jobs:
     name: ${{ matrix.name }}
     needs: [prepare, ui]
     runs-on: ${{ matrix.os }}
+    # rust-cache exports `CARGO_INCREMENTAL=0` *after* it hashes the
+    # environment into its key, so the warm-run probe (which runs first) and
+    # the real restore that follows it would hash two different environments —
+    # and the real restore's key would then differ from the single restore a
+    # tag run does, so nothing a `main` run saved could ever be hit. Pinning it
+    # at job level gives every rust-cache invocation in this job, and the tag's
+    # one, the same environment. `0` is the value the action sets anyway.
+    env:
+      CARGO_INCREMENTAL: "0"
     strategy:
       fail-fast: false
       matrix:
@@ -270,7 +351,30 @@ jobs:
         with:
           toolchain: 1.100.0
 
+      # Warm-run gate (header note): on `main` the only purpose is to populate
+      # the key a tag will read, so probe it first — `lookup-only` computes the
+      # exact key without downloading — and skip the rest of the job when it is
+      # already there. That is the common case: every user-facing merge bumps
+      # the workspace version, which edits `Cargo.toml`/`Cargo.lock` without
+      # changing the key, so without the probe each merge would pay a full
+      # build. `save-if: false` keeps the probe (whose post step would
+      # otherwise save) from writing anything. The `schedule` run skips the
+      # probe on purpose: it rebuilds to refresh the entries.
+      #
+      # This *must* stay the same job id as the real build below: the job id is
+      # part of the rust-cache key, so a separate probe job would key a
+      # different entry and silently miss.
+      - name: Probe the warm cache (main runs)
+        id: warm
+        if: needs.prepare.outputs.warm == 'true' && github.event_name != 'schedule'
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          key: portable-${{ matrix.target }}
+          lookup-only: true
+          save-if: false
+
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        if: steps.warm.outputs.cache-hit != 'true'
         with:
           key: portable-${{ matrix.target }}
           # A `b*` nightly tag's entry can never be read back (header note).
@@ -279,7 +383,7 @@ jobs:
       # Tauri 2 (WebKitGTK) + AppImage (FUSE) + cpal (ALSA) build/runtime deps.
       # libfuse2 is `libfuse2t64` on Ubuntu 24.04+ — try both.
       - name: Install Linux dependencies
-        if: runner.os == 'Linux'
+        if: steps.warm.outputs.cache-hit != 'true' && runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -296,7 +400,7 @@ jobs:
       # Statically link the MSVC runtime into the app .exe so it runs on a clean
       # Windows (the engine's own MSVC redists are staged separately).
       - name: Enable crt-static (Windows)
-        if: matrix.crt_static
+        if: matrix.crt_static && steps.warm.outputs.cache-hit != 'true'
         shell: bash
         run: echo "RUSTFLAGS=-C target-feature=+crt-static" >> "$GITHUB_ENV"
 
@@ -306,7 +410,7 @@ jobs:
       # modules (IPC::Cmd / Params::Check) and OpenSSL's Configure dies.
       # Strawberry Perl provides a complete toolchain for openssl-src.
       - name: Install OpenSSL build dependencies (Windows)
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && steps.warm.outputs.cache-hit != 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -329,7 +433,7 @@ jobs:
       # zip still assembles (the bundler warns it won't launch until a runtime is
       # dropped in webview2-runtime/).
       - name: Stage fixed WebView2 runtime (Windows)
-        if: runner.os == 'Windows' && vars.WEBVIEW2_FIXED_URL != ''
+        if: runner.os == 'Windows' && vars.WEBVIEW2_FIXED_URL != '' && steps.warm.outputs.cache-hit != 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -344,7 +448,10 @@ jobs:
       # hands this job a fully-staged engine (its engine-version.json matches the
       # target), so the bundler's own "already staged for this target" fast path
       # skips the GB-scale download; an engine bump is a deliberate one-time miss.
+      # On `main` this is also what makes the tag's engine restore a hit: same
+      # key, default-branch scope (header note).
       - name: Restore engine cache (per target + resolved tag)
+        if: steps.warm.outputs.cache-hit != 'true'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: crates/app/resources/llama
@@ -353,12 +460,14 @@ jobs:
       # The UI was built once in the `ui` job; drop its `dist/` in place so the
       # Tauri build finds it and skips its own beforeBuildCommand entirely.
       - name: Restore shared UI build
+        if: steps.warm.outputs.cache-hit != 'true'
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: ui-dist
           path: target/ui-dist
 
       - name: Place ui/dist
+        if: steps.warm.outputs.cache-hit != 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -370,6 +479,7 @@ jobs:
           fi
 
       - name: Install npm dependencies (root — for the Tauri CLI)
+        if: steps.warm.outputs.cache-hit != 'true'
         run: npm ci
 
       # Inputs are passed through the environment (not interpolated into the
@@ -377,6 +487,7 @@ jobs:
       # The engine tag comes from `prepare` (never re-resolved here), so the
       # bundle matches the engine cache key exactly.
       - name: Build Portable distribution
+        if: steps.warm.outputs.cache-hit != 'true'
         shell: bash
         env:
           MODEL: ${{ inputs.model }}
@@ -396,7 +507,7 @@ jobs:
       # Sanity-check the AppImage is well-formed (extractable). The engine itself
       # is smoke-tested inside the bundler's fetch step when the host can run it.
       - name: Verify AppImage (Linux)
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && steps.warm.outputs.cache-hit != 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -408,7 +519,10 @@ jobs:
             echo "No bare .AppImage (model bundle ships a .tar.gz instead) — skipping."
           fi
 
+      # A warm run publishes nothing (header note): `publish` only runs on a tag
+      # ref, and the artifact would have no reader.
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: needs.prepare.outputs.warm != 'true'
         with:
           name: OpenPal-portable-${{ matrix.target }}
           path: |
@@ -417,6 +531,11 @@ jobs:
             target/portable/OpenPal-portable-*.tar.gz
           if-no-files-found: error
           retention-days: 14
+
+      - name: Note the warm-cache probe result
+        if: needs.prepare.outputs.warm == 'true' && steps.warm.outputs.cache-hit == 'true'
+        run: |
+          echo "::notice::portable-${{ matrix.target }} warm cache already holds this key — nothing to rebuild (issue #134)"
 
   # Only for a tag ref — a tag push, or a deliberate workflow_dispatch on the
   # tag itself (the recovery path when that tag's push missed its build; a
@@ -471,11 +590,10 @@ jobs:
         with:
           toolchain: 1.100.0
 
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
-        with:
-          key: publish
-          # A `b*` nightly tag's entry can never be read back (header note).
-          save-if: ${{ !startsWith(github.ref, 'refs/tags/b') }}
+      # No rust-cache here (header note): the key could only ever be written by
+      # the same tag, so a first cut always pays this compile anyway and the
+      # entry it wrote was a 0.28 GB write-only occupant of the shared pool.
+      # `openpal-bundler` is a small crate; it compiles from scratch.
 
       - name: Install npm dependencies (root — for the Tauri CLI signer)
         run: npm ci
@@ -556,11 +674,9 @@ jobs:
         with:
           toolchain: 1.100.0
 
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
-        with:
-          key: portable-smoke-${{ matrix.target }}
-          # A `b*` nightly tag's entry can never be read back (header note).
-          save-if: ${{ !startsWith(github.ref, 'refs/tags/b') }}
+      # No rust-cache here (header note): five smoke legs wrote 1.36 GB to a
+      # fresh tag's scope, where nothing could ever read it back — a first cut
+      # compiles this small crate cold either way.
 
       # Download the shipped bytes from the draft release (not the workflow
       # artifacts) so this verifies exactly what a user would download, plus
