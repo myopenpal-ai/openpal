@@ -1,0 +1,13 @@
+{
+  "keyringVersion": 3,
+  "reason": "device_added",
+  "rotatedAtMs": 1700000000000,
+  "kdf": {
+    "alg": "opaque-test-kdf",
+    "params": {
+      "mCostKib": 65536,
+      "tCost": 3
+    }
+  },
+  "wrappedVaultKey": "c2FtcGxlLXdyYXBwZWQtdmF1bHQta2V5"
+}
