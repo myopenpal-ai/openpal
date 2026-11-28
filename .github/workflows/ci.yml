@@ -120,6 +120,8 @@ jobs:
             cache-key: ci-test-app
           - crate: openpal-bundler
             cache-key: ci-test-bundler
+          - crate: openpal-sync-protocol
+            cache-key: ci-test-sync-protocol
     steps:
       # Same disk-pressure context as rust-clippy: each job's debug `target/`
       # is a multi-GB slice (the test builds), which is what originally forced

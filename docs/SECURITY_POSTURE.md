@@ -18,7 +18,7 @@ normal PR.
 | Invariant | Where enforced | Since |
 | --- | --- | --- |
 | `main` is PR-only, squash-only, no force-push, no deletion | ruleset `main: required checks + merge queue`, **no bypass actors** | 2026-11-12 |
-| 11 required status checks + merge queue on `main` | same ruleset (`required_status_checks`, `merge_queue`) | 2026-11-12 |
+| 12 required status checks + merge queue on `main` | same ruleset (`required_status_checks`, `merge_queue`) | 2026-11-12 |
 | Every commit merged to `main` is **signed and verified** | same ruleset, `required_signatures` rule | 2026-11-15 |
 | Release/nightly tags are **signed**, can't be moved or deleted | tag ruleset `v*`/`b*`: `required_signatures`, `non_fast_forward`, `deletion` | 2026-11-15 |
 | Tags pushed from CI are **signed in the runner** with a dedicated key, never a personal one | `rolling.yml` / `make-release.yml` import `GIT_SIGNING_KEY` and `git tag -s`; public half registered as an SSH signing key on the operator account | 2026-11-15 |

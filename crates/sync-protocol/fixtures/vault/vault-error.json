@@ -1,0 +1,10 @@
+{
+  "error": {
+    "code": "invalid_cursor",
+    "message": "This device needs to start the pull again.",
+    "requestId": "request-test-0001",
+    "details": {
+      "cursorField": "cursor"
+    }
+  }
+}

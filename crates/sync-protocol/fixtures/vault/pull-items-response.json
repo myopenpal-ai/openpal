@@ -1,0 +1,39 @@
+{
+  "items": [
+    {
+      "objectId": "object-setting-1",
+      "seq": 40,
+      "version": 1,
+      "kind": "setting",
+      "createdAtMs": 1700000000000,
+      "updatedAtMs": 1700000001000,
+      "deleted": false,
+      "nonce": "AAECAwQFBgcICQoL",
+      "ciphertext": "c2V0dGluZ3MgY2lwaGVydGV4dA=="
+    },
+    {
+      "objectId": "object-conversation-1",
+      "seq": 41,
+      "version": 2,
+      "kind": "conversation",
+      "createdAtMs": 1700000000000,
+      "updatedAtMs": 1700000002000,
+      "deleted": false,
+      "nonce": "AAECAwQFBgcICQoL",
+      "ciphertext": "c3ludGhldGljIGNpcGhlcnRleHQ="
+    },
+    {
+      "objectId": "object-project-1",
+      "seq": 42,
+      "version": 3,
+      "kind": "project",
+      "createdAtMs": 1700000000000,
+      "updatedAtMs": 1700000003000,
+      "deleted": true,
+      "nonce": "",
+      "ciphertext": ""
+    }
+  ],
+  "nextCursor": "opaque-cursor/3:not-json",
+  "hasMore": true
+}

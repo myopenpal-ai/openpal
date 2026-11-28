@@ -83,7 +83,7 @@ Run the same checks CI runs:
 ```bash
 cargo fmt --check
 cargo clippy --workspace --all-targets -- -D warnings
-cargo test -p openpal-core && cargo test -p openpal-app && cargo test -p openpal-bundler
+cargo test -p openpal-core && cargo test -p openpal-app && cargo test -p openpal-bundler && cargo test -p openpal-sync-protocol
 cd ui && npm run build && npm run lint && npm test && npm run test:e2e
 ```
 

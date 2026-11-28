@@ -10,7 +10,8 @@ Rust core, a Python-sidecar plugin system, and no server to deploy.
 
 | Layer | Where | Run with |
 |---|---|---|
-| Rust unit tests | `crates/core/src/*.rs`, `crates/app/src/*.rs`, `bundler/src/*.rs` (inline `#[cfg(test)]`) | `cargo test -p <crate>` |
+| Rust unit tests | `crates/core/src/*.rs`, `crates/app/src/*.rs`, `crates/sync-protocol/src/*.rs`, `bundler/src/*.rs` (inline `#[cfg(test)]`) | `cargo test -p <crate>` |
+| Rust wire-fixture tests | `crates/sync-protocol/tests/vault_fixtures.rs` (JSON fixtures in `crates/sync-protocol/fixtures/vault/`) | `cargo test -p openpal-sync-protocol` |
 | Rust real-engine e2e | `crates/core/tests/{engine,writing_tools,prompt_enhancer}_e2e.rs` (`#[ignore]`) | `cargo test -p openpal-core -- --ignored` |
 | Rust real-model prompt-injection detector | `crates/core/tests/prompt_injection_corpus.rs` (`#[ignore]`) | `cargo test -p openpal-core --test prompt_injection_corpus -- --ignored --nocapture` |
 | Frontend unit/component tests | `ui/src/**/*.test.ts(x)` (Vitest) | `npm test` (in `ui/`) |
@@ -22,7 +23,7 @@ Rust core, a Python-sidecar plugin system, and no server to deploy.
 
 | Workflow | Triggers | Blocks merge? | What it runs |
 |---|---|---|---|
-| `.github/workflows/ci.yml` | every PR, push to `main` | **yes** (required) | four parallel Rust jobs — `rust-clippy` (`cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`) and a `rust-test` matrix with one job per crate (`rust-test (openpal-core)`, `rust-test (openpal-app)`, `rust-test (openpal-bundler)`, each running `cargo test -p <crate>`) — plus the `frontend` job (`ui` typecheck + `vite build`, ESLint, Vitest, Playwright mocked-IPC e2e) |
+| `.github/workflows/ci.yml` | every PR, push to `main` | **yes** (required) | five parallel Rust jobs — `rust-clippy` (`cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`) and a `rust-test` matrix with one job per crate (`rust-test (openpal-core)`, `rust-test (openpal-app)`, `rust-test (openpal-bundler)`, `rust-test (openpal-sync-protocol)`, each running `cargo test -p <crate>`) — plus the `frontend` job (`ui` typecheck + `vite build`, ESLint, Vitest, Playwright mocked-IPC e2e) |
 | `.github/workflows/plugin-tests.yml` | PR/push touching `plugins/web-search/**` or `plugins/speech/**` | yes, scoped | pytest for whichever plugin(s) changed |
 | `.github/workflows/engine-e2e.yml` | PR/push touching `crates/core/src/engine/**`, `download.rs`, `sse.rs`, `writing_tools.rs`, `prompt_enhancer.rs`, or any file under `crates/core/tests/` | yes, scoped | the real llama-server engine tests (stages the engine via the bundler, downloads the ~140MB SmolLM2 test model, runs a real chat round-trip for plain chat, Writing Tools Translate/Correct, and the Message improver) |
 | `.github/workflows/injection-e2e.yml` | PR/push touching `crates/core/src/injection/**`, `crates/core/tests/prompt_injection_corpus.rs`, `crates/core/tests/fixtures/prompt_injection/**` or `Cargo.lock` | scoped | the real prompt-injection classifier (downloads the pinned ~300MB model, cached by its sha256) over the documented benign/injection sample sets, one known payload per route, a buried payload's most suspicious window, and a review card's excerpt holding a payload at the end of a window longer than the card shows |
@@ -507,7 +508,7 @@ GitHub Flow (no release branches at all) and full GitFlow (a permanent
   checks are recorded on `main`'s branch protection:
   - `ci.yml` (always run): `rust-clippy (fmt, clippy)`,
     `rust-test (openpal-core)`, `rust-test (openpal-app)`,
-    `rust-test (openpal-bundler)`,
+    `rust-test (openpal-bundler)`, `rust-test (openpal-sync-protocol)`,
     `frontend (typecheck, unit, mocked e2e)`.
   - `version-bump.yml` (always run): `version-bump (release gate)` — the
     PR-driven release check, which every PR pays a few seconds for

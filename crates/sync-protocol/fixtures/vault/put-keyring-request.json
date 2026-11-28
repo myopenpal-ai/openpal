@@ -1,0 +1,12 @@
+{
+  "baseKeyringVersion": 3,
+  "reason": "code_rotated",
+  "kdf": {
+    "alg": "opaque-test-kdf",
+    "params": {
+      "mCostKib": 65536,
+      "tCost": 3
+    }
+  },
+  "wrappedVaultKey": "c2FtcGxlLXdyYXBwZWQtdmF1bHQta2V5"
+}

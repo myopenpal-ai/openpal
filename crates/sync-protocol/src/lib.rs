@@ -1,18 +1,28 @@
-//! Wire envelope shared between OpenPal desktop/mobile clients and the sync
-//! relay (`crates/relay`). Both sides depend on this crate so the envelope
-//! shape can never drift out of sync between them.
+//! Wire types shared between OpenPal desktop/mobile clients and sync
+//! services. Both sides depend on this crate so a shape cannot drift out of
+//! sync between them.
 //!
-//! Phase 1 (docs/design/MULTI_DEVICE_SYNC.md): pure plumbing, no cryptography. The
-//! relay never sees real user data in this phase — `ciphertext` here is
-//! opaque bytes, and Phase 1 callers only ever put synthetic/test data in
-//! it. Phase 2 wires real AES-256-GCM sealing under a SyncKey through this
-//! same field; this crate does not know or care about that yet.
+//! - [`Envelope`] is the mailbox store-and-forward primitive described in
+//!   `docs/SYNC_PAIRING_PROTOCOL.md`.
+//! - [`vault`] is the wire format for the durable, account-scoped vault,
+//!   with its JSON fixtures in `fixtures/vault/`.
+//!
+//! Ciphertext fields are opaque bytes: this crate frames them, it never
+//! encrypts, decrypts or inspects them. The vault wire is additive-only; see
+//! [`vault`] and `CHANGELOG.md`.
 
 use serde::{Deserialize, Serialize};
+
+pub mod vault;
 
 /// Wire format version. Bump when the envelope shape changes; the relay and
 /// any client must agree on this before Phase 2+ wires real crypto through it.
 pub const PROTOCOL_VERSION: u32 = 1;
+
+/// Vault wire version. Bumped only for a breaking change — a new route or a
+/// shape an older reader cannot parse. Additive optional fields and new error
+/// codes do not bump it; see [`vault`]'s module docs.
+pub const VAULT_PROTOCOL_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Envelope {
