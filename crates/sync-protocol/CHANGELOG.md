@@ -8,8 +8,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - A public `vault` module with the durable-store wire: idempotent vault
   create, versioned keyring get/put with provenance, compare-and-swap item
-  put/delete (tombstones on delete), opaque-cursor item pull, usage, and the
-  shared error envelope and codes.
+  put (including conditional tombstones via `deleted: true`), opaque-cursor
+  item pull, usage, and the shared error envelope and codes. Item delete is
+  the backend spec's bodyless `DELETE … → 204` writing a tombstone, so it has
+  no JSON request/response type.
+- The item kind `setting` (singular, matching `docs/VAULT.md` §6).
 - `VAULT_PROTOCOL_VERSION`, next to `PROTOCOL_VERSION`.
 - JSON fixtures under `fixtures/vault/` and round-trip tests that fail on an
   unreferenced fixture.

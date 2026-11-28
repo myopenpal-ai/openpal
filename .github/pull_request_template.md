@@ -22,7 +22,7 @@ was skipped or could not run — do not imply a check you did not run.
 
   cargo fmt --check
   cargo clippy --workspace -- -D warnings
-  cargo test -p openpal-core   (and -p openpal-app, -p openpal-bundler)
+  cargo test -p openpal-core   (and -p openpal-app, -p openpal-bundler, -p openpal-sync-protocol)
   cd ui && npx tsc --noEmit && npx vite build && npm test && npm run test:e2e
 
 Pull-request CI compiles Linux only. If this touches platform-gated code, say

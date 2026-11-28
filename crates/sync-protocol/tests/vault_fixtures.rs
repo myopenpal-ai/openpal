@@ -6,9 +6,9 @@
 //! without a fixture is a test failure rather than a runtime surprise.
 
 use openpal_sync_protocol::vault::{
-    CreateVaultRequest, CreateVaultResponse, DeleteItemRequest, DeleteItemResponse, ItemConflict,
-    KeyringConflict, PullItemsRequest, PullItemsResponse, PutItemRequest, PutItemResponse,
-    PutKeyringRequest, PutKeyringResponse, VaultErrorEnvelope, VaultKeyring, VaultUsage,
+    CreateVaultRequest, CreateVaultResponse, ItemConflict, KeyringConflict, PullItemsRequest,
+    PullItemsResponse, PutItemRequest, PutItemResponse, PutKeyringRequest, PutKeyringResponse,
+    VaultErrorEnvelope, VaultItemKind, VaultKeyring, VaultUsage,
 };
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -36,8 +36,6 @@ const FIXTURES: &[(&str, RoundTrip)] = &[
     ("put-item-update-request.json", roundtrip::<PutItemRequest>),
     ("put-item-response.json", roundtrip::<PutItemResponse>),
     ("item-conflict.json", roundtrip::<ItemConflict>),
-    ("delete-item-request.json", roundtrip::<DeleteItemRequest>),
-    ("delete-item-response.json", roundtrip::<DeleteItemResponse>),
     ("pull-items-request.json", roundtrip::<PullItemsRequest>),
     ("pull-items-response.json", roundtrip::<PullItemsResponse>),
     (
@@ -167,6 +165,21 @@ fn base_version_zero_means_create() {
     let update: PutItemRequest = load("put-item-update-request.json");
     assert_eq!(update.base_version, 2);
     assert!(!update.is_create());
+}
+
+#[test]
+fn item_kind_setting_is_singular_on_the_wire() {
+    let page: PullItemsResponse = load("pull-items-response.json");
+    let setting = page
+        .items
+        .iter()
+        .find(|item| item.kind == VaultItemKind::Setting)
+        .expect("the pull fixture carries a setting item");
+    assert_eq!(
+        serde_json::to_value(setting).expect("serialize")["kind"],
+        serde_json::json!("setting"),
+        "the backend spec uses singular `setting`, not `settings`"
+    );
 }
 
 #[test]

@@ -18,10 +18,20 @@
 //!   which means a new route or a shape old readers cannot parse. Additive
 //!   fields and new error codes do not bump it.
 //!
-//! Every request and response has a fixture under `fixtures/vault/`, and
-//! `tests/vault_fixtures.rs` round-trips each one and fails if a fixture is
-//! not referenced. A wire change therefore fails a test instead of surprising
-//! a client at runtime.
+//! Every request and response with a JSON body has a fixture under
+//! `fixtures/vault/`, and `tests/vault_fixtures.rs` round-trips each one and
+//! fails if a fixture is not referenced. A wire change therefore fails a test
+//! instead of surprising a client at runtime.
+//!
+//! # Delete
+//!
+//! `DELETE /v1/sync/vaults/{vaultId}/items/{objectId}` has no request body and
+//! returns `204 No Content`; the server writes a tombstone. This crate
+//! therefore defines no delete request/response type. A pull reports the
+//! tombstone as a [`VaultItem`] with `deleted: true` and empty `nonce` and
+//! `ciphertext`. A conditional tombstone can instead be written through
+//! [`PutItemRequest`] with `deleted: true`, which is the `baseVersion` CAS
+//! path. This matches `docs/VAULT.md` §5.3 in the backend repo.
 //!
 //! See `CHANGELOG.md` next to this crate.
 //!
@@ -161,8 +171,9 @@ pub enum VaultItemKind {
     Conversation,
     /// A project or folder grouping.
     Project,
-    /// Preferences and local UI state.
-    Settings,
+    /// Preferences and local UI state. Serialized as `setting` (singular),
+    /// matching `docs/VAULT.md` §6 in the backend repo.
+    Setting,
     /// A generated file, inlined in the item.
     Artifact,
     /// A saved model identity and its parameters.
@@ -244,25 +255,6 @@ pub struct ItemConflict {
     /// The version the server currently holds.
     pub current_version: u32,
     /// The sequence number the server currently holds.
-    pub seq: u64,
-}
-
-/// Conditional item delete. The server writes a tombstone, never a physical
-/// row removal, so every device can observe the deletion.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DeleteItemRequest {
-    /// The version this delete is based on.
-    pub base_version: u32,
-}
-
-/// Result of a successful item delete.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DeleteItemResponse {
-    /// The version of the tombstone the server wrote.
-    pub version: u32,
-    /// The server sequence number assigned to the tombstone.
     pub seq: u64,
 }
 
@@ -486,7 +478,7 @@ mod tests {
     fn base_version_zero_means_create() {
         let mut request = PutItemRequest {
             base_version: 0,
-            kind: VaultItemKind::Settings,
+            kind: VaultItemKind::Setting,
             created_at_ms: 1,
             updated_at_ms: 1,
             deleted: false,
