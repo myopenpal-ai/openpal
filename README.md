@@ -55,14 +55,17 @@ agent loop runs locally against your own model. Details:
 
 ## Project layout
 
-The three concerns are strictly separated:
+The concerns are strictly separated and talk through narrow seams:
 
-| Path          | Crate / package    | Role |
-| ------------- | ------------------ | ---- |
-| `crates/core` | `openpal-core`     | All logic, zero GUI: hardware detection, model catalog & selection, resumable downloads, llama-server lifecycle + streaming chat. |
-| `crates/app`  | `openpal-app`      | The Tauri GUI shell: thin commands over core, window config, capabilities. |
-| `ui/`         | `openpal-ui`       | React + TypeScript frontend (Vite). Talks to Rust only through `ui/src/lib/api.ts`. |
-| `bundler/`    | `openpal-bundler`  | Bundling & deployment module: fetches/stages the llama.cpp engine, generates icons, builds, signs, and notarizes. Never imported by the app. |
+| Path                   | Crate / package         | Role |
+| ---------------------- | ----------------------- | ---- |
+| `crates/core`          | `openpal-core`          | All logic, zero GUI: hardware detection, model catalog & selection, resumable downloads, llama-server lifecycle + streaming chat, sync, agent loop, prompt-injection classifier. |
+| `crates/app`           | `openpal-app`           | The Tauri GUI shell: thin commands over core, window config, capabilities. |
+| `ui/`                  | `openpal-ui`            | React + TypeScript frontend (Vite). Talks to Rust only through `ui/src/lib/api.ts`. |
+| `bundler/`             | `openpal-bundler`       | Bundling & deployment module: fetches/stages the llama.cpp engine, generates icons, builds, signs, and notarizes. Never imported by the app. |
+| `crates/relay`         | `openpal-relay`         | Store-and-forward sync relay binary (axum + SQLite mailbox of opaque blobs). No crypto, no auth. |
+| `crates/sync-protocol` | `openpal-sync-protocol` | Wire envelope shared by the client and the relay, as plain serde types. |
+| `plugins/`             | Python sidecars         | Built-in plugins with a `plugin.json` manifest; the contract is [`plugins/PLUGINS.md`](plugins/PLUGINS.md). |
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the full picture.
 
