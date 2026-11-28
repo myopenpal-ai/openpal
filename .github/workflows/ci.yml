@@ -163,6 +163,93 @@ jobs:
       - name: cargo test
         run: cargo test -p ${{ matrix.crate }}
 
+  # The one run that puts the shipped client on the other side of the real
+  # contract double (issue #139): a full `AccountManager::sign_in`, account,
+  # catalog, one streamed reply and the 401/403 copy, against the private
+  # backend's dev-only axum server. The replay in `rust-test (openpal-core)`
+  # proves this client reads the recorded bytes; only this job proves the
+  # server emits bytes this client reads.
+  #
+  # The server is delivered as a *public* image pinned by digest, never by
+  # tag: this repo is public and a `pull_request` from a fork has no secret,
+  # so cloning the private backend is not an option. The digest is the gate's
+  # own pin — a backend change can't move it silently. Report-only while it
+  # beds in (`docs/TESTING.md`), matching how fmt and clippy landed.
+  contract-smoke:
+    name: contract-smoke (/v1 double)
+    runs-on: ubuntu-latest
+    services:
+      contract-double:
+        # openpal-cloud's `fake-image` workflow publishes this and prints the
+        # digest. TODO(#139): pin the digest from openpal-cloud#1's `main` run.
+        image: ghcr.io/myopenpal-ai/openpal-cloud-fake@sha256:0000000000000000000000000000000000000000000000000000000000000000
+        ports:
+          - 8788:8788
+    steps:
+      # Same disk-pressure context as the rust-test jobs: this compiles
+      # openpal-core's test binary, including the tract runtime.
+      - name: Free disk space
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master @ 2026-11-14
+        with:
+          toolchain: 1.100.0
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          key: ${{ github.event_name == 'pull_request' && github.head_ref || 'base' }}-ci-contract-smoke
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      # Mirrors rust-test's dependency list: core still links keyring, SQLCipher
+      # and the workspace's native deps even when only its library tests build.
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libjavascriptcoregtk-4.1-dev \
+            libgtk-3-dev \
+            librsvg2-dev \
+            libayatana-appindicator3-dev \
+            libasound2-dev \
+            libssl-dev \
+            build-essential
+
+      # The test itself asserts this header matches the version vendored in
+      # `crates/core/tests/contract/PIN.toml`; recording it here is what makes
+      # a red job (or a green one) name the contract it ran.
+      - name: Wait for the contract double and record its version
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 30); do
+            if curl -fsS -D /tmp/contract-headers -o /dev/null http://127.0.0.1:8788/health; then
+              break
+            fi
+            sleep 1
+          done
+          # One more time outside the loop, so a never-ready service fails with
+          # curl's error rather than a missing headers file.
+          curl -fsS -D /tmp/contract-headers -o /dev/null http://127.0.0.1:8788/health
+          version=$(tr -d '\r' < /tmp/contract-headers \
+            | awk -F': ' 'tolower($1)=="x-openpal-contract"{print $2}')
+          test -n "$version"
+          echo "Contract double: $version"
+          {
+            echo "### Contract double"
+            echo ""
+            echo "Contract: \`$version\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: cargo test (real client, contract double)
+        env:
+          OPENPAL_ACCOUNT_API: http://127.0.0.1:8788
+        run: cargo test -p openpal-core --lib contract_smoke -- --ignored --nocapture
+
   frontend:
     name: frontend (typecheck, unit, mocked e2e)
     runs-on: ubuntu-latest

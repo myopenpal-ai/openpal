@@ -62,6 +62,11 @@ pub mod backup;
 pub mod boot;
 pub mod catalog;
 pub mod cloud;
+/// The same client driven against the backend's contract double, end to end.
+/// Test-only and `#[ignore]`d (it needs a live server); CI's `contract-smoke`
+/// job runs it against the digest-pinned image.
+#[cfg(test)]
+mod contract_smoke;
 /// Replay of the vendored cloud `/v1` contract fixtures. Test-only: it is
 /// the one place that can reach the crate-private transport functions in
 /// [`account`] directly.

@@ -13,6 +13,7 @@ Rust core, a Python-sidecar plugin system, and no server to deploy.
 | Rust unit tests | `crates/core/src/*.rs`, `crates/app/src/*.rs`, `crates/sync-protocol/src/*.rs`, `bundler/src/*.rs` (inline `#[cfg(test)]`) | `cargo test -p <crate>` |
 | Rust wire-fixture tests | `crates/sync-protocol/tests/vault_fixtures.rs` (JSON fixtures in `crates/sync-protocol/fixtures/vault/`) | `cargo test -p openpal-sync-protocol` |
 | Rust cloud `/v1` contract replay | `crates/core/src/contract_tests.rs` (fixtures and `PIN.toml` in `crates/core/tests/contract/`) | `cargo test -p openpal-core` |
+| Rust cloud `/v1` contract smoke | `crates/core/src/contract_smoke.rs` (`#[ignore]`, needs the backend's double) | `OPENPAL_ACCOUNT_API=http://127.0.0.1:8788 cargo test -p openpal-core --lib contract_smoke -- --ignored` |
 | Rust real-engine e2e | `crates/core/tests/{engine,writing_tools,prompt_enhancer}_e2e.rs` (`#[ignore]`) | `cargo test -p openpal-core -- --ignored` |
 | Rust real-model prompt-injection detector | `crates/core/tests/prompt_injection_corpus.rs` (`#[ignore]`) | `cargo test -p openpal-core --test prompt_injection_corpus -- --ignored --nocapture` |
 | Frontend unit/component tests | `ui/src/**/*.test.ts(x)` (Vitest) | `npm test` (in `ui/`) |
@@ -24,7 +25,7 @@ Rust core, a Python-sidecar plugin system, and no server to deploy.
 
 | Workflow | Triggers | Blocks merge? | What it runs |
 |---|---|---|---|
-| `.github/workflows/ci.yml` | every PR, push to `main` | **yes** (required) | five parallel Rust jobs — `rust-clippy` (`cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`) and a `rust-test` matrix with one job per crate (`rust-test (openpal-core)`, `rust-test (openpal-app)`, `rust-test (openpal-bundler)`, `rust-test (openpal-sync-protocol)`, each running `cargo test -p <crate>`) — plus the `frontend` job (`ui` typecheck + `vite build`, ESLint, Vitest, Playwright mocked-IPC e2e) and the always-run `action pins (SHA)` job, which fails a PR whose workflows use an `uses:` ref that is not a full 40-char commit SHA |
+| `.github/workflows/ci.yml` | every PR, push to `main` | **yes** (required); `contract-smoke` report-only for now | six parallel Rust jobs — `rust-clippy` (`cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`) and a `rust-test` matrix with one job per crate (`rust-test (openpal-core)`, `rust-test (openpal-app)`, `rust-test (openpal-bundler)`, `rust-test (openpal-sync-protocol)`, each running `cargo test -p <crate>`), plus `contract-smoke` (the real client against the digest-pinned contract double, see below) — plus the `frontend` job (`ui` typecheck + `vite build`, ESLint, Vitest, Playwright mocked-IPC e2e) and the always-run `action pins (SHA)` job, which fails a PR whose workflows use an `uses:` ref that is not a full 40-char commit SHA |
 | `.github/workflows/agent-sandbox-e2e.yml` | PR/push touching `crates/core/src/agent/**` | no (not a required check) | the real macOS Seatbelt (`sandbox-exec`) tests — `cargo test -p openpal-core --lib agent::sandbox` on a `macos-15-intel` runner. The only macOS compile on a PR: `ci.yml`'s Linux job never builds the `cfg(target_os = "macos")` module |
 | `.github/workflows/plugin-tests.yml` | PR/push touching `plugins/speech/**` or its own workflow file | yes, scoped (`speech`) | pytest for the Voice plugin (`plugins/speech/`). `plugins/web-search/` no longer has a Python suite — its agentic loop moved to `crates/core/src/agent/builtin/websearch.rs` and is covered by `ci.yml`; only its managed-SearXNG launcher (`service.py`, `setup_plugin.py`) remains, verified by hand |
 | `.github/workflows/engine-e2e.yml` | PR/push touching `crates/core/src/engine/**`, `download.rs`, `sse.rs`, `writing_tools.rs`, `prompt_enhancer.rs`, or any file under `crates/core/tests/` | yes, scoped | the real llama-server engine tests (stages the engine via the bundler, downloads the ~140MB SmolLM2 test model, runs a real chat round-trip for plain chat, Writing Tools Translate/Correct, and the Message improver) |
@@ -153,6 +154,47 @@ What stays on the backend side: running the fake server that emits these bytes
 is a separate suite in the private repo. This one proves the client reads the
 frozen contract; that one proves the server emits it.
 
+### Cloud `/v1` contract smoke (the real double)
+
+The replay above uses recorded bytes, so it cannot catch the two implementations
+drifting together — a rename that lands in the server and its fixtures in one
+commit stays green in both repos and only fails at a user's sign-in.
+`crates/core/src/contract_smoke.rs` closes that: it runs the shipped client
+against the private backend's dev-only axum double, which emits the same
+versioned contract from its own copy of the fixture set.
+
+- **What it drives.** `AccountManager::sign_in` end to end (create → the
+  `verificationUrl`'s `?code=` → `POST /dev/session/code/{code}/approve` →
+  poll to `Complete`), the boot-time refresh and `GET /v1/account/me`, the
+  public catalog, one streamed `cloud::chat_stream` reply assembled through the
+  same SSE parser local chat uses, then two real refusals: `403` for a model
+  outside the account's plan and `401` after `sign_out` revokes the token.
+  The 401/403 copy the UI shows is asserted on the `ChatEvent::Error` the
+  app renders.
+- **It names the contract it ran.** The `x-openpal-contract` header must equal
+  the version in `crates/core/tests/contract/PIN.toml`; a mismatch fails
+  before the run starts. The job records that version in its step summary, and
+  every assertion's panic is wrapped with the version and base URL, so a red
+  run says which contract disagreed.
+- **Fork-safe and secret-free.** The double is delivered as a public container
+  image pinned by `@sha256:` digest (`.github/workflows/ci.yml`'s
+  `contract-smoke` job uses it as a service). Nothing clones the private repo,
+  so the job runs identically on `pull_request` (including from a fork),
+  `merge_group` and `push`. The digest is the pin: a backend change cannot
+  move the gate, unlike a tag.
+- **Report-only at first.** The job runs on every PR but is not a required
+  status check until it has a week of clean history, matching how `fmt` and
+  `clippy` were introduced.
+
+The client side of this suite is opt-in (`#[ignore]`) because it needs a running
+server:
+
+```sh
+# In the private backend repo: scripts/run-fake.sh (or the published image)
+OPENPAL_ACCOUNT_API=http://127.0.0.1:8788 \
+  cargo test -p openpal-core --lib contract_smoke -- --ignored --nocapture
+```
+
 ### Known gaps (prioritized backlog, not yet implemented)
 
 The boundaries below are the actual current risk surface — Rust code that's
@@ -205,8 +247,11 @@ README in `crates/core/tests/fixtures/prompt_injection/`), and
 `huggingface.rs`'s 3 live-network tests — download real resources and hit
 live services, so they're deliberately excluded from the default run and only
 reachable via `engine-e2e.yml`'s or `injection-e2e.yml`'s path-filtered jobs
-or a manual `-- --ignored` invocation. A failure there means "investigate,"
-not "the PR that triggered it broke something."
+or a manual `-- --ignored` invocation. `contract_smoke.rs` is the exception:
+also `#[ignore]`d, but run on every `ci.yml` PR by the `contract-smoke` job
+against the pinned double (the manual command is in its section above). A
+failure in any of these means "investigate," not "the PR that triggered it
+broke something."
 
 ## Frontend (`ui/`)
 
