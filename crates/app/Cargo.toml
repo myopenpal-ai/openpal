@@ -71,7 +71,7 @@ tauri = { version = "2", features = ["test"] }
 # targets, a hard compile error, not just a runtime no-op) — see
 # `fatal_startup_error`'s mobile arm in lib.rs.
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
-rfd = { version = "0.16", default-features = false, features = ["common-controls-v6", "gtk3"] }
+rfd = { version = "0.17", default-features = false, features = ["common-controls-v6", "gtk3"] }
 # Native audio I/O for the Voice plugin (the webview can't open the mic or reach
 # the loopback service — see src/audio.rs). cpal = microphone capture, rodio =
 # playback, hound = WAV encode. rodio decodes WAV (Piper's output, used for
@@ -106,7 +106,7 @@ notify-rust = "4"
 # so this only adds edges.
 [target.'cfg(windows)'.dependencies]
 tauri-winrt-notification = "0.8"
-winreg = "0.55"
+winreg = "0.56"
 windows = { version = "0.62", features = ["UI_Notifications"] }
 
 # macOS notification permission and delivery (src/notify/macos.rs). A bundled
