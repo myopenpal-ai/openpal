@@ -23,8 +23,9 @@ Rust core, a Python-sidecar plugin system, and no server to deploy.
 
 | Workflow | Triggers | Blocks merge? | What it runs |
 |---|---|---|---|
-| `.github/workflows/ci.yml` | every PR, push to `main` | **yes** (required) | five parallel Rust jobs — `rust-clippy` (`cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`) and a `rust-test` matrix with one job per crate (`rust-test (openpal-core)`, `rust-test (openpal-app)`, `rust-test (openpal-bundler)`, `rust-test (openpal-sync-protocol)`, each running `cargo test -p <crate>`) — plus the `frontend` job (`ui` typecheck + `vite build`, ESLint, Vitest, Playwright mocked-IPC e2e) |
-| `.github/workflows/plugin-tests.yml` | PR/push touching `plugins/web-search/**` or `plugins/speech/**` | yes, scoped | pytest for whichever plugin(s) changed |
+| `.github/workflows/ci.yml` | every PR, push to `main` | **yes** (required) | five parallel Rust jobs — `rust-clippy` (`cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`) and a `rust-test` matrix with one job per crate (`rust-test (openpal-core)`, `rust-test (openpal-app)`, `rust-test (openpal-bundler)`, `rust-test (openpal-sync-protocol)`, each running `cargo test -p <crate>`) — plus the `frontend` job (`ui` typecheck + `vite build`, ESLint, Vitest, Playwright mocked-IPC e2e) and the always-run `action pins (SHA)` job, which fails a PR whose workflows use an `uses:` ref that is not a full 40-char commit SHA |
+| `.github/workflows/agent-sandbox-e2e.yml` | PR/push touching `crates/core/src/agent/**` | no (not a required check) | the real macOS Seatbelt (`sandbox-exec`) tests — `cargo test -p openpal-core --lib agent::sandbox` on a `macos-15-intel` runner. The only macOS compile on a PR: `ci.yml`'s Linux job never builds the `cfg(target_os = "macos")` module |
+| `.github/workflows/plugin-tests.yml` | PR/push touching `plugins/speech/**` or its own workflow file | yes, scoped (`speech`) | pytest for the Voice plugin (`plugins/speech/`). `plugins/web-search/` no longer has a Python suite — its agentic loop moved to `crates/core/src/agent/builtin/websearch.rs` and is covered by `ci.yml`; only its managed-SearXNG launcher (`service.py`, `setup_plugin.py`) remains, verified by hand |
 | `.github/workflows/engine-e2e.yml` | PR/push touching `crates/core/src/engine/**`, `download.rs`, `sse.rs`, `writing_tools.rs`, `prompt_enhancer.rs`, or any file under `crates/core/tests/` | yes, scoped | the real llama-server engine tests (stages the engine via the bundler, downloads the ~140MB SmolLM2 test model, runs a real chat round-trip for plain chat, Writing Tools Translate/Correct, and the Message improver) |
 | `.github/workflows/injection-e2e.yml` | PR/push touching `crates/core/src/injection/**`, `crates/core/tests/prompt_injection_corpus.rs`, `crates/core/tests/fixtures/prompt_injection/**` or `Cargo.lock` | scoped | the real prompt-injection classifier (downloads the pinned ~300MB model, cached by its sha256) over the documented benign/injection sample sets, one known payload per route, a buried payload's most suspicious window, and a review card's excerpt holding a payload at the end of a window longer than the card shows |
 | `.github/workflows/notify-platforms.yml` | PR/push touching `crates/app/src/notify/**`, `crates/app/src/lib.rs`, `crates/app/Cargo.toml` or `Cargo.lock` | yes, scoped | `cargo clippy -p openpal-app --all-targets -- -D warnings` and `cargo test -p openpal-app notify` on macOS and Windows runners, and `cargo clippy -p openpal-app` for `aarch64-linux-android` with the runner's NDK — the platform-gated notification backends `ci.yml`'s Linux job never compiles. Not the Kotlin half (no Gradle build), and nothing that shows a notification |
@@ -132,7 +133,11 @@ Highest-value first:
    any test that spawns even a fake process. A tiny fixture script standing
    in for `python3` (or `OPENPAL_PYTHON` pointed at a shell script) would
    close this.
-5. Smaller, cheap wins: `crates/app/src/audio.rs::encode_wav` (pure,
+5. **`crates/relay` is in no CI job.** It has unit tests in `rate_limit.rs`,
+   `routes.rs` and `store.rs`, but `ci.yml`'s matrix stops at
+   `openpal-sync-protocol`, so a PR never runs them. `cargo test --workspace`
+   (or `cargo test -p openpal-relay`) is the only run that covers it.
+6. Smaller, cheap wins: `crates/app/src/audio.rs::encode_wav` (pure,
    hardware-free, currently untested), `commands.rs::model_status`/
    `friendly`, `state.rs::resolve_data_dir`'s portable-mode branches.
 
@@ -544,7 +549,7 @@ GitHub Flow (no release branches at all) and full GitFlow (a permanent
   promotes the draft after checking it (and, once native e2e exists, after a
   green run against it). The whole runbook — the PR-driven bump rule (each
   user-facing PR bumps its own version), the `finalize` step at cut time,
-  tag, promotion — is [docs/RELEASING.md](docs/RELEASING.md).
+  tag, promotion — is [docs/RELEASING.md](RELEASING.md).
 - **Hotfixes** branch from the tag/release branch, PR back into that release
   branch, and get cherry-picked forward into `main` (or vice versa) so a
   patch never silently regresses on the next release.
