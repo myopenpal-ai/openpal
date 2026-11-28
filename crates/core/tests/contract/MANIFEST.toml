@@ -1,0 +1,161 @@
+# The frozen `/v1` contract, as fixtures.
+#
+# Every file under v1/ must have exactly one entry here. `parse_as` selects the
+# type the fixture is parsed with in tests; it is the same type the fake server
+# serves, so a fixture the client cannot read fails the backend build first.
+#
+# Paths are relative to this directory. `route` is the wire path, with `{id}`
+# for path parameters. Dynamic values are written as placeholders below.
+
+[contract]
+version = "2026-11-25"
+base_url = "https://api.openpal.app"
+
+[[fixture]]
+path = "v1/session_create.json"
+method = "POST"
+route = "/v1/desktop/session"
+status = 200
+content_type = "application/json"
+parse_as = "session_created"
+placeholders = ["sessionId", "verificationUrl"]
+
+[[fixture]]
+path = "v1/session_poll_pending.json"
+method = "GET"
+route = "/v1/desktop/session/{id}"
+status = 200
+content_type = "application/json"
+parse_as = "session_poll"
+
+[[fixture]]
+path = "v1/session_poll_complete.json"
+method = "GET"
+route = "/v1/desktop/session/{id}"
+status = 200
+content_type = "application/json"
+parse_as = "session_poll"
+placeholders = ["access_token", "refresh_token"]
+
+[[fixture]]
+path = "v1/session_poll_expired.json"
+method = "GET"
+route = "/v1/desktop/session/{id}"
+status = 200
+content_type = "application/json"
+parse_as = "session_poll"
+
+[[fixture]]
+path = "v1/session_poll_denied.json"
+method = "GET"
+route = "/v1/desktop/session/{id}"
+status = 200
+content_type = "application/json"
+parse_as = "session_poll"
+
+[[fixture]]
+path = "v1/auth_refresh_request.json"
+method = "POST"
+route = "/v1/auth/refresh"
+status = 200
+content_type = "application/json"
+parse_as = "refresh_request"
+placeholders = ["refreshToken"]
+
+[[fixture]]
+path = "v1/auth_refresh_response.json"
+method = "POST"
+route = "/v1/auth/refresh"
+status = 200
+content_type = "application/json"
+parse_as = "refresh_response"
+placeholders = ["accessToken"]
+note = "No refreshToken: rotation stays off until the client persists it."
+
+[[fixture]]
+path = "v1/account_me_plus.json"
+method = "GET"
+route = "/v1/account/me"
+status = 200
+content_type = "application/json"
+parse_as = "account"
+
+[[fixture]]
+path = "v1/account_me_free.json"
+method = "GET"
+route = "/v1/account/me"
+status = 200
+content_type = "application/json"
+parse_as = "account"
+note = "No quota key at all: a plan without a quota must omit it."
+
+[[fixture]]
+path = "v1/cloud_models.json"
+method = "GET"
+route = "/v1/cloud-models"
+status = 200
+content_type = "application/json"
+parse_as = "cloud_models"
+note = "Bare array, camelCase, no envelope."
+
+[[fixture]]
+path = "v1/chat_stream.sse"
+method = "POST"
+route = "/v1/chat/completions"
+status = 200
+content_type = "text/event-stream"
+parse_as = "sse"
+
+[[fixture]]
+path = "v1/chat_stream_reasoning.sse"
+method = "POST"
+route = "/v1/chat/completions"
+status = 200
+content_type = "text/event-stream"
+parse_as = "sse"
+note = "reasoning_content, never content."
+
+[[fixture]]
+path = "v1/chat_stream_error.sse"
+method = "POST"
+route = "/v1/chat/completions"
+status = 200
+content_type = "text/event-stream"
+parse_as = "sse"
+note = "A mid-stream failure still sends finish_reason."
+
+[[fixture]]
+path = "v1/error_unauthorized.json"
+method = "GET"
+route = "/v1/account/me"
+status = 401
+content_type = "application/json"
+parse_as = "error"
+placeholders = ["requestId"]
+
+[[fixture]]
+path = "v1/error_model_not_in_plan.json"
+method = "POST"
+route = "/v1/chat/completions"
+status = 403
+content_type = "application/json"
+parse_as = "error"
+placeholders = ["requestId"]
+
+[[fixture]]
+path = "v1/error_quota_exceeded.json"
+method = "POST"
+route = "/v1/chat/completions"
+status = 429
+content_type = "application/json"
+parse_as = "error"
+placeholders = ["requestId"]
+
+[[fixture]]
+path = "v1/search_results.json"
+method = "GET"
+route = "/v1/managed-search/search"
+status = 200
+content_type = "application/json"
+parse_as = "json"
+note = "Shape pinned early; the fake does not serve search until Phase 3."

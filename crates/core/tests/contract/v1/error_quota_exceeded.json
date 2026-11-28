@@ -1,0 +1,8 @@
+{
+  "error": {
+    "code": "quota_exceeded",
+    "message": "You've used all your cloud messages for this month.",
+    "requestId": "req_placeholder",
+    "details": { "metric": "cloud_requests", "resetsAt": "2026-12-01T00:00:00Z" }
+  }
+}

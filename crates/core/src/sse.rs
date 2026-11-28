@@ -15,6 +15,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+/// What a stream the server ended with `finish_reason: "error"` reports.
+/// Same wording as a transport failure: from the user's side both mean the
+/// reply did not finish, so neither should look like a successful short
+/// answer. Callers that map transport errors themselves should reuse this so
+/// the two paths stay one message.
+pub const STREAM_ERROR_MESSAGE: &str =
+    "The reply was cut off. Please try sending your message again.";
+
 /// Drain an OpenAI-compatible chat-completions SSE stream, emitting
 /// [`ChatEvent`]s as chunks arrive, until `data: [DONE]`, the stream ends, a
 /// transport error occurs, or `cancel` is set. Verified wire format
@@ -24,8 +32,9 @@ use std::time::{Duration, Instant};
 /// null`; the final chunk has `finish_reason: "stop"|"length"`, an empty
 /// delta, and a top-level `timings` object (`predicted_n`/
 /// `predicted_per_second`), used for [`ChatStats`] when present, falling back
-/// to counted chunks + wall time. Non-`data:` lines (SSE keep-alive pings)
-/// are ignored.
+/// to counted chunks + wall time. `finish_reason: "error"` is not a
+/// completion — see [`STREAM_ERROR_MESSAGE`]. Non-`data:` lines (SSE
+/// keep-alive pings) are ignored.
 ///
 /// `cancel` is checked once per received chunk (not proactively — an idle
 /// stream isn't polled): when set, the connection is dropped (ending
@@ -118,9 +127,19 @@ where
                     });
                 }
             }
-            if chunk.finished {
+            if let Some(reason) = chunk.finish_reason.as_deref() {
                 timing_tokens = chunk.timing_tokens;
                 timing_tps = chunk.timing_tps;
+                if reason == "error" {
+                    // The server finished the generation *unsuccessfully*.
+                    // Without this branch the non-null reason read as a
+                    // normal completion and the user saw whatever partial
+                    // text preceded it as a successful, empty reply.
+                    on_event(ChatEvent::Error {
+                        message: STREAM_ERROR_MESSAGE.to_string(),
+                    });
+                    return Err(STREAM_ERROR_MESSAGE.to_string());
+                }
             }
         }
     }
@@ -167,7 +186,9 @@ struct SseChunk {
     /// `delta.reasoning_content` — the model's private "thinking", present only
     /// for reasoning models with thinking enabled. `None`/empty otherwise.
     reasoning: Option<String>,
-    finished: bool,
+    /// `finish_reason` verbatim: `"stop"`/`"length"` end a reply normally,
+    /// `"error"` ends it unsuccessfully. `None` while it is still streaming.
+    finish_reason: Option<String>,
     timing_tokens: Option<u64>,
     timing_tps: Option<f64>,
 }
@@ -189,7 +210,10 @@ fn parse_chunk(payload: &str) -> Option<SseChunk> {
             .and_then(|c| c.as_str())
             .map(str::to_string),
         reasoning,
-        finished: choice.get("finish_reason").is_some_and(|f| !f.is_null()),
+        finish_reason: choice
+            .get("finish_reason")
+            .and_then(|f| f.as_str())
+            .map(str::to_string),
         timing_tokens: timings
             .and_then(|t| t.get("predicted_n"))
             .and_then(|n| n.as_u64()),
@@ -210,6 +234,8 @@ mod tests {
     // Reasoning models stream their "thinking" in a separate delta field.
     const REASONING_CHUNK: &str = r#"data: {"choices":[{"finish_reason":null,"index":0,"delta":{"reasoning_content":"Let me think"}}],"created":1749700000,"id":"chatcmpl-1","model":"m","object":"chat.completion.chunk"}"#;
     const FINAL_CHUNK: &str = r#"data: {"choices":[{"finish_reason":"stop","index":0,"delta":{}}],"created":1749700000,"id":"chatcmpl-1","model":"m","object":"chat.completion.chunk","timings":{"predicted_n":12,"predicted_per_second":98.5,"prompt_n":9}}"#;
+    // A mid-stream server failure still sends a non-null finish_reason.
+    const ERROR_CHUNK: &str = r#"data: {"choices":[{"finish_reason":"error","index":0,"delta":{}}],"timings":{"predicted_n":1,"predicted_per_second":1.0}}"#;
 
     #[test]
     fn sse_buffer_yields_complete_lines() {
@@ -242,21 +268,21 @@ mod tests {
     fn parse_chunk_reads_the_verified_wire_format() {
         let first = parse_chunk(FIRST_CHUNK.strip_prefix("data: ").unwrap()).unwrap();
         assert_eq!(first.content, None); // role-only chunk: content is null
-        assert!(!first.finished);
+        assert_eq!(first.finish_reason, None);
 
         let token = parse_chunk(TOKEN_CHUNK.strip_prefix("data: ").unwrap()).unwrap();
         assert_eq!(token.content.as_deref(), Some("T"));
         assert_eq!(token.reasoning, None); // an answer chunk carries no thinking
-        assert!(!token.finished);
+        assert_eq!(token.finish_reason, None);
 
         let reasoning = parse_chunk(REASONING_CHUNK.strip_prefix("data: ").unwrap()).unwrap();
         assert_eq!(reasoning.reasoning.as_deref(), Some("Let me think"));
         assert_eq!(reasoning.content, None); // a thinking chunk carries no answer
-        assert!(!reasoning.finished);
+        assert_eq!(reasoning.finish_reason, None);
 
         let last = parse_chunk(FINAL_CHUNK.strip_prefix("data: ").unwrap()).unwrap();
         assert_eq!(last.content, None);
-        assert!(last.finished);
+        assert_eq!(last.finish_reason.as_deref(), Some("stop"));
         assert_eq!(last.timing_tokens, Some(12));
         assert_eq!(last.timing_tps, Some(98.5));
 
@@ -292,6 +318,31 @@ mod tests {
             }
             other => panic!("expected Done, got {other:?}"),
         }
+    }
+
+    /// `finish_reason: "error"` ends the generation unsuccessfully: an
+    /// `Error` event and an `Err`, never a normal `Done` over a partial reply.
+    #[tokio::test]
+    async fn drain_sse_treats_finish_reason_error_as_a_failure() {
+        let body = format!("{TOKEN_CHUNK}\n\n{ERROR_CHUNK}\n\ndata: [DONE]\n\n");
+        let chunks: Vec<Result<Vec<u8>, std::io::Error>> = vec![Ok(body.into_bytes())];
+        let stream = stream::iter(chunks);
+
+        let mut events = Vec::new();
+        let result = drain_sse(
+            stream,
+            Arc::new(AtomicBool::new(false)),
+            |e| events.push(e),
+            |e| e.to_string(),
+        )
+        .await;
+
+        assert_eq!(result, Err(STREAM_ERROR_MESSAGE.to_string()));
+        assert!(matches!(&events[0], ChatEvent::Token { text } if text == "T"));
+        assert!(
+            matches!(&events[1], ChatEvent::Error { message } if message == STREAM_ERROR_MESSAGE)
+        );
+        assert_eq!(events.len(), 2, "a failed stream must not also emit Done");
     }
 
     #[tokio::test]

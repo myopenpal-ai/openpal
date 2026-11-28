@@ -166,16 +166,16 @@ const EXPIRED_MSG: &str = "Your session expired. Please sign in again.";
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct DeviceSession {
-    session_id: String,
-    verification_url: String,
+pub(crate) struct DeviceSession {
+    pub(crate) session_id: String,
+    pub(crate) verification_url: String,
     #[serde(default)]
-    expires_in: u64,
+    pub(crate) expires_in: u64,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
-enum SessionPoll {
+pub(crate) enum SessionPoll {
     Pending,
     Complete {
         access_token: String,
@@ -188,8 +188,8 @@ enum SessionPoll {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct RefreshedToken {
-    access_token: String,
+pub(crate) struct RefreshedToken {
+    pub(crate) access_token: String,
 }
 
 /// The account/billing backend's base URL. Overridable via
@@ -200,7 +200,51 @@ pub(crate) fn api_base() -> String {
     std::env::var("OPENPAL_ACCOUNT_API").unwrap_or_else(|_| "https://api.openpal.app".to_string())
 }
 
-async fn start_device_session(client: &reqwest::Client) -> Result<DeviceSession, String> {
+/// Test-only helpers for the two suites that point [`api_base`] at a local
+/// stub: `cloud`'s unreachable-backend test and the `/v1` contract replay in
+/// `crate::contract_tests`.
+#[cfg(test)]
+pub(crate) mod test_support {
+    use tokio::sync::{Mutex, MutexGuard};
+
+    /// `OPENPAL_ACCOUNT_API` is process-global, and both `account` and
+    /// `cloud` read it on every call. Two `#[tokio::test]`s setting it to
+    /// different stubs could otherwise interleave and fail each other.
+    static API_ENV_LOCK: Mutex<()> = Mutex::const_new(());
+
+    /// Points `OPENPAL_ACCOUNT_API` at `base` until dropped, holding the
+    /// process-wide lock for that whole span and restoring the previous value
+    /// on drop (including when a test panics).
+    pub(crate) struct TestApiBase {
+        _lock: MutexGuard<'static, ()>,
+        restore: Option<String>,
+    }
+
+    impl TestApiBase {
+        pub(crate) async fn point_at(base: &str) -> Self {
+            let lock = API_ENV_LOCK.lock().await;
+            let restore = std::env::var("OPENPAL_ACCOUNT_API").ok();
+            std::env::set_var("OPENPAL_ACCOUNT_API", base);
+            Self {
+                _lock: lock,
+                restore,
+            }
+        }
+    }
+
+    impl Drop for TestApiBase {
+        fn drop(&mut self) {
+            match self.restore.take() {
+                Some(value) => std::env::set_var("OPENPAL_ACCOUNT_API", value),
+                None => std::env::remove_var("OPENPAL_ACCOUNT_API"),
+            }
+        }
+    }
+}
+
+pub(crate) async fn start_device_session(
+    client: &reqwest::Client,
+) -> Result<DeviceSession, String> {
     let resp = client
         .post(format!("{}/v1/desktop/session", api_base()))
         .send()
@@ -222,7 +266,7 @@ async fn start_device_session(client: &reqwest::Client) -> Result<DeviceSession,
         })
 }
 
-async fn poll_device_session(
+pub(crate) async fn poll_device_session(
     client: &reqwest::Client,
     session_id: &str,
 ) -> Result<SessionPoll, String> {
@@ -247,7 +291,7 @@ async fn poll_device_session(
         })
 }
 
-async fn refresh_access_token(
+pub(crate) async fn refresh_access_token(
     client: &reqwest::Client,
     refresh_token: &str,
 ) -> Result<RefreshedToken, String> {
@@ -264,7 +308,10 @@ async fn refresh_access_token(
         .map_err(|_| "Something went wrong refreshing your session.".to_string())
 }
 
-async fn fetch_account(client: &reqwest::Client, access_token: &str) -> Result<Account, String> {
+pub(crate) async fn fetch_account(
+    client: &reqwest::Client,
+    access_token: &str,
+) -> Result<Account, String> {
     let resp = client
         .get(format!("{}/v1/account/me", api_base()))
         .bearer_auth(access_token)
@@ -278,7 +325,7 @@ async fn fetch_account(client: &reqwest::Client, access_token: &str) -> Result<A
         .map_err(|_| "Something went wrong loading your account.".to_string())
 }
 
-async fn revoke_session(client: &reqwest::Client, access_token: &str) {
+pub(crate) async fn revoke_session(client: &reqwest::Client, access_token: &str) {
     // Best-effort: the local sign-out already happened regardless of whether
     // the backend acknowledges the revoke.
     let _ = client

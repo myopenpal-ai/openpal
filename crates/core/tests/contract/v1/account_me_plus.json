@@ -1,0 +1,6 @@
+{
+  "email": "person@example.com",
+  "tier": "Plus",
+  "capabilities": ["cloud-models", "managed-web-search", "sync-managed"],
+  "quota": { "used": 37, "limit": 500 }
+}

@@ -1,0 +1,7 @@
+{
+  "error": {
+    "code": "invalid_token",
+    "message": "Your sign-in expired. Please sign in again.",
+    "requestId": "req_placeholder"
+  }
+}

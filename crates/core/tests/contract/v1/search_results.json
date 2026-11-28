@@ -1,0 +1,16 @@
+{
+  "query": "best hiking boots",
+  "number_of_results": 6,
+  "results": [
+    {
+      "title": "The 8 Best Hiking Boots of 2026",
+      "url": "https://example.com/best-hiking-boots",
+      "content": "We tested 32 pairs over 400 miles in mud, snow and scree. These six came out ahead on grip and comfort.",
+      "engine": "managed",
+      "score": 0.93,
+      "publishedDate": "2026-09-14"
+    }
+  ],
+  "suggestions": [],
+  "answers": []
+}

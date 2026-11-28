@@ -12,6 +12,7 @@ Rust core, a Python-sidecar plugin system, and no server to deploy.
 |---|---|---|
 | Rust unit tests | `crates/core/src/*.rs`, `crates/app/src/*.rs`, `crates/sync-protocol/src/*.rs`, `bundler/src/*.rs` (inline `#[cfg(test)]`) | `cargo test -p <crate>` |
 | Rust wire-fixture tests | `crates/sync-protocol/tests/vault_fixtures.rs` (JSON fixtures in `crates/sync-protocol/fixtures/vault/`) | `cargo test -p openpal-sync-protocol` |
+| Rust cloud `/v1` contract replay | `crates/core/src/contract_tests.rs` (fixtures and `PIN.toml` in `crates/core/tests/contract/`) | `cargo test -p openpal-core` |
 | Rust real-engine e2e | `crates/core/tests/{engine,writing_tools,prompt_enhancer}_e2e.rs` (`#[ignore]`) | `cargo test -p openpal-core -- --ignored` |
 | Rust real-model prompt-injection detector | `crates/core/tests/prompt_injection_corpus.rs` (`#[ignore]`) | `cargo test -p openpal-core --test prompt_injection_corpus -- --ignored --nocapture` |
 | Frontend unit/component tests | `ui/src/**/*.test.ts(x)` (Vitest) | `npm test` (in `ui/`) |
@@ -103,17 +104,68 @@ They run a fake classifier (`Detector::with_classifier`), so the bare
   (`commands::unload_classifier`, `idle.rs`) have no test, for the reason
   above.
 
+### Cloud `/v1` contract replay
+
+The account/cloud boundary used to be the one wire contract no test read: the
+client's `DeviceSession`, `SessionPoll`, `RefreshedToken`, `Account`/`Quota`
+and `CloudModelInfo`/`SamplingParamKey` were kept in step with the backend by
+hand, and every parser test used JSON written by the same person who wrote the
+struct. `crates/core/src/contract_tests.rs` closes that: it replays the
+backend's own recorded `/v1` responses through the shipped parsers, against a
+`wiremock` stub that also asserts what this app sends.
+
+- **The fixture set is vendored, not fetched.** `crates/core/tests/contract/`
+  is a byte-for-byte copy of the private backend repo's versioned contract
+  (`2026-11-25`): its `MANIFEST.toml`, `CHANGELOG.md` and `v1/` files, plus a
+  `PIN.toml` recording the version and a SHA-256 digest of every fixture byte.
+  Nothing here needs a credential, a network call or a repository secret, so
+  it runs identically on `pull_request`, `merge_group` and `push`, including
+  from a fork.
+- **The manifest is the coverage gate.** The suite loops over
+  `MANIFEST.toml`; every entry is replayed or named in a skip list with a
+  reason (`v1/search_results.json` is the one, because no shipped client calls
+  `/v1/managed-search` yet). `v1/` and the manifest must agree file for file,
+  and editing a fixture without re-vendoring the whole set fails the digest
+  test.
+- **It asserts the request, not just the response.** `POST
+  /v1/desktop/session`, all four `GET /v1/desktop/session/{id}` states,
+  `POST /v1/auth/refresh`, `GET /v1/account/me` with and without `quota`,
+  `POST /v1/auth/signout` and `GET /v1/cloud-models` each pin the method,
+  path, bearer (or no bearer), and body shape this app sends. The refresh
+  request body and the cloud-chat body (bearer, `model`, `stream`, the full
+  snake_case sampling set including the `-1` `max_tokens`/`seed` sentinels)
+  are checked field by field, and the camelCase IPC spelling must not leak
+  onto either wire.
+- **The three recorded streams run through `cloud::chat_stream`.** Plain and
+  reasoning streams assemble their reply and take `ChatEvent::Done` stats from
+  the final chunk's `timings`; a stream ending with `finish_reason: "error"`
+  surfaces as `ChatEvent::Error` and an `Err` rather than a successful empty
+  reply (`sse.rs` used to treat every non-null finish reason as completion).
+  The 401/403 copy the UI shows is pinned, and 429 falls through to the
+  generic message.
+- **One process-wide env var, serialized.** Both `account` and `cloud` read
+  `OPENPAL_ACCOUNT_API`; a test-only lock/restore guard in
+  `account::test_support` keeps the replay and `cloud`'s unreachable-backend
+  test from repointing it at each other.
+
+What stays on the backend side: running the fake server that emits these bytes
+is a separate suite in the private repo. This one proves the client reads the
+frozen contract; that one proves the server emits it.
+
 ### Known gaps (prioritized backlog, not yet implemented)
 
 The boundaries below are the actual current risk surface — Rust code that's
-covered as pure logic but not at the process/network boundary it wraps.
+covered as pure logic but not at the process/network boundary it wraps. The
+account/cloud boundary is no longer on this list — see the contract replay
+above.
+
 Highest-value first:
 
 1. **`huggingface.rs::list_gguf_files`** — status-code branching (401/403 →
    gated, 404, 429 retry-after, 5xx, non-JSON body) is only reachable today
-   via the 3 `#[ignore]`d live-network tests. A `wiremock` server (new dev-dep;
-   `reqwest`/`tokio` are already workspace deps, so this fits the existing
-   `#[tokio::test]` style) would cover all five branches hermetically.
+   via the 3 `#[ignore]`d live-network tests. The `wiremock` dev-dependency
+   the contract replay already added (same `#[tokio::test]` style) would
+   cover all five branches hermetically.
 2. **`download.rs`** — resume (`Range`/206), a server that ignores `Range`
    and replies 200 (truncate-and-restart), and cancel-mid-stream are all
    untested, even though the file already has the exact scaffolding needed

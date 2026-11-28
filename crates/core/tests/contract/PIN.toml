@@ -1,0 +1,24 @@
+# Where this copy of the contract came from, and what it was.
+#
+# `digest` is SHA-256 over every file under `v1/`, in byte-sorted path order,
+# each hashed as: path + NUL + contents + NUL. `contract::contract_pin_matches_the_manifest_and_fixture_bytes`
+# recomputes it, so editing a fixture without re-vendoring the whole set fails
+# `cargo test -p openpal-core`.
+#
+# To update: copy `contract/` from myopenpal-ai/openpal-cloud (versioned
+# fixture set), then recompute the digest with:
+#
+#   cd crates/core/tests/contract && python3 - <<'PY'
+#   import hashlib, pathlib
+#   h = hashlib.sha256()
+#   for p in sorted(pathlib.Path(".").rglob("*")):
+#       if p.is_file() and p.parts[0] == "v1":
+#           h.update(p.as_posix().encode() + b"\0" + p.read_bytes() + b"\0")
+#   print(h.hexdigest())
+#   PY
+
+[contract]
+version = "2026-11-25"
+source = "myopenpal-ai/openpal-cloud:contract/ (private backend repo)"
+vendored_on = "2026-11-28"
+digest = "sha256:4ed8bf5910a0d16a1c2a8256e156d9fcb51a0522b3db7dc2d411f485b9b2b374"
