@@ -408,7 +408,7 @@ impl EngineBackend for RemoteBackend {
 
         crate::sse::drain_sse(response.bytes_stream(), cancel, on_event, |e| {
             tracing::error!("remote chat stream error: {e}");
-            "The reply was cut off. Please try sending your message again.".to_string()
+            crate::sse::STREAM_ERROR_MESSAGE.to_string()
         })
         .await
         .map_err(Error::Engine)

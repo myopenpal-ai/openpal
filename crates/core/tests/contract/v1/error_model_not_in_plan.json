@@ -1,0 +1,7 @@
+{
+  "error": {
+    "code": "model_not_in_plan",
+    "message": "That model isn't included in your plan.",
+    "requestId": "req_placeholder"
+  }
+}

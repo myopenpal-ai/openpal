@@ -164,7 +164,7 @@ pub async fn chat_stream(
 
     crate::sse::drain_sse(response.bytes_stream(), cancel, on_event, |e| {
         tracing::error!("cloud chat stream error: {e}");
-        "The reply was cut off. Please try sending your message again.".to_string()
+        crate::sse::STREAM_ERROR_MESSAGE.to_string()
     })
     .await
     .map_err(Error::Cloud)
@@ -247,10 +247,9 @@ mod tests {
     /// deterministic connection-refused rather than a real network call.
     #[tokio::test]
     async fn unreachable_backend_yields_friendly_errors() {
-        // SAFETY-in-spirit note: cargo test runs crate tests in one process;
-        // no other test in this crate reads this env var, so this is safe
-        // despite tests running in parallel by default.
-        std::env::set_var("OPENPAL_ACCOUNT_API", "http://127.0.0.1:1");
+        // Serialized with the contract replay, the other suite that points
+        // this process-global variable at a stub.
+        let _base = crate::account::test_support::TestApiBase::point_at("http://127.0.0.1:1").await;
 
         let client = reqwest::Client::new();
 
@@ -273,7 +272,5 @@ mod tests {
 
         assert!(matches!(result, Err(Error::Cloud(_))));
         assert!(matches!(&events[0], ChatEvent::Error { .. }));
-
-        std::env::remove_var("OPENPAL_ACCOUNT_API");
     }
 }

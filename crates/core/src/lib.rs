@@ -62,6 +62,11 @@ pub mod backup;
 pub mod boot;
 pub mod catalog;
 pub mod cloud;
+/// Replay of the vendored cloud `/v1` contract fixtures. Test-only: it is
+/// the one place that can reach the crate-private transport functions in
+/// [`account`] directly.
+#[cfg(test)]
+mod contract_tests;
 pub mod crypto;
 pub mod custom;
 pub mod disk_speed;

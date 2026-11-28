@@ -1,0 +1,44 @@
+[
+  {
+    "id": "openpal/fast-cloud",
+    "name": "OpenPal Fast",
+    "family": "llama",
+    "publisher": "OpenPal",
+    "description": "A quick model for everyday questions, and the only one that can read images.",
+    "strengths": ["Fast", "Everyday questions", "Reads images"],
+    "requiredTier": "Plus",
+    "supportedParams": [
+      "temperature",
+      "topP",
+      "topK",
+      "minP",
+      "repeatPenalty",
+      "repeatLastN",
+      "presencePenalty",
+      "frequencyPenalty",
+      "maxTokens",
+      "seed"
+    ]
+  },
+  {
+    "id": "openpal/pro-cloud",
+    "name": "OpenPal Pro",
+    "family": "llama",
+    "publisher": "OpenPal",
+    "description": "A larger model for long documents, careful writing and code.",
+    "strengths": ["Long documents", "Careful writing", "Coding"],
+    "requiredTier": "Pro",
+    "supportedParams": [
+      "temperature",
+      "topP",
+      "topK",
+      "minP",
+      "repeatPenalty",
+      "repeatLastN",
+      "presencePenalty",
+      "frequencyPenalty",
+      "maxTokens",
+      "seed"
+    ]
+  }
+]
