@@ -22,6 +22,16 @@ fork's `pull_request` run.
 (`/v1/managed-search/search` is not wired up yet), so the replay skips it by
 name, with that reason, rather than silently ignoring it.
 
-The two suites are deliberately separate: this one proves the client reads
-the contract; the backend's fake-server tests prove the server emits it.
-Neither replaces the other.
+There are three suites, deliberately separate:
+
+- `crate::contract_tests` (this directory) replays the recorded bytes through
+  the shipped parsers. It proves the client reads the contract.
+- `crate::contract_smoke` drives the real `AccountManager`/`cloud::chat_stream`
+  against the backend's dev-only double and asserts its `x-openpal-contract`
+  header matches this `PIN.toml`. It proves both implementations agree end to
+  end; CI's `contract-smoke` job runs it.
+- The backend's own fake-server tests prove the server emits the fixtures.
+
+None replaces another: the replay is hermetic and runs in `cargo test`, the
+smoke test needs the digest-pinned image, and the backend suite runs in the
+private repo.
